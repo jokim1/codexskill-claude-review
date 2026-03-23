@@ -1,0 +1,7 @@
+interface:
+  display_name: "Claude Review"
+  short_description: "Run Claude Code for review-only or iterate-fix-review loops"
+  default_prompt: "Use $claude to review the latest plan or current diff, or run /claude review iterate for a bounded fix-and-rereview loop."
+
+policy:
+  allow_implicit_invocation: false

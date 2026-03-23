@@ -1,0 +1,104 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "mode",
+    "summary",
+    "findings",
+    "open_questions"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "issues_found",
+        "clean",
+        "needs_context",
+        "blocked"
+      ]
+    },
+    "mode": {
+      "type": "string",
+      "enum": [
+        "plan",
+        "code",
+        "pr"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "finding_key",
+          "category",
+          "action",
+          "severity",
+          "title",
+          "evidence",
+          "recommendation"
+        ],
+        "properties": {
+          "finding_key": {
+            "type": "string",
+            "minLength": 1
+          },
+          "category": {
+            "type": "string",
+            "minLength": 1
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "fix_directly",
+              "add_or_update_test",
+              "ask_user_first",
+              "informational"
+            ]
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "critical",
+              "important",
+              "nitpick"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evidence": {
+            "type": "string",
+            "minLength": 1
+          },
+          "recommendation": {
+            "type": "string",
+            "minLength": 1
+          },
+          "file": {
+            "type": "string",
+            "minLength": 1
+          },
+          "line": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "open_questions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}
