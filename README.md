@@ -62,10 +62,15 @@ You need:
 
 - Codex
 - `claude` CLI installed
-- Claude authenticated locally
+- a Claude environment that can actually answer a tiny CLI request
 - `jq`
 - `git`
 - `gh` if you want `/claude review pr <number>`
+
+That usually means one of these:
+
+- normal desktop login with `claude auth login`
+- another usable Claude CLI auth context, such as an environment where the CLI can make requests successfully
 
 ## Install
 
@@ -80,7 +85,7 @@ Then restart Codex, or refresh skill discovery if your Codex setup supports it.
 
 ## First-Time Setup Check
 
-Make sure Claude is logged in:
+Start with the normal check:
 
 ```bash
 claude auth status
@@ -91,6 +96,16 @@ If needed:
 ```bash
 claude auth login
 ```
+
+Important: `claude auth status` is useful, but it is not the only thing this skill trusts.
+The skill now does a hybrid preflight:
+
+- first it tries to resolve one Claude runner and keep using that exact runner
+- then it checks `claude auth status`
+- if status is false or ambiguous, it runs one tiny real Claude probe
+
+That means the skill can still work in some cases where `auth status` looks wrong, as long
+as Claude can actually answer a small request from the same environment Codex is using.
 
 ## Five Good First Commands
 
@@ -552,6 +567,48 @@ Check Claude authentication:
 ```bash
 claude auth status
 ```
+
+Then check what Codex is probably seeing:
+
+```bash
+which claude
+claude -v
+claude auth status
+```
+
+If Claude works in one terminal window but the skill still says blocked, the most common
+reason is environment mismatch:
+
+- a different shell startup path
+- Codex inherited older PATH or auth state
+- one shell can see your Claude auth context and another cannot
+
+The skill tries to handle this by resolving one Claude runner and reusing it for auth
+checks and the real review call, but if Codex inherited stale environment state you may
+still need to restart Codex.
+
+If you use a non-login auth setup, make sure the same environment is visible to Codex,
+not just to one terminal tab.
+
+### “`claude auth status` says I am logged out, but Claude works elsewhere”
+
+This can happen.
+
+`claude auth status` is environment-sensitive. Different shells or launch contexts can
+see different PATH entries, config, login state, or auth-related environment variables.
+
+Useful debug commands:
+
+```bash
+which claude
+claude -v
+claude auth status
+echo "$SHELL"
+echo "$PATH"
+```
+
+If you rely on environment-based auth, also check whether the relevant variables are
+available in the same environment Codex inherits.
 
 ### “PR review is blocked”
 
