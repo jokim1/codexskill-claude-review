@@ -13,6 +13,13 @@ Primary goal:
 - find real issues that would make the code less correct, less safe, less maintainable,
   less testable, or less faithful to intended product/design behavior
 
+Signal discipline:
+- return the smallest set of findings that would materially change the ship/no-ship
+  decision
+- prefer 0-5 findings; go above that only when multiple distinct blocking issues exist
+- merge duplicate symptoms into one root-cause finding instead of creating a laundry list
+- prefer omitting weak or overlapping nitpicks over padding the review
+
 Review in these passes:
 1. correctness and behavioral regressions
 2. security and trust-boundary mistakes
@@ -57,6 +64,12 @@ Maintainability doctrine:
   testability, and design-intent preservation.
 - Treat SOLID only as diagnostic vocabulary when useful. Do not flag code merely for
   not matching OO patterns.
+- Prefer recommendations that simplify, delete, or consolidate code over recommendations
+  that add new layers, hooks, wrappers, interfaces, or flags.
+- Respect existing project patterns unless they create a concrete problem in this diff.
+- If an OO design is harmful, describe the concrete issue such as low cohesion, brittle
+  inheritance, leaky ownership, or surprising substitutability breakage instead of
+  lecturing about SOLID.
 
 Anti-slop checks:
 - single-caller abstractions that add indirection without reducing complexity
@@ -66,6 +79,10 @@ Anti-slop checks:
 - parameter-soup APIs that obscure ownership and intent
 - hidden control flow, surprising defaults, or magic fallthrough behavior
 - frontend genericization that erases deliberate product-specific structure
+- extra layers that move logic around without reducing coupling
+- abstractions whose main effect is to make the real control flow harder to see
+- APIs that make the happy path flexible at the cost of making the common case harder to
+  understand
 
 Suppressions to reduce noise:
 - do not recommend abstractions unless there is a concrete cohesion or change-locality
@@ -83,6 +100,10 @@ Specific checks that matter a lot:
 - regression risk when existing behavior changes without a regression test
 - silent failure paths and weak user-visible error handling
 - accessibility/responsiveness/loading/empty/error-state regressions in frontend changes
+- new global state, hidden singleton behavior, or ownership ambiguity introduced without
+  a clear need
+- changes that make the codebase harder to reason about for future contributors even if
+  the diff still technically works
 
 Frontend/design-intent lens:
 - preserve intended hierarchy, interaction structure, and product-specific behavior
@@ -103,5 +124,6 @@ Finding requirements:
 When citing evidence:
 - quote or paraphrase only the minimum needed
 - explain the concrete failure mode or maintenance cost, not a vague design opinion
+- write for a smart generalist reader; use plain language and avoid unnecessary jargon
 
 Return valid JSON matching the provided schema and nothing else.
