@@ -14,11 +14,15 @@ BASE_BRANCH=""
 PR_NUMBER=""
 REVIEW_INSTRUCTIONS=""
 MAX_ARTIFACT_BYTES=120000
-LIVE_PROBE_BUDGET_USD="0.05"
+LIVE_PROBE_BUDGET_USD="0.15"
+LIVE_PROBE_MODEL="sonnet"
 
 EFFORT="high"
 MODEL=""
 MAX_BUDGET_USD="2.00"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLAUDE_SUBSCRIPTION_HELPER="$SCRIPT_DIR/claude-subscription-env.sh"
 
 CLAUDE_RUNNER_KIND=""
 CLAUDE_RUNNER_SHELL=""
@@ -184,6 +188,12 @@ load_config() {
       MAX_BUDGET_USD)
         MAX_BUDGET_USD="$value"
         ;;
+      LIVE_PROBE_BUDGET_USD)
+        LIVE_PROBE_BUDGET_USD="$value"
+        ;;
+      LIVE_PROBE_MODEL)
+        LIVE_PROBE_MODEL="$value"
+        ;;
     esac
   done < "$file"
 }
@@ -196,14 +206,20 @@ failure_priority() {
     unusable_runner)
       printf '2'
       ;;
-    auth_unavailable)
+    subscription_auth_unavailable)
       printf '3'
       ;;
-    ambiguous_auth)
+    probe_budget_too_low)
       printf '4'
       ;;
-    invocation_failed)
+    ambiguous_auth)
       printf '5'
+      ;;
+    review_budget_too_low)
+      printf '6'
+      ;;
+    invocation_failed)
+      printf '7'
       ;;
     *)
       printf '0'
@@ -263,11 +279,11 @@ run_candidate_claude() {
   shift 3
 
   if [ "$kind" = "direct" ]; then
-    "$claude_bin" "$@"
+    bash "$CLAUDE_SUBSCRIPTION_HELPER" "$claude_bin" "$@"
     return
   fi
 
-  "$shell_bin" -lc 'exec "$0" "$@"' "$claude_bin" "$@"
+  "$shell_bin" -lc 'exec "$0" "$@"' bash "$CLAUDE_SUBSCRIPTION_HELPER" "$claude_bin" "$@"
 }
 
 run_selected_claude() {
@@ -304,19 +320,99 @@ logged_out_state() {
   printf '%s\n' "$status" | grep -q '"loggedIn":[[:space:]]*false'
 }
 
+first_party_state() {
+  local status="$1"
+
+  [ -n "$status" ] || return 1
+
+  if command -v jq >/dev/null 2>&1; then
+    if printf '%s\n' "$status" | jq -e '.apiProvider == "firstParty"' >/dev/null 2>&1; then
+      return 0
+    fi
+    return 1
+  fi
+
+  printf '%s\n' "$status" | grep -q '"apiProvider":[[:space:]]*"firstParty"'
+}
+
+non_first_party_state() {
+  local status="$1"
+
+  [ -n "$status" ] || return 1
+
+  if command -v jq >/dev/null 2>&1; then
+    if printf '%s\n' "$status" | jq -e '.apiProvider != null and .apiProvider != "firstParty"' >/dev/null 2>&1; then
+      return 0
+    fi
+    return 1
+  fi
+
+  if first_party_state "$status"; then
+    return 1
+  fi
+
+  printf '%s\n' "$status" | grep -q '"apiProvider":[[:space:]]*"'
+}
+
 live_probe_ok() {
   local output="$1"
 
   [ -n "$output" ] || return 1
 
   if command -v jq >/dev/null 2>&1; then
-    if printf '%s\n' "$output" | jq -e '.ok == true' >/dev/null 2>&1; then
+    if printf '%s\n' "$output" | jq -e '.ok == true or .structured_output.ok == true' >/dev/null 2>&1; then
       return 0
     fi
     return 1
   fi
 
   printf '%s\n' "$output" | grep -q '"ok":[[:space:]]*true'
+}
+
+result_is_error() {
+  local output="$1"
+
+  [ -n "$output" ] || return 1
+
+  if command -v jq >/dev/null 2>&1; then
+    if printf '%s\n' "$output" | jq -e '.is_error == true' >/dev/null 2>&1; then
+      return 0
+    fi
+    return 1
+  fi
+
+  printf '%s\n' "$output" | grep -q '"is_error":[[:space:]]*true'
+}
+
+extract_structured_output() {
+  local output="$1"
+
+  if [ -z "$output" ]; then
+    return 1
+  fi
+
+  if command -v jq >/dev/null 2>&1; then
+    if printf '%s\n' "$output" | jq -e '.structured_output != null' >/dev/null 2>&1; then
+      printf '%s\n' "$output" | jq '.structured_output'
+      return 0
+    fi
+  fi
+
+  printf '%s\n' "$output"
+}
+
+budget_exhausted_output() {
+  local output="$1"
+
+  [ -n "$output" ] || return 1
+  printf '%s\n' "$output" | grep -Eqi 'error_max_budget_usd|reached maximum budget|maximum budget'
+}
+
+auth_unavailable_output() {
+  local output="$1"
+
+  [ -n "$output" ] || return 1
+  printf '%s\n' "$output" | grep -Eqi 'not logged in|auth login|setup-token|authentication'
 }
 
 select_runner() {
@@ -335,6 +431,7 @@ probe_runner_usability() {
   local auth_status=""
   local probe_output=""
   local probe_schema='{"type":"object","properties":{"ok":{"const":true}},"required":["ok"],"additionalProperties":false}'
+  local probe_args=()
 
   if ! run_candidate_claude "$kind" "$shell_bin" "$claude_bin" -v >/dev/null 2>&1; then
     record_failure \
@@ -345,28 +442,57 @@ probe_runner_usability() {
   fi
 
   auth_status="$(run_candidate_claude "$kind" "$shell_bin" "$claude_bin" auth status 2>/dev/null || true)"
-  if logged_in_state "$auth_status"; then
-    select_runner "$kind" "$shell_bin" "$claude_bin" "$description" "auth_status"
-    return 0
+  if non_first_party_state "$auth_status"; then
+    record_failure \
+      "subscription_auth_unavailable" \
+      "Claude Code is authenticated through Anthropic Console or another non-subscription provider. This bridge requires Claude subscription auth." \
+      "Run claude auth login --claudeai in the same environment Codex uses, then retry."
+    return 1
   fi
 
-  if probe_output="$(run_candidate_claude \
-    "$kind" \
-    "$shell_bin" \
-    "$claude_bin" \
+  probe_args=(
     -p \
     'Codex Claude skill preflight probe. Return {"ok": true} and nothing else.' \
-    --output-format \
-    json \
-    --json-schema \
-    "$probe_schema" \
-    --tools \
-    "" \
-    --strict-mcp-config \
-    --effort \
-    low \
-    --max-budget-usd \
-    "$LIVE_PROBE_BUDGET_USD" 2>&1)"; then
+    --output-format
+    json
+    --json-schema
+    "$probe_schema"
+    --tools
+    ""
+    --strict-mcp-config
+    --effort
+    low
+    --max-budget-usd
+    "$LIVE_PROBE_BUDGET_USD"
+  )
+  if [ -n "$LIVE_PROBE_MODEL" ]; then
+    probe_args+=(
+      --model
+      "$LIVE_PROBE_MODEL"
+    )
+  fi
+
+  if probe_output="$(run_candidate_claude "$kind" "$shell_bin" "$claude_bin" "${probe_args[@]}" 2>&1)"; then
+    if result_is_error "$probe_output"; then
+      if budget_exhausted_output "$probe_output"; then
+        record_failure \
+          "probe_budget_too_low" \
+          "Claude subscription preflight hit the CLI budget cap before it could return." \
+          "Increase LIVE_PROBE_BUDGET_USD or retry after the Claude model cache is warm."
+      elif logged_out_state "$auth_status" || auth_unavailable_output "$probe_output"; then
+        record_failure \
+          "subscription_auth_unavailable" \
+          "Claude Code was found, but Claude subscription auth is unavailable from the shell context this skill uses." \
+          "Run claude auth login --claudeai in the same environment Codex uses, then retry."
+      else
+        record_failure \
+          "ambiguous_auth" \
+          "Claude Code was found, but a subscription-only preflight failed before review could run." \
+          "Check shell startup files, PATH, and the Claude subscription session visible to Codex, then retry."
+      fi
+      return 1
+    fi
+
     if live_probe_ok "$probe_output"; then
       select_runner "$kind" "$shell_bin" "$claude_bin" "$description" "live_probe"
       return 0
@@ -374,21 +500,26 @@ probe_runner_usability() {
 
     record_failure \
       "ambiguous_auth" \
-      "Claude Code was found, but a tiny preflight call returned an unexpected result." \
-      "If Claude works in another terminal, restart Codex so it inherits the same shell environment, then retry."
+      "Claude Code was found, but the subscription-only preflight returned an unexpected result." \
+      "Check the installed Claude CLI and retry from the same environment Codex uses."
     return 1
   fi
 
-  if logged_out_state "$auth_status" || printf '%s\n' "$probe_output" | grep -Eqi 'not logged in|auth login|setup-token|authentication|api key|anthropic_api_key'; then
+  if budget_exhausted_output "$probe_output"; then
     record_failure \
-      "auth_unavailable" \
-      "Claude Code was found, but authentication is unavailable from the shell context this skill uses." \
-      "Run claude auth login in the same environment, or expose the right auth environment such as ANTHROPIC_API_KEY to Codex, then retry."
+      "probe_budget_too_low" \
+      "Claude subscription preflight hit the CLI budget cap before it could return." \
+      "Increase LIVE_PROBE_BUDGET_USD or retry after the Claude model cache is warm."
+  elif logged_out_state "$auth_status" || auth_unavailable_output "$probe_output"; then
+    record_failure \
+      "subscription_auth_unavailable" \
+      "Claude Code was found, but Claude subscription auth is unavailable from the shell context this skill uses." \
+      "Run claude auth login --claudeai in the same environment Codex uses, then retry."
   else
     record_failure \
       "ambiguous_auth" \
-      "Claude Code was found, but a tiny preflight call failed before review could run." \
-      "Check shell and environment differences between Codex and your other terminals, then retry."
+      "Claude Code was found, but a subscription-only preflight failed before review could run." \
+      "Check shell startup files, PATH, and the Claude subscription session visible to Codex, then retry."
   fi
 
   return 1
@@ -448,8 +579,8 @@ resolve_claude_runner() {
   elif [ -z "$CLAUDE_FAILURE_CODE" ]; then
     record_failure \
       "ambiguous_auth" \
-      "Claude Code was found, but no usable Claude runner could be selected." \
-      "Check shell startup files, PATH, and authentication state for the environment Codex inherits, then retry."
+      "Claude Code was found, but no usable subscription-authenticated Claude runner could be selected." \
+      "Check shell startup files, PATH, and the Claude subscription session visible to Codex, then retry."
   fi
 
   return 1
@@ -458,18 +589,34 @@ resolve_claude_runner() {
 classify_runtime_failure() {
   local output="$1"
 
-  if printf '%s\n' "$output" | grep -Eqi 'not logged in|auth login|setup-token|authentication|api key|anthropic_api_key'; then
+  if budget_exhausted_output "$output"; then
     record_failure \
-      "auth_unavailable" \
-      "Claude Code became unavailable before a review result was returned." \
-      "Refresh the auth available to Codex, then retry."
+      "review_budget_too_low" \
+      "Claude review hit MAX_BUDGET_USD before it could return a result." \
+      "Increase MAX_BUDGET_USD or narrow the review artifact, then retry."
+    return
+  fi
+
+  if auth_unavailable_output "$output"; then
+    record_failure \
+      "subscription_auth_unavailable" \
+      "Claude review could not use Claude subscription auth from this environment." \
+      "Run claude auth login --claudeai in the same environment Codex uses, then retry."
+    return
+  fi
+
+  if printf '%s\n' "$output" | grep -Eqi 'api key|anthropic_api_key'; then
+    record_failure \
+      "invocation_failed" \
+      "Claude review attempted an API-key-style auth path, but this bridge only supports Claude subscription auth." \
+      "Remove Anthropic API credential env vars from the Codex environment and run claude auth login --claudeai, then retry."
     return
   fi
 
   record_failure \
     "invocation_failed" \
     "Claude Code invocation failed before a review result was returned." \
-    "Inspect the Claude CLI output, shell PATH, and environment inherited by Codex, then retry."
+    "Inspect the Claude CLI output, shell PATH, and the Claude subscription session visible to Codex, then retry."
 }
 
 load_config "$CONFIG_FILE"
@@ -556,4 +703,11 @@ if ! output="$(run_selected_claude "${cmd_args[@]}" 2>&1)"; then
   exit 0
 fi
 
-printf '%s\n' "$output"
+if result_is_error "$output"; then
+  printf '%s\n' "$output" >&2
+  classify_runtime_failure "$output"
+  emit_json "blocked" "$CLAUDE_FAILURE_SUMMARY" "$CLAUDE_FAILURE_QUESTION"
+  exit 0
+fi
+
+extract_structured_output "$output"

@@ -18,7 +18,8 @@ description: |
 # Claude Review Bridge
 
 This skill uses the local `claude` CLI with the user's existing Claude subscription
-login. Keep the workflow narrow, deterministic, and native-only:
+login. It intentionally ignores Anthropic API credential env vars and does not fall
+back to Anthropic API keys. Keep the workflow narrow, deterministic, and native-only:
 
 - Plan review uses the most recent visible `<proposed_plan>` block from the last 6 messages.
 - Plain code review uses the current repo diff against the detected base branch.
@@ -356,6 +357,7 @@ Codex review style.
 
 - Native-only. Do not route any review flow through Claude-side gstack.
 - Do not use `--bare`; this workflow depends on first-party Claude subscription auth.
+- Do not fall back to Anthropic API keys. The bridge intentionally scrubs Anthropic API credential env vars before calling Claude.
 - Do not give Claude tools. Keep `--tools ""`.
 - Improve review quality by strengthening prompts and artifacts, not by letting Claude inspect the repo directly.
 - Keep plain `/claude review` report-only.
