@@ -24,6 +24,21 @@ The bridge keeps the roles clear:
 - Codex fixes
 - Claude does not edit files in this workflow
 
+## Command Surface
+
+Primary commands:
+
+- `/claude review`
+- `/claude review code`
+- `/claude review plan`
+- `/claude review pr <number>`
+- `/claude review iterate`
+- `/claude show`
+- `/claude set effort <low|medium|high|xhigh|max>`
+- `/claude set model <alias-or-full-model>`
+- `/claude set budget <usd>`
+- `/claude set timeout <seconds>`
+
 ## Auth Model
 
 This bridge is subscription-first and subscription-only.
@@ -226,15 +241,17 @@ Supported values:
 - `EFFORT`
 - `MODEL`
 - `MAX_BUDGET_USD`
+- `REVIEW_TIMEOUT_SECONDS`
 - `LIVE_PROBE_BUDGET_USD`
 - `LIVE_PROBE_MODEL`
 
 Example:
 
 ```env
-EFFORT=high
-MODEL=claude-opus-4-6
-MAX_BUDGET_USD=2.00
+EFFORT=low
+MODEL=sonnet
+MAX_BUDGET_USD=5.00
+REVIEW_TIMEOUT_SECONDS=90
 LIVE_PROBE_BUDGET_USD=0.15
 LIVE_PROBE_MODEL=sonnet
 ```
@@ -244,13 +261,32 @@ What they mean:
 - `EFFORT`: review thinking level for the real review call
 - `MODEL`: review model for the real review call
 - `MAX_BUDGET_USD`: budget cap for the real review call
+- `REVIEW_TIMEOUT_SECONDS`: hard timeout for the real review call
 - `LIVE_PROBE_BUDGET_USD`: budget cap for the tiny subscription-only preflight probe
 - `LIVE_PROBE_MODEL`: model used for that tiny preflight probe
 
-Default probe behavior:
+Default effective config:
 
+- `EFFORT=low`
+- `MODEL=sonnet`
+- `MAX_BUDGET_USD=5.00`
+- `REVIEW_TIMEOUT_SECONDS=90`
 - `LIVE_PROBE_BUDGET_USD=0.15`
 - `LIVE_PROBE_MODEL=sonnet`
+
+The helper that owns config reads and writes is:
+
+```bash
+scripts/claude-config.sh
+```
+
+Examples:
+
+```bash
+bash scripts/claude-config.sh show --config-file /path/to/repo/.codex/claude/config.env
+bash scripts/claude-config.sh set budget 8 --config-file /path/to/repo/.codex/claude/config.env
+bash scripts/claude-config.sh set timeout 180 --config-file /path/to/repo/.codex/claude/config.env
+```
 
 ## Troubleshooting
 

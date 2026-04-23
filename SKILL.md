@@ -11,8 +11,10 @@ description: |
   `/claude review instructions clear [plan|code]`,
   `/claude review instructions set global [plan|code] <markdown>`,
   `/claude review instructions clear global [plan|code]`,
-  `/claude config show`, `/claude config set effort <low|medium|high|max>`,
-  and `/claude config set model <alias-or-full-model>`.
+  `/claude show`, `/claude set effort <low|medium|high|max>`,
+  `/claude set model <alias-or-full-model>`,
+  `/claude set budget <usd>`,
+  and `/claude set timeout <seconds>`.
 ---
 
 # Claude Review Bridge
@@ -46,6 +48,7 @@ Resolve these relative to the current repo and this skill's directory:
   - `prompts/code-review.base.md`
   - `prompts/plan-review.base.md`
 - JSON schema: `schemas/review-output.json`
+- Config helper: `scripts/claude-config.sh`
 - Native Claude helper: `scripts/run-review.sh`
 - Artifact builder: `scripts/build-review-artifact.sh`
 
@@ -55,6 +58,14 @@ the skill directory.
 ## Command Routing
 
 Match only the explicit `/claude ...` command family.
+
+Use these config forms:
+
+- `/claude show`
+- `/claude set effort <low|medium|high|max>`
+- `/claude set model <alias-or-full-model>`
+- `/claude set budget <usd>`
+- `/claude set timeout <seconds>`
 
 When these instructions refer to "inline review instructions," use the literal text
 after `/claude review` or `/claude review code`. Treat those as one-off appended
@@ -252,10 +263,13 @@ RECOMMENDATION: Check out the PR branch locally and run /claude review iterate c
 2. Read the bundled base prompt for that mode.
 3. Read the user-level append override if present.
 4. Read the repo-level append override if present.
-5. Read the effective config values from `<repo>/.codex/claude/config.env`, defaulting to:
-   - `EFFORT=high`
-   - `MODEL=`
-   - `MAX_BUDGET_USD=2.00`
+5. Read the effective config values with:
+
+```bash
+bash <skill-dir>/scripts/claude-config.sh show \
+  --config-file <repo>/.codex/claude/config.env
+```
+
 6. Print, in order:
    - bundled base prompt
    - user-level append override or a note that none exists
@@ -291,35 +305,60 @@ RECOMMENDATION: Check out the PR branch locally and run /claude review iterate c
 2. Remove the user-level append file for that mode if it exists.
 3. Confirm the clear action, then show the effective instructions for that mode.
 
-### `/claude config show`
+### `/claude show`
 
-Read `<repo>/.codex/claude/config.env` if present and print the effective values.
-If it does not exist, show the defaults:
+Run:
 
-- `EFFORT=high`
-- `MODEL=`
-- `MAX_BUDGET_USD=2.00`
+```bash
+bash <skill-dir>/scripts/claude-config.sh show \
+  --config-file <repo>/.codex/claude/config.env
+```
 
-### `/claude config set effort <low|medium|high|max>`
+Print the returned effective values.
 
-1. Validate the requested value.
-2. Create `<repo>/.codex/claude/config.env` if needed.
-3. Rewrite the config file with the known keys only:
-   - `EFFORT`
-   - `MODEL`
-   - `MAX_BUDGET_USD`
-4. Preserve existing `MODEL` and `MAX_BUDGET_USD`.
-5. Confirm the updated value.
+### `/claude set effort <low|medium|high|max>`
 
-### `/claude config set model <alias-or-full-model>`
+Run:
 
-1. Create `<repo>/.codex/claude/config.env` if needed.
-2. Rewrite the config file with the known keys only:
-   - `EFFORT`
-   - `MODEL`
-   - `MAX_BUDGET_USD`
-3. Preserve existing `EFFORT` and `MAX_BUDGET_USD`.
-4. Confirm the updated value.
+```bash
+bash <skill-dir>/scripts/claude-config.sh set effort <value> \
+  --config-file <repo>/.codex/claude/config.env
+```
+
+Print the returned effective values and confirm the updated effort.
+
+### `/claude set model <alias-or-full-model>`
+
+Run:
+
+```bash
+bash <skill-dir>/scripts/claude-config.sh set model <value> \
+  --config-file <repo>/.codex/claude/config.env
+```
+
+Print the returned effective values and confirm the updated model.
+
+### `/claude set budget <usd>`
+
+Run:
+
+```bash
+bash <skill-dir>/scripts/claude-config.sh set budget <value> \
+  --config-file <repo>/.codex/claude/config.env
+```
+
+Print the returned effective values and confirm the updated budget.
+
+### `/claude set timeout <seconds>`
+
+Run:
+
+```bash
+bash <skill-dir>/scripts/claude-config.sh set timeout <value> \
+  --config-file <repo>/.codex/claude/config.env
+```
+
+Print the returned effective values and confirm the updated timeout.
 
 ## Rendering Claude Output
 
@@ -331,6 +370,20 @@ Render responses this way:
 - If `status` is `issues_found`: list findings first, ordered `critical`, `important`, `nitpick`, and grouped by `category`
 - If `status` is `clean`: say `No significant issues found`, then mention any open questions
 - If `status` is `needs_context` or `blocked`: show the summary first, then the open questions
+
+For `blocked` results caused by budget or timeout:
+
+- explicitly call out the configured limit that was hit
+- include the corresponding command hint:
+  - budget: `/claude set budget <usd>`
+  - timeout: `/claude set timeout <seconds>`
+- keep the hint short and concrete
+
+Do not include budget or timeout on every successful review result. Show them only when:
+
+- the user asks for config with `/claude show`
+- the bridge blocks on budget or timeout
+- the user explicitly asks for diagnostics
 
 Each finding should include:
 

@@ -13,16 +13,22 @@ BRANCH=""
 BASE_BRANCH=""
 PR_NUMBER=""
 REVIEW_INSTRUCTIONS=""
-MAX_ARTIFACT_BYTES=120000
-LIVE_PROBE_BUDGET_USD="0.15"
-LIVE_PROBE_MODEL="sonnet"
-
-EFFORT="high"
-MODEL=""
-MAX_BUDGET_USD="2.00"
+MAX_ARTIFACT_BYTES=60000
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_HELPER="$SCRIPT_DIR/claude-config.sh"
 CLAUDE_SUBSCRIPTION_HELPER="$SCRIPT_DIR/claude-subscription-env.sh"
+# shellcheck source=/dev/null
+source "$CONFIG_HELPER"
+
+LIVE_PROBE_BUDGET_USD="$CLAUDE_CONFIG_DEFAULT_LIVE_PROBE_BUDGET_USD"
+LIVE_PROBE_MODEL="$CLAUDE_CONFIG_DEFAULT_LIVE_PROBE_MODEL"
+EFFORT="$CLAUDE_CONFIG_DEFAULT_EFFORT"
+MODEL="$CLAUDE_CONFIG_DEFAULT_MODEL"
+MAX_BUDGET_USD="$CLAUDE_CONFIG_DEFAULT_MAX_BUDGET_USD"
+REVIEW_TIMEOUT_SECONDS="$CLAUDE_CONFIG_DEFAULT_REVIEW_TIMEOUT_SECONDS"
+CLAUDE_RUNTIME_CWD="$(mktemp -d /tmp/claude-review-runtime-XXXXXX)"
+trap 'rm -rf "$CLAUDE_RUNTIME_CWD"' EXIT
 
 CLAUDE_RUNNER_KIND=""
 CLAUDE_RUNNER_SHELL=""
@@ -35,6 +41,7 @@ CLAUDE_FAILURE_SUMMARY=""
 CLAUDE_FAILURE_QUESTION=""
 CLAUDE_FOUND_ANY="false"
 TRIED_CANDIDATE_KEYS="|"
+SELECTED_CLAUDE_CMD=()
 
 usage() {
   cat <<'EOF'
@@ -51,6 +58,19 @@ Options:
   --pr-number <number>
   --instructions <text>
 EOF
+}
+
+normalize_cli_path() {
+  local path="$1"
+
+  case "$path" in
+    ''|/*)
+      printf '%s' "$path"
+      ;;
+    *)
+      printf '%s/%s' "$PWD" "$path"
+      ;;
+  esac
 }
 
 while [ "$#" -gt 0 ]; do
@@ -116,12 +136,20 @@ if [ -z "$MODE" ] || [ -z "$ARTIFACT_FILE" ] || [ -z "$BASE_PROMPT" ] || [ -z "$
   exit 2
 fi
 
-trim() {
-  local value="$1"
-  value="${value#"${value%%[![:space:]]*}"}"
-  value="${value%"${value##*[![:space:]]}"}"
-  printf '%s' "$value"
-}
+ARTIFACT_FILE="$(normalize_cli_path "$ARTIFACT_FILE")"
+BASE_PROMPT="$(normalize_cli_path "$BASE_PROMPT")"
+SCHEMA_FILE="$(normalize_cli_path "$SCHEMA_FILE")"
+if [ -n "$CONFIG_FILE" ]; then
+  CONFIG_FILE="$(normalize_cli_path "$CONFIG_FILE")"
+fi
+if [ -n "$REPO_ROOT" ]; then
+  REPO_ROOT="$(normalize_cli_path "$REPO_ROOT")"
+fi
+if [ "${#APPEND_PROMPTS[@]}" -gt 0 ]; then
+  for append_prompt_index in "${!APPEND_PROMPTS[@]}"; do
+    APPEND_PROMPTS[$append_prompt_index]="$(normalize_cli_path "${APPEND_PROMPTS[$append_prompt_index]}")"
+  done
+fi
 
 json_string() {
   local value="$1"
@@ -159,45 +187,6 @@ emit_json() {
   printf '}\n'
 }
 
-load_config() {
-  local file="$1"
-  local line key value
-
-  [ -f "$file" ] || return 0
-
-  while IFS= read -r line || [ -n "$line" ]; do
-    line="$(trim "$line")"
-    case "$line" in
-      ''|\#*)
-        continue
-        ;;
-    esac
-
-    key="${line%%=*}"
-    value="${line#*=}"
-    key="$(trim "$key")"
-    value="$(trim "$value")"
-
-    case "$key" in
-      EFFORT)
-        EFFORT="$value"
-        ;;
-      MODEL)
-        MODEL="$value"
-        ;;
-      MAX_BUDGET_USD)
-        MAX_BUDGET_USD="$value"
-        ;;
-      LIVE_PROBE_BUDGET_USD)
-        LIVE_PROBE_BUDGET_USD="$value"
-        ;;
-      LIVE_PROBE_MODEL)
-        LIVE_PROBE_MODEL="$value"
-        ;;
-    esac
-  done < "$file"
-}
-
 failure_priority() {
   case "${1:-}" in
     missing_binary)
@@ -218,8 +207,11 @@ failure_priority() {
     review_budget_too_low)
       printf '6'
       ;;
-    invocation_failed)
+    review_timed_out)
       printf '7'
+      ;;
+    invocation_failed)
+      printf '8'
       ;;
     *)
       printf '0'
@@ -272,22 +264,80 @@ mark_candidate_key() {
   TRIED_CANDIDATE_KEYS="${TRIED_CANDIDATE_KEYS}${key}|"
 }
 
+build_candidate_claude_cmd() {
+  local kind="$1"
+  local shell_bin="$2"
+  local claude_bin="$3"
+  local runner_shell="bash"
+  shift 3
+
+  if [ "$kind" = "shell" ]; then
+    runner_shell="$shell_bin"
+  fi
+
+  SELECTED_CLAUDE_CMD=()
+  SELECTED_CLAUDE_CMD=(
+    "$runner_shell"
+    -lc
+    'cd "$1" && shift && exec "$@"'
+    bash
+    "$CLAUDE_RUNTIME_CWD"
+    bash
+    "$CLAUDE_SUBSCRIPTION_HELPER"
+    "$claude_bin"
+  )
+
+  while [ "$#" -gt 0 ]; do
+    SELECTED_CLAUDE_CMD+=("$1")
+    shift
+  done
+}
+
 run_candidate_claude() {
   local kind="$1"
   local shell_bin="$2"
   local claude_bin="$3"
   shift 3
 
-  if [ "$kind" = "direct" ]; then
-    bash "$CLAUDE_SUBSCRIPTION_HELPER" "$claude_bin" "$@"
-    return
-  fi
-
-  "$shell_bin" -lc 'exec "$0" "$@"' bash "$CLAUDE_SUBSCRIPTION_HELPER" "$claude_bin" "$@"
+  build_candidate_claude_cmd "$kind" "$shell_bin" "$claude_bin" "$@"
+  "${SELECTED_CLAUDE_CMD[@]}"
 }
 
 run_selected_claude() {
   run_candidate_claude "$CLAUDE_RUNNER_KIND" "$CLAUDE_RUNNER_SHELL" "$CLAUDE_BIN" "$@"
+}
+
+run_selected_claude_with_timeout() {
+  local timeout_seconds="$1"
+  shift
+
+  if [ -z "$timeout_seconds" ] || [ "${timeout_seconds:-0}" -le 0 ] || ! command -v python3 >/dev/null 2>&1; then
+    run_selected_claude "$@"
+    return
+  fi
+
+  build_candidate_claude_cmd "$CLAUDE_RUNNER_KIND" "$CLAUDE_RUNNER_SHELL" "$CLAUDE_BIN" "$@"
+
+  python3 - "$timeout_seconds" "${SELECTED_CLAUDE_CMD[@]}" <<'PY'
+import subprocess
+import sys
+
+timeout = int(sys.argv[1])
+cmd = sys.argv[2:]
+
+try:
+    completed = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+except subprocess.TimeoutExpired as exc:
+    if exc.stdout:
+        sys.stdout.write(exc.stdout if isinstance(exc.stdout, str) else exc.stdout.decode())
+    if exc.stderr:
+        sys.stderr.write(exc.stderr if isinstance(exc.stderr, str) else exc.stderr.decode())
+    sys.exit(124)
+
+sys.stdout.write(completed.stdout)
+sys.stderr.write(completed.stderr)
+sys.exit(completed.returncode)
+PY
 }
 
 logged_in_state() {
@@ -460,6 +510,12 @@ probe_runner_usability() {
     --tools
     ""
     --strict-mcp-config
+    --setting-sources
+    local
+    --disable-slash-commands
+    --no-session-persistence
+    --permission-mode
+    dontAsk
     --effort
     low
     --max-budget-usd
@@ -587,13 +643,23 @@ resolve_claude_runner() {
 }
 
 classify_runtime_failure() {
-  local output="$1"
+  local exit_code="${1:-0}"
+  local output="${2:-}"
+  local configured_model="${MODEL:-default}"
+
+  if [ "${exit_code:-0}" -eq 124 ]; then
+    record_failure \
+      "review_timed_out" \
+      "Claude review timed out after ${REVIEW_TIMEOUT_SECONDS}s before it could return a result." \
+      "This can indicate a heavy review envelope (artifact=${artifact_bytes:-unknown} bytes, model=${configured_model}, effort=${EFFORT}). Retry with a narrower scope or increase the timeout with `/claude set timeout <seconds>`."
+    return
+  fi
 
   if budget_exhausted_output "$output"; then
     record_failure \
       "review_budget_too_low" \
-      "Claude review hit MAX_BUDGET_USD before it could return a result." \
-      "Increase MAX_BUDGET_USD or narrow the review artifact, then retry."
+      "Claude review hit the configured budget cap ($${MAX_BUDGET_USD}) before it could return a result." \
+      "Retry with a smaller artifact (current artifact=${artifact_bytes:-unknown} bytes), a cheaper model/effort pair, or increase the budget with `/claude set budget <usd>`."
     return
   fi
 
@@ -619,7 +685,7 @@ classify_runtime_failure() {
     "Inspect the Claude CLI output, shell PATH, and the Claude subscription session visible to Codex, then retry."
 }
 
-load_config "$CONFIG_FILE"
+claude_config_load_file "$CONFIG_FILE"
 
 if [ ! -s "$ARTIFACT_FILE" ]; then
   emit_json "needs_context" "The review artifact is empty." "Provide a plan, diff, or PR artifact and retry."
@@ -628,7 +694,7 @@ fi
 
 artifact_bytes="$(wc -c < "$ARTIFACT_FILE" | tr -d '[:space:]')"
 if [ "${artifact_bytes:-0}" -gt "$MAX_ARTIFACT_BYTES" ]; then
-  emit_json "needs_context" "The review artifact is too large for a reliable single-shot review." "Narrow the scope or use /claude review pr <number>."
+  emit_json "needs_context" "The review artifact is too large for a reliable single-shot review (${artifact_bytes} bytes > ${MAX_ARTIFACT_BYTES} bytes)." "Narrow the scope or use /claude review pr <number>."
   exit 0
 fi
 
@@ -681,6 +747,12 @@ cmd_args=(
   --tools
   ""
   --strict-mcp-config
+  --setting-sources
+  local
+  --disable-slash-commands
+  --no-session-persistence
+  --permission-mode
+  dontAsk
   --effort
   "$EFFORT"
   --max-budget-usd
@@ -696,16 +768,21 @@ if [ -n "$MODEL" ]; then
   )
 fi
 
-if ! output="$(run_selected_claude "${cmd_args[@]}" 2>&1)"; then
+set +e
+output="$(run_selected_claude_with_timeout "$REVIEW_TIMEOUT_SECONDS" "${cmd_args[@]}" 2>&1)"
+run_status=$?
+set -e
+
+if [ "$run_status" -ne 0 ]; then
   printf '%s\n' "$output" >&2
-  classify_runtime_failure "$output"
+  classify_runtime_failure "$run_status" "$output"
   emit_json "blocked" "$CLAUDE_FAILURE_SUMMARY" "$CLAUDE_FAILURE_QUESTION"
   exit 0
 fi
 
 if result_is_error "$output"; then
   printf '%s\n' "$output" >&2
-  classify_runtime_failure "$output"
+  classify_runtime_failure 0 "$output"
   emit_json "blocked" "$CLAUDE_FAILURE_SUMMARY" "$CLAUDE_FAILURE_QUESTION"
   exit 0
 fi

@@ -8,10 +8,8 @@ OUTPUT_FILE=""
 BASE_BRANCH=""
 PR_NUMBER=""
 
-MAX_ARTIFACT_BYTES=110000
-PER_FILE_BYTES=7000
-MAX_CHANGED_FILES=12
-MAX_SIBLING_TESTS=6
+MAX_ARTIFACT_BYTES=60000
+MAX_CHANGED_TESTS=12
 MAX_ENUM_CANDIDATES=6
 CODE_FENCE='```'
 NL=$'\n'
@@ -112,19 +110,6 @@ append_block() {
   return 1
 }
 
-trim_file_content() {
-  local path="$1"
-  local bytes
-
-  bytes="$(wc -c < "$path" | tr -d '[:space:]')"
-  if [ "${bytes:-0}" -le "$PER_FILE_BYTES" ]; then
-    cat "$path"
-  else
-    head -c "$PER_FILE_BYTES" "$path"
-    printf '\n[truncated after %s bytes; full file omitted]\n' "$PER_FILE_BYTES"
-  fi
-}
-
 is_frontend_file() {
   case "$1" in
     *.tsx|*.jsx|*.css|*.scss|*.sass|*.less|*.html|*.vue|*.svelte|*.astro|*.mdx)
@@ -147,38 +132,6 @@ is_test_file() {
   esac
 }
 
-is_summary_only_file() {
-  case "$1" in
-    package-lock.json|pnpm-lock.yaml|yarn.lock|bun.lock|bun.lockb|Cargo.lock|Gemfile.lock|go.sum|poetry.lock|Pipfile.lock)
-      return 0
-      ;;
-    *.min.js|*.map|*.snap|*.generated.*|*.pb.go|*.pb.ts|*.pb.rb)
-      return 0
-      ;;
-    dist/*|build/*|coverage/*|vendor/*|.next/*|out/*)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-is_probably_source_file() {
-  case "$1" in
-    *.ts|*.tsx|*.js|*.jsx|*.mjs|*.cjs|*.py|*.rb|*.go|*.rs|*.java|*.kt|*.swift|*.php|*.c|*.cc|*.cpp|*.h|*.hpp|*.cs|*.scala|*.sql|*.sh|*.zsh|*.html|*.css|*.scss|*.sass|*.vue|*.svelte|*.astro|*.mdx|*.json|*.yaml|*.yml|*.toml|*.graphql|*.gql)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-escape_regex() {
-  printf '%s' "$1" | sed 's/[][(){}.^$+*?|\\/]/\\&/g'
-}
-
 collect_changed_files() {
   local merge_base="$1"
   {
@@ -188,17 +141,25 @@ collect_changed_files() {
   } | awk 'NF && !seen[$0]++'
 }
 
-collect_sibling_tests() {
+collect_untracked_files() {
+  git ls-files --others --exclude-standard | awk 'NF && !seen[$0]++'
+}
+
+render_untracked_file_diff() {
   local path="$1"
-  local stem escaped_stem
+  local diff_output=""
 
-  stem="$(basename "$path")"
-  stem="${stem%.*}"
-  escaped_stem="$(escape_regex "$stem")"
+  diff_output="$(git diff --no-index --text -- /dev/null "$path" 2>/dev/null || true)"
+  if [ -n "$diff_output" ]; then
+    printf '%s' "$diff_output"
+    return 0
+  fi
 
-  rg --files "$REPO_ROOT" \
-    | grep -E "(^|/)${escaped_stem}(\\.(test|spec)\\.[^/]+|_test\\.[^/]+|Test\\.[^/]+)$|(^|/)(__tests__|tests|test|spec)/.*${escaped_stem}.*\\.[^/]+$" \
-    | awk '!seen[$0]++'
+  printf 'diff --git a/%s b/%s\n' "$path" "$path"
+  printf 'new file mode 100644\n'
+  printf '--- /dev/null\n'
+  printf '+++ b/%s\n' "$path"
+  printf '@@ -0,0 +0,0 @@\n'
 }
 
 extract_enum_candidates() {
@@ -212,7 +173,7 @@ extract_enum_candidates() {
 
 write_code_artifact() {
   local compare_ref merge_base current_branch status_output status_display diff_stat diff_output worktree_diff
-  local changed_files_file changed_files_display changed_file frontend_touched changed_count included_files sibling_tests_file sibling_test
+  local changed_files_file changed_files_display changed_file frontend_touched changed_tests_display untracked_files_file
   local diff_for_candidates enum_context candidates
 
   if git rev-parse --verify "origin/$BASE_BRANCH" >/dev/null 2>&1; then
@@ -257,47 +218,29 @@ write_code_artifact() {
 
   append_block "Changed files:${NL}${CODE_FENCE}text${NL}${changed_files_display}${NL}${CODE_FENCE}${NL}${NL}" || true
 
-  included_files=0
-  changed_count=0
-  while IFS= read -r changed_file; do
-    [ -n "$changed_file" ] || continue
-    changed_count=$((changed_count + 1))
-    [ "$included_files" -lt "$MAX_CHANGED_FILES" ] || continue
-    [ -f "$changed_file" ] || continue
-
-    if is_summary_only_file "$changed_file"; then
-      append_block "Changed file summary: $changed_file ($(wc -c < "$changed_file" | tr -d '[:space:]') bytes) [summary only]\n\n" || true
-      continue
-    fi
-
-    if is_probably_source_file "$changed_file"; then
-      append_block "Changed file content: $changed_file${NL}${CODE_FENCE}text${NL}$(trim_file_content "$changed_file")${NL}${CODE_FENCE}${NL}${NL}" || true
-      included_files=$((included_files + 1))
-    fi
-  done < "$changed_files_file"
-
-  if [ "$changed_count" -gt "$MAX_CHANGED_FILES" ]; then
-    append_block "Additional changed files omitted after the first $MAX_CHANGED_FILES entries to preserve artifact budget.${NL}${NL}" || true
+  untracked_files_file="$(mktemp /tmp/codex-untracked-files-XXXXXX.txt)"
+  collect_untracked_files > "$untracked_files_file"
+  if [ -s "$untracked_files_file" ]; then
+    while IFS= read -r changed_file; do
+      [ -n "$changed_file" ] || continue
+      [ -f "$changed_file" ] || continue
+      append_block "Untracked file diff: $changed_file${NL}${CODE_FENCE}diff${NL}$(render_untracked_file_diff "$changed_file")${NL}${CODE_FENCE}${NL}${NL}" || true
+    done < "$untracked_files_file"
   fi
 
-  sibling_tests_file="$(mktemp /tmp/codex-sibling-tests-XXXXXX.txt)"
-  : > "$sibling_tests_file"
-  while IFS= read -r changed_file; do
-    [ -n "$changed_file" ] || continue
-    [ -f "$changed_file" ] || continue
-    is_test_file "$changed_file" && continue
-    is_probably_source_file "$changed_file" || continue
-    collect_sibling_tests "$changed_file" >> "$sibling_tests_file" || true
-  done < "$changed_files_file"
+  changed_tests_display="$(
+    awk 'NF' "$changed_files_file" \
+      | while IFS= read -r changed_file; do
+          is_test_file "$changed_file" || continue
+          printf '%s\n' "$changed_file"
+        done \
+      | awk '!seen[$0]++' \
+      | awk -v limit="$MAX_CHANGED_TESTS" 'NR<=limit {print} NR==limit+1 {print "[truncated after " limit " test files]"; exit}'
+  )"
 
-  awk '!seen[$0]++' "$sibling_tests_file" \
-    | while IFS= read -r sibling_test; do
-        [ -n "$sibling_test" ] || continue
-        [ "$MAX_SIBLING_TESTS" -gt 0 ] || break
-        [ -f "$sibling_test" ] || continue
-        append_block "Sibling test context: $sibling_test${NL}${CODE_FENCE}text${NL}$(trim_file_content "$sibling_test")${NL}${CODE_FENCE}${NL}${NL}" || true
-        MAX_SIBLING_TESTS=$((MAX_SIBLING_TESTS - 1))
-      done
+  if [ -n "$changed_tests_display" ]; then
+    append_block "Changed test files:${NL}${CODE_FENCE}text${NL}${changed_tests_display}${NL}${CODE_FENCE}${NL}${NL}" || true
+  fi
 
   diff_for_candidates="$(printf '%s\n%s\n' "$diff_output" "$worktree_diff")"
   candidates="$(printf '%s' "$diff_for_candidates" | extract_enum_candidates | head -n "$MAX_ENUM_CANDIDATES" || true)"
@@ -320,7 +263,7 @@ EOF
     append_block "Working tree diff:${NL}${CODE_FENCE}diff${NL}${worktree_diff}${NL}${CODE_FENCE}${NL}${NL}" || true
   fi
 
-  rm -f "$changed_files_file" "$sibling_tests_file"
+  rm -f "$changed_files_file" "$untracked_files_file"
 }
 
 write_pr_artifact() {
