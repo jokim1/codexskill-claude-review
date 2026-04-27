@@ -14,7 +14,8 @@ description: |
   `/claude show`, `/claude set effort <low|medium|high|xhigh|max>`,
   `/claude set model <alias-or-full-model>`,
   `/claude set budget <usd>`,
-  and `/claude set timeout <seconds>`.
+  `/claude set timeout <seconds>`,
+  `/claude update`, and `/claude update --check`.
 ---
 
 # Claude Review Bridge
@@ -51,6 +52,8 @@ Resolve these relative to the current repo and this skill's directory:
 - Config helper: `scripts/claude-config.sh`
 - Native Claude helper: `scripts/run-review.sh`
 - Artifact builder: `scripts/build-review-artifact.sh`
+- Update helper: `scripts/claude-update.sh`
+- Update check helper: `scripts/claude-update-check.sh`
 
 The bundled files live adjacent to this `SKILL.md`. Resolve those paths relative to
 the skill directory.
@@ -66,10 +69,56 @@ Use these config forms:
 - `/claude set model <alias-or-full-model>`
 - `/claude set budget <usd>`
 - `/claude set timeout <seconds>`
+- `/claude update`
+- `/claude update --check`
 
 When these instructions refer to "inline review instructions," use the literal text
 after `/claude review` or `/claude review code`. Treat those as one-off appended
 instructions after bundled, user-level, and repo-level prompts.
+
+### Update Preflight
+
+Before handling any `/claude ...` command except `/claude update` itself, check for a
+newer skill version:
+
+```bash
+bash <skill-dir>/scripts/claude-update-check.sh
+```
+
+If the output includes `JUST_UPDATED <old> <new>`, tell the user:
+
+```text
+Running /claude at <new> (just updated from <old>).
+```
+
+Then continue the requested command.
+
+If the output includes `UPDATE_AVAILABLE <old> <new> <new-full-sha>`, ask the user
+exactly:
+
+```text
+There is a new /claude update available (<old> -> <new>). Reply Y to update now, or N to skip for now.
+```
+
+Do not continue the requested command until the user answers. If the user answers
+`Y` or `yes`, run:
+
+```bash
+bash <skill-dir>/scripts/claude-update.sh
+```
+
+Then tell the user the update result. If the update succeeded, stop and ask the user
+to rerun the originally requested `/claude ...` command so Codex reloads the updated
+skill instructions. Do not continue the original command in the same invocation.
+If the user declines, run:
+
+```bash
+bash <skill-dir>/scripts/claude-update-check.sh --snooze <new-full-sha>
+```
+
+Then continue the originally requested command. If the update check fails or returns
+no output, ignore it and continue. Never run the update preflight more than once per
+user `/claude ...` invocation.
 
 ### `/claude review`
 
@@ -316,6 +365,24 @@ bash <skill-dir>/scripts/claude-config.sh show \
 
 Print the returned effective values.
 
+### `/claude update`
+
+If the user passes `--check`, run:
+
+```bash
+bash <skill-dir>/scripts/claude-update.sh --check
+```
+
+Otherwise run:
+
+```bash
+bash <skill-dir>/scripts/claude-update.sh
+```
+
+Render the command output directly. If the update is blocked by a dirty checkout,
+detached checkout, missing git install, or non-fast-forward history, surface the
+blocker and do not try to repair it automatically.
+
 ### `/claude set effort <low|medium|high|xhigh|max>`
 
 Run:
@@ -418,6 +485,7 @@ Codex review style.
 - Do not use `--bare`; this workflow depends on first-party Claude subscription auth.
 - Do not fall back to Anthropic API keys. The bridge intentionally scrubs Anthropic API credential env vars before calling Claude.
 - Do not give Claude tools. Keep `--tools ""`.
+- Update checks are allowed to use `git ls-remote`/`git fetch` against this skill's origin, but review flows remain native-only and report-only.
 - Improve review quality by strengthening prompts and artifacts, not by letting Claude inspect the repo directly.
 - Keep plain `/claude review` report-only.
 - In iterate mode, Claude remains report-only; Codex performs the plan or code changes between rounds.

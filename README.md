@@ -38,6 +38,8 @@ Primary commands:
 - `/claude set model <alias-or-full-model>`
 - `/claude set budget <usd>`
 - `/claude set timeout <seconds>`
+- `/claude update`
+- `/claude update --check`
 
 ## Auth Model
 
@@ -108,6 +110,7 @@ You need:
 - Codex
 - `claude` CLI installed
 - `git`
+- `python3`
 - `jq`
 - `gh` if you want `/claude review pr <number>`
 
@@ -227,6 +230,62 @@ Example:
 ```text
 /claude review pr 123
 ```
+
+### `/claude update`
+
+Check for and install the latest `jokim1/codexskill-claude-review` from `origin/main`.
+
+The update path is intentionally conservative:
+
+- `--check` reports status without installing
+- `--check` also reports checkout blockers that would prevent the update
+- a normal `/claude update` fetches and fast-forwards the git checkout
+- tracked local changes block the update
+- detached checkouts and non-fast-forward history block the update
+- untracked or ignored local files that would be overwritten block the update
+
+Examples:
+
+```text
+/claude update --check
+/claude update
+```
+
+## Update Checks
+
+Every `/claude ...` invocation runs a low-noise update check before the requested
+command, except `/claude update` itself.
+
+The check uses:
+
+```bash
+scripts/claude-update-check.sh
+```
+
+It compares the installed skill checkout with `origin/main`, caches successful checks
+under `~/.codex/claude`, and prints one-line status for the skill runner:
+
+- `UPDATE_AVAILABLE <old> <new> <new-full-sha>`
+- `JUST_UPDATED <old> <new>`
+- no output when current, snoozed, unavailable, or skipped
+- no output if update-check state cannot be written, so normal `/claude` commands continue
+
+When an update is available, the skill asks:
+
+```text
+There is a new /claude update available (<old> -> <new>). Reply Y to update now, or N to skip for now.
+```
+
+If declined, the check is snoozed with escalating backoff:
+
+- first decline: 24h
+- second decline for the same version: 48h
+- third and later declines for the same version: 1 week
+
+Explicit `/claude update` clears the cache and snooze state after a successful update.
+The prompt displays the short `<new>` SHA, while snooze state uses
+`<new-full-sha>` so the same remote commit is matched exactly on later checks. If a
+newer remote commit appears while an older one is snoozed, the newer commit is shown.
 
 ## Config
 
@@ -378,6 +437,8 @@ Important files:
 - `scripts/run-review.sh`
 - `scripts/claude-subscription-env.sh`
 - `scripts/build-review-artifact.sh`
+- `scripts/claude-update-check.sh`
+- `scripts/claude-update.sh`
 - `prompts/code-review.base.md`
 - `prompts/plan-review.base.md`
 - `schemas/review-output.json`
