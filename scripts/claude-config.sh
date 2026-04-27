@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 
-CLAUDE_CONFIG_DEFAULT_EFFORT="low"
-CLAUDE_CONFIG_DEFAULT_MODEL="sonnet"
+CLAUDE_CONFIG_DEFAULT_EFFORT="xhigh"
+CLAUDE_CONFIG_DEFAULT_MODEL="opus"
 CLAUDE_CONFIG_DEFAULT_MAX_BUDGET_USD="5.00"
-CLAUDE_CONFIG_DEFAULT_REVIEW_TIMEOUT_SECONDS="90"
+CLAUDE_CONFIG_DEFAULT_REVIEW_TIMEOUT_SECONDS="300"
 CLAUDE_CONFIG_DEFAULT_LIVE_PROBE_BUDGET_USD="0.15"
 CLAUDE_CONFIG_DEFAULT_LIVE_PROBE_MODEL="sonnet"
 
@@ -11,7 +11,7 @@ claude_config_usage() {
   cat <<'EOF'
 Usage:
   claude-config.sh show [--config-file <path>]
-  claude-config.sh set effort <low|medium|high|xhigh|max> [--config-file <path>]
+  claude-config.sh set effort <low|medium|high|xhigh|extra-high|max> [--config-file <path>]
   claude-config.sh set model <alias-or-full-model> [--config-file <path>]
   claude-config.sh set budget <positive-decimal> [--config-file <path>]
   claude-config.sh set timeout <positive-integer-seconds> [--config-file <path>]
@@ -32,6 +32,17 @@ claude_config_reset_defaults() {
   REVIEW_TIMEOUT_SECONDS="$CLAUDE_CONFIG_DEFAULT_REVIEW_TIMEOUT_SECONDS"
   LIVE_PROBE_BUDGET_USD="$CLAUDE_CONFIG_DEFAULT_LIVE_PROBE_BUDGET_USD"
   LIVE_PROBE_MODEL="$CLAUDE_CONFIG_DEFAULT_LIVE_PROBE_MODEL"
+}
+
+claude_config_normalize_effort() {
+  case "$1" in
+    extra-high|extra_high)
+      printf 'xhigh'
+      ;;
+    *)
+      printf '%s' "$1"
+      ;;
+  esac
 }
 
 claude_config_load_file() {
@@ -56,7 +67,7 @@ claude_config_load_file() {
 
     case "$key" in
       EFFORT)
-        EFFORT="$value"
+        EFFORT="$(claude_config_normalize_effort "$value")"
         ;;
       MODEL)
         MODEL="$value"
@@ -181,6 +192,7 @@ claude_config_main() {
       claude_config_load_file "$config_file"
       case "$field" in
         effort)
+          value="$(claude_config_normalize_effort "$value")"
           claude_config_validate_effort "$value" || {
             echo "Invalid effort: $value" >&2
             return 2

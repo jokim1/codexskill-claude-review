@@ -34,7 +34,7 @@ Primary commands:
 - `/claude review pr <number>`
 - `/claude review iterate`
 - `/claude show`
-- `/claude set effort <low|medium|high|xhigh|max>`
+- `/claude set effort <low|medium|high|xhigh|max>` (`extra-high` normalizes to `xhigh`)
 - `/claude set model <alias-or-full-model>`
 - `/claude set budget <usd>`
 - `/claude set timeout <seconds>`
@@ -248,10 +248,10 @@ Supported values:
 Example:
 
 ```env
-EFFORT=low
-MODEL=sonnet
+EFFORT=xhigh
+MODEL=opus
 MAX_BUDGET_USD=5.00
-REVIEW_TIMEOUT_SECONDS=90
+REVIEW_TIMEOUT_SECONDS=300
 LIVE_PROBE_BUDGET_USD=0.15
 LIVE_PROBE_MODEL=sonnet
 ```
@@ -259,18 +259,24 @@ LIVE_PROBE_MODEL=sonnet
 What they mean:
 
 - `EFFORT`: review thinking level for the real review call
-- `MODEL`: review model for the real review call
+- `MODEL`: review model for the real review call; `opus` uses the Claude CLI's
+  latest Opus alias
 - `MAX_BUDGET_USD`: budget cap for the real review call
-- `REVIEW_TIMEOUT_SECONDS`: hard timeout for the real review call
+- `REVIEW_TIMEOUT_SECONDS`: configured timeout floor for the real review call
 - `LIVE_PROBE_BUDGET_USD`: budget cap for the tiny subscription-only preflight probe
 - `LIVE_PROBE_MODEL`: model used for that tiny preflight probe
 
+The bridge may raise the effective timeout above `REVIEW_TIMEOUT_SECONDS` based on
+artifact size, model, and effort. If the first real review call times out, it retries
+exactly once with a larger timeout. Timeout retry only applies to the real review
+call, not to auth preflight.
+
 Default effective config:
 
-- `EFFORT=low`
-- `MODEL=sonnet`
+- `EFFORT=xhigh`
+- `MODEL=opus`
 - `MAX_BUDGET_USD=5.00`
-- `REVIEW_TIMEOUT_SECONDS=90`
+- `REVIEW_TIMEOUT_SECONDS=300`
 - `LIVE_PROBE_BUDGET_USD=0.15`
 - `LIVE_PROBE_MODEL=sonnet`
 
@@ -285,7 +291,7 @@ Examples:
 ```bash
 bash scripts/claude-config.sh show --config-file /path/to/repo/.codex/claude/config.env
 bash scripts/claude-config.sh set budget 8 --config-file /path/to/repo/.codex/claude/config.env
-bash scripts/claude-config.sh set timeout 180 --config-file /path/to/repo/.codex/claude/config.env
+bash scripts/claude-config.sh set timeout 300 --config-file /path/to/repo/.codex/claude/config.env
 ```
 
 ## Troubleshooting
@@ -310,6 +316,17 @@ LIVE_PROBE_BUDGET_USD=0.25
 ```
 
 Or retry after the Claude model cache is warm.
+
+### Review times out
+
+Large code-review artifacts can still take several minutes, especially with Opus and
+`xhigh` effort. The bridge starts from `REVIEW_TIMEOUT_SECONDS`, raises the effective
+timeout for heavier reviews, and retries once only when the real review call times
+out. If both attempts time out, either narrow the diff or raise the timeout:
+
+```bash
+bash scripts/claude-config.sh set timeout 600 --config-file /path/to/repo/.codex/claude/config.env
+```
 
 ### Subscription auth is unavailable
 

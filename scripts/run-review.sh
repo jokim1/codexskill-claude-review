@@ -42,6 +42,10 @@ CLAUDE_FAILURE_QUESTION=""
 CLAUDE_FOUND_ANY="false"
 TRIED_CANDIDATE_KEYS="|"
 SELECTED_CLAUDE_CMD=()
+REVIEW_EFFECTIVE_TIMEOUT_SECONDS=""
+REVIEW_RETRY_TIMEOUT_SECONDS=""
+REVIEW_TIMEOUT_ATTEMPTS="0"
+REVIEW_TIMEOUT_ATTEMPT_SECONDS=""
 
 usage() {
   cat <<'EOF'
@@ -338,6 +342,88 @@ sys.stdout.write(completed.stdout)
 sys.stderr.write(completed.stderr)
 sys.exit(completed.returncode)
 PY
+}
+
+review_timeout_model_is_opus() {
+  case "${MODEL:-}" in
+    *[Oo][Pp][Uu][Ss]*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+calculate_review_timeout_seconds() {
+  local configured_timeout="${1:-0}"
+  local bytes="${2:-0}"
+  local timeout artifact_kib artifact_floor effort_floor model_floor
+
+  case "$configured_timeout" in
+    ''|*[!0-9]*)
+      configured_timeout=0
+      ;;
+  esac
+  case "$bytes" in
+    ''|*[!0-9]*)
+      bytes=0
+      ;;
+  esac
+
+  timeout="$configured_timeout"
+  artifact_kib=$(( (bytes + 1023) / 1024 ))
+  artifact_floor=$((120 + artifact_kib * 4))
+  [ "$artifact_floor" -gt 420 ] && artifact_floor=420
+
+  case "${EFFORT:-}" in
+    max)
+      effort_floor=480
+      ;;
+    xhigh)
+      effort_floor=420
+      ;;
+    high)
+      effort_floor=300
+      ;;
+    medium)
+      effort_floor=240
+      ;;
+    *)
+      effort_floor=180
+      ;;
+  esac
+
+  model_floor=0
+  if review_timeout_model_is_opus; then
+    model_floor=300
+  fi
+
+  [ "$timeout" -lt "$artifact_floor" ] && timeout="$artifact_floor"
+  [ "$timeout" -lt "$effort_floor" ] && timeout="$effort_floor"
+  [ "$timeout" -lt "$model_floor" ] && timeout="$model_floor"
+
+  printf '%s' "$timeout"
+}
+
+calculate_review_retry_timeout_seconds() {
+  local first_timeout="${1:-0}"
+  local retry_timeout
+
+  case "$first_timeout" in
+    ''|*[!0-9]*)
+      first_timeout=0
+      ;;
+  esac
+
+  if [ "$first_timeout" -ge 900 ]; then
+    printf '%s' "$first_timeout"
+    return 0
+  fi
+
+  retry_timeout=$((first_timeout * 2))
+  [ "$retry_timeout" -gt 900 ] && retry_timeout=900
+  printf '%s' "$retry_timeout"
 }
 
 logged_in_state() {
@@ -646,12 +732,16 @@ classify_runtime_failure() {
   local exit_code="${1:-0}"
   local output="${2:-}"
   local configured_model="${MODEL:-default}"
+  local configured_timeout="${REVIEW_TIMEOUT_SECONDS:-unknown}"
+  local effective_timeout="${REVIEW_EFFECTIVE_TIMEOUT_SECONDS:-${REVIEW_TIMEOUT_SECONDS:-unknown}}"
+  local timeout_attempts="${REVIEW_TIMEOUT_ATTEMPTS:-1}"
+  local timeout_attempt_seconds="${REVIEW_TIMEOUT_ATTEMPT_SECONDS:-${effective_timeout}s}"
 
   if [ "${exit_code:-0}" -eq 124 ]; then
     record_failure \
       "review_timed_out" \
-      "Claude review timed out after ${REVIEW_TIMEOUT_SECONDS}s before it could return a result." \
-      "This can indicate a heavy review envelope (artifact=${artifact_bytes:-unknown} bytes, model=${configured_model}, effort=${EFFORT}). Retry with a narrower scope or increase the timeout with `/claude set timeout <seconds>`."
+      "Claude review timed out after ${timeout_attempts} attempt(s) (${timeout_attempt_seconds}) before it could return a result." \
+      "The configured timeout is ${configured_timeout}s; the effective timeout was ${effective_timeout}s based on artifact size, model=${configured_model}, and effort=${EFFORT}. Retry with a narrower scope or increase the timeout with `/claude set timeout <seconds>`."
     return
   fi
 
@@ -697,6 +787,9 @@ if [ "${artifact_bytes:-0}" -gt "$MAX_ARTIFACT_BYTES" ]; then
   emit_json "needs_context" "The review artifact is too large for a reliable single-shot review (${artifact_bytes} bytes > ${MAX_ARTIFACT_BYTES} bytes)." "Narrow the scope or use /claude review pr <number>."
   exit 0
 fi
+
+REVIEW_EFFECTIVE_TIMEOUT_SECONDS="$(calculate_review_timeout_seconds "$REVIEW_TIMEOUT_SECONDS" "$artifact_bytes")"
+REVIEW_RETRY_TIMEOUT_SECONDS="$(calculate_review_retry_timeout_seconds "$REVIEW_EFFECTIVE_TIMEOUT_SECONDS")"
 
 if ! resolve_claude_runner; then
   emit_json "blocked" "$CLAUDE_FAILURE_SUMMARY" "$CLAUDE_FAILURE_QUESTION"
@@ -768,10 +861,23 @@ if [ -n "$MODEL" ]; then
   )
 fi
 
+REVIEW_TIMEOUT_ATTEMPTS="1"
+REVIEW_TIMEOUT_ATTEMPT_SECONDS="${REVIEW_EFFECTIVE_TIMEOUT_SECONDS}s"
+
 set +e
-output="$(run_selected_claude_with_timeout "$REVIEW_TIMEOUT_SECONDS" "${cmd_args[@]}" 2>&1)"
+output="$(run_selected_claude_with_timeout "$REVIEW_EFFECTIVE_TIMEOUT_SECONDS" "${cmd_args[@]}" 2>&1)"
 run_status=$?
 set -e
+
+if [ "$run_status" -eq 124 ] && [ "$REVIEW_RETRY_TIMEOUT_SECONDS" -gt "$REVIEW_EFFECTIVE_TIMEOUT_SECONDS" ]; then
+  REVIEW_TIMEOUT_ATTEMPTS="2"
+  REVIEW_TIMEOUT_ATTEMPT_SECONDS="${REVIEW_EFFECTIVE_TIMEOUT_SECONDS}s, ${REVIEW_RETRY_TIMEOUT_SECONDS}s"
+
+  set +e
+  output="$(run_selected_claude_with_timeout "$REVIEW_RETRY_TIMEOUT_SECONDS" "${cmd_args[@]}" 2>&1)"
+  run_status=$?
+  set -e
+fi
 
 if [ "$run_status" -ne 0 ]; then
   printf '%s\n' "$output" >&2

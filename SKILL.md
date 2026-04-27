@@ -11,7 +11,7 @@ description: |
   `/claude review instructions clear [plan|code]`,
   `/claude review instructions set global [plan|code] <markdown>`,
   `/claude review instructions clear global [plan|code]`,
-  `/claude show`, `/claude set effort <low|medium|high|max>`,
+  `/claude show`, `/claude set effort <low|medium|high|xhigh|max>`,
   `/claude set model <alias-or-full-model>`,
   `/claude set budget <usd>`,
   and `/claude set timeout <seconds>`.
@@ -62,7 +62,7 @@ Match only the explicit `/claude ...` command family.
 Use these config forms:
 
 - `/claude show`
-- `/claude set effort <low|medium|high|max>`
+- `/claude set effort <low|medium|high|xhigh|max>`
 - `/claude set model <alias-or-full-model>`
 - `/claude set budget <usd>`
 - `/claude set timeout <seconds>`
@@ -316,7 +316,7 @@ bash <skill-dir>/scripts/claude-config.sh show \
 
 Print the returned effective values.
 
-### `/claude set effort <low|medium|high|max>`
+### `/claude set effort <low|medium|high|xhigh|max>`
 
 Run:
 
@@ -325,7 +325,8 @@ bash <skill-dir>/scripts/claude-config.sh set effort <value> \
   --config-file <repo>/.codex/claude/config.env
 ```
 
-Print the returned effective values and confirm the updated effort.
+Print the returned effective values and confirm the updated effort. Treat
+`extra-high` as a user-facing alias for `xhigh` when setting effort.
 
 ### `/claude set model <alias-or-full-model>`
 
@@ -373,11 +374,16 @@ Render responses this way:
 
 For `blocked` results caused by budget or timeout:
 
-- explicitly call out the configured limit that was hit
+- explicitly call out the configured/effective limit that was hit
 - include the corresponding command hint:
   - budget: `/claude set budget <usd>`
   - timeout: `/claude set timeout <seconds>`
 - keep the hint short and concrete
+
+`scripts/run-review.sh` treats `REVIEW_TIMEOUT_SECONDS` as the configured floor for
+the real review call. It may raise the effective timeout based on artifact size,
+model, and effort, and it retries exactly once when the first real review call times
+out. Do not retry additional times in the Codex rendering layer.
 
 Do not include budget or timeout on every successful review result. Show them only when:
 
