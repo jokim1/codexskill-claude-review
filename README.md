@@ -376,6 +376,42 @@ LIVE_PROBE_BUDGET_USD=0.25
 
 Or retry after the Claude model cache is warm.
 
+### Preflight reports `EPERM` under `~/.claude`
+
+This is a Claude state write failure, not proof of a bad Claude login.
+
+`scripts/run-review.sh` shells out to `claude -p` through
+`scripts/claude-subscription-env.sh`. If the parent `bash run-review.sh` process is
+inside the Codex filesystem sandbox, the child `claude` process inherits that
+sandbox. Claude Code can read auth state successfully but still fail when it needs to
+create a refresh or lock file such as:
+
+```text
+~/.claude/.oauth_refresh.lock
+```
+
+If this happened inside the Codex filesystem sandbox, run or approve the review
+bridge outside that sandbox with this exact trusted skill prefix:
+
+```text
+["bash", "/Users/<you>/.codex/skills/claude/scripts/run-review.sh"]
+```
+
+Approving that prefix grants unsandboxed execution to the installed skill script.
+Do not approve broad prefixes such as `["bash"]`, and do not approve repo-local or
+unreviewed copies of the helper.
+
+If the same error persists outside the Codex sandbox, check ownership and permissions
+for `~/.claude` or `CLAUDE_CONFIG_DIR`. Artifact builders, config helpers, and update
+checks do not need that approval.
+
+For safety, the unsandboxed review bridge only reads:
+
+- bundled prompts under `prompts/`
+- bundled schemas under `schemas/`
+- prompt/config overrides under `~/.codex/claude` or `<repo>/.codex/claude`
+- review artifacts matching `/tmp/claude-review-*`
+
 ### Review times out
 
 Large code-review artifacts can still take several minutes, especially with Opus and
@@ -454,3 +490,10 @@ If you change the bridge:
 
 The installed copy is the deployed artifact. The source repo is where durable changes
 should live.
+
+Useful local checks:
+
+```bash
+bash -n scripts/*.sh tests/*.sh
+bash tests/run-review-sandbox-classification.sh
+```

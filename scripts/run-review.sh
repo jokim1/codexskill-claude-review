@@ -16,6 +16,7 @@ REVIEW_INSTRUCTIONS=""
 MAX_ARTIFACT_BYTES=60000
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG_HELPER="$SCRIPT_DIR/claude-config.sh"
 CLAUDE_SUBSCRIPTION_HELPER="$SCRIPT_DIR/claude-subscription-env.sh"
 # shellcheck source=/dev/null
@@ -46,6 +47,17 @@ REVIEW_EFFECTIVE_TIMEOUT_SECONDS=""
 REVIEW_RETRY_TIMEOUT_SECONDS=""
 REVIEW_TIMEOUT_ATTEMPTS="0"
 REVIEW_TIMEOUT_ATTEMPT_SECONDS=""
+CLAUDE_HOME_ERE="$(printf '%s' "$HOME" | sed 's/[][(){}.^$*+?|\\]/\\&/g')"
+CLAUDE_CONFIG_DIR_ERE=""
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+  CLAUDE_CONFIG_DIR_ERE="$(printf '%s' "$CLAUDE_CONFIG_DIR" | sed 's/[][(){}.^$*+?|\\]/\\&/g')"
+fi
+CLAUDE_STATE_PATH_PATTERN="oauth_refresh\\.lock|${CLAUDE_HOME_ERE}/\\.claude|~/\\.claude|CLAUDE_CONFIG_DIR"
+if [ -n "$CLAUDE_CONFIG_DIR_ERE" ]; then
+  CLAUDE_STATE_PATH_PATTERN="${CLAUDE_STATE_PATH_PATTERN}|${CLAUDE_CONFIG_DIR_ERE}"
+fi
+CLAUDE_PERMISSION_DENIED_PATTERN='EPERM|EACCES|operation not permitted|permission denied'
+CLAUDE_ERROR_EXCERPT_PATTERN="${CLAUDE_PERMISSION_DENIED_PATTERN}|oauth_refresh\\.lock|\\.claude"
 
 usage() {
   cat <<'EOF'
@@ -191,6 +203,203 @@ emit_json() {
   printf '}\n'
 }
 
+canonical_path() {
+  local path="$1"
+
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$path" <<'PY'
+from pathlib import Path
+import sys
+
+print(Path(sys.argv[1]).expanduser().resolve(strict=False))
+PY
+    return 0
+  fi
+
+  if [ -d "$path" ]; then
+    (cd "$path" && pwd -P)
+    return 0
+  fi
+
+  (cd "$(dirname "$path")" 2>/dev/null && printf '%s/%s\n' "$(pwd -P)" "$(basename "$path")")
+}
+
+path_within() {
+  local path="$1"
+  local dir="$2"
+  local path_real=""
+  local dir_real=""
+
+  path_real="$(canonical_path "$path" 2>/dev/null || true)"
+  dir_real="$(canonical_path "$dir" 2>/dev/null || true)"
+  [ -n "$path_real" ] && [ -n "$dir_real" ] || return 1
+
+  case "$path_real" in
+    "$dir_real"|"$dir_real"/*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+path_has_world_writable_parent() {
+  local path="$1"
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    return 0
+  fi
+
+  python3 - "$path" <<'PY'
+from pathlib import Path
+import os
+import stat
+import sys
+
+path = Path(sys.argv[1]).expanduser().resolve(strict=False)
+for parent in [path.parent, *path.parents]:
+    try:
+        mode = os.stat(parent).st_mode
+    except OSError:
+        continue
+    if mode & stat.S_IWOTH:
+        sys.exit(0)
+sys.exit(1)
+PY
+}
+
+claude_bin_allowed() {
+  local claude_path="$1"
+
+  [ -n "$claude_path" ] || return 1
+  [ -x "$claude_path" ] || return 1
+
+  if path_within "$claude_path" "/tmp"; then
+    return 1
+  fi
+  if [ -n "$REPO_ROOT" ] && path_within "$claude_path" "$REPO_ROOT"; then
+    return 1
+  fi
+  if path_within "$claude_path" "$PWD"; then
+    return 1
+  fi
+  if path_has_world_writable_parent "$claude_path"; then
+    return 1
+  fi
+
+  return 0
+}
+
+record_unsafe_claude_candidate() {
+  local claude_path="$1"
+
+  record_failure \
+    "unusable_runner" \
+    "Claude Code was found at an unsafe path for unsandboxed execution." \
+    "Rejecting claude binary at $claude_path. Ensure the real Claude CLI is installed in a trusted, non-world-writable location outside the repo and temp directories."
+}
+
+config_repo_root() {
+  local config_dir=""
+
+  [ -n "$CONFIG_FILE" ] || return 1
+  [ "$(basename "$CONFIG_FILE")" = "config.env" ] || return 1
+  config_dir="$(dirname "$CONFIG_FILE")"
+  [ "$(basename "$config_dir")" = "claude" ] || return 1
+  [ "$(basename "$(dirname "$config_dir")")" = ".codex" ] || return 1
+  canonical_path "$(dirname "$config_dir")/.."
+}
+
+append_prompt_allowed() {
+  local prompt="$1"
+  local inferred_repo_root=""
+
+  path_within "$prompt" "$HOME/.codex/claude" && return 0
+  if [ -n "$REPO_ROOT" ] && path_within "$prompt" "$REPO_ROOT/.codex/claude"; then
+    return 0
+  fi
+  inferred_repo_root="$(config_repo_root 2>/dev/null || true)"
+  if [ -n "$inferred_repo_root" ] && path_within "$prompt" "$inferred_repo_root/.codex/claude"; then
+    return 0
+  fi
+  return 1
+}
+
+trusted_review_bridge_guidance() {
+  local installed_run_review="$HOME/.codex/skills/claude/scripts/run-review.sh"
+
+  if [ -e "$installed_run_review" ]; then
+    printf 'If this review bridge is running inside the Codex filesystem sandbox, run it outside that sandbox or approve this exact trusted installed-skill command prefix: ["bash", "%s"]. Do not approve repo-local worktree copies or broad prefixes such as ["bash"]. If it still fails outside the sandbox, check ownership and permissions for ~/.claude or CLAUDE_CONFIG_DIR.' "$installed_run_review"
+    return 0
+  fi
+
+  printf 'If this review bridge is running inside the Codex filesystem sandbox, run it outside that sandbox or approve only the exact installed skill run-review.sh path you trust. Do not approve repo-local worktree copies or broad prefixes such as ["bash"]. If it still fails outside the sandbox, check ownership and permissions for ~/.claude or CLAUDE_CONFIG_DIR.'
+}
+
+validate_readable_inputs() {
+  local artifact_base=""
+  local append_prompt=""
+  local inferred_repo_root=""
+
+  artifact_base="$(basename "$ARTIFACT_FILE")"
+  if ! path_within "$ARTIFACT_FILE" "/tmp" || [[ "$artifact_base" != claude-review-* ]]; then
+    emit_json \
+      "blocked" \
+      "The review artifact path is outside the allowed Claude review temp-file boundary." \
+      "Write the artifact to a /tmp/claude-review-* file, then retry."
+    exit 0
+  fi
+
+  if ! path_within "$BASE_PROMPT" "$SKILL_DIR/prompts"; then
+    emit_json \
+      "blocked" \
+      "The base prompt path is outside this installed skill's prompts directory." \
+      "Use the bundled prompt under $SKILL_DIR/prompts."
+    exit 0
+  fi
+
+  if ! path_within "$SCHEMA_FILE" "$SKILL_DIR/schemas"; then
+    emit_json \
+      "blocked" \
+      "The schema path is outside this installed skill's schemas directory." \
+      "Use the bundled schema under $SKILL_DIR/schemas."
+    exit 0
+  fi
+
+  if [ -n "$CONFIG_FILE" ]; then
+    inferred_repo_root="$(config_repo_root 2>/dev/null || true)"
+    if [ -n "$REPO_ROOT" ] && ! path_within "$CONFIG_FILE" "$REPO_ROOT/.codex/claude"; then
+      emit_json \
+        "blocked" \
+        "The config file path is outside the supplied repo root's .codex/claude config boundary." \
+        "Use <repo>/.codex/claude/config.env for the same repo passed as --repo-root."
+      exit 0
+    fi
+    if [ -z "$inferred_repo_root" ] || ! path_within "$CONFIG_FILE" "$inferred_repo_root/.codex/claude"; then
+      emit_json \
+        "blocked" \
+        "The config file path is outside the allowed repo .codex/claude config boundary." \
+        "Use <repo>/.codex/claude/config.env."
+      exit 0
+    fi
+  fi
+
+  if [ "${#APPEND_PROMPTS[@]}" -gt 0 ]; then
+    for append_prompt in "${APPEND_PROMPTS[@]}"; do
+      [ -n "$append_prompt" ] || continue
+      [ -e "$append_prompt" ] || continue
+      if ! append_prompt_allowed "$append_prompt"; then
+        emit_json \
+          "blocked" \
+          "An append prompt path is outside the allowed Claude prompt override boundary." \
+          "Use ~/.codex/claude/*.append.md or <repo>/.codex/claude/*.append.md."
+        exit 0
+      fi
+    done
+  fi
+}
+
 failure_priority() {
   case "${1:-}" in
     missing_binary)
@@ -208,14 +417,17 @@ failure_priority() {
     ambiguous_auth)
       printf '5'
       ;;
-    review_budget_too_low)
+    claude_state_write_denied)
       printf '6'
       ;;
-    review_timed_out)
+    review_budget_too_low)
       printf '7'
       ;;
-    invocation_failed)
+    review_timed_out)
       printf '8'
+      ;;
+    invocation_failed)
+      printf '9'
       ;;
     *)
       printf '0'
@@ -233,22 +445,6 @@ record_failure() {
     CLAUDE_FAILURE_SUMMARY="$summary"
     CLAUDE_FAILURE_QUESTION="$question"
   fi
-}
-
-resolve_shell_bin() {
-  local candidate="$1"
-  local resolved=""
-
-  [ -n "$candidate" ] || return 1
-
-  if [ -x "$candidate" ]; then
-    printf '%s' "$candidate"
-    return 0
-  fi
-
-  resolved="$(command -v "$candidate" 2>/dev/null || true)"
-  [ -n "$resolved" ] || return 1
-  printf '%s' "$resolved"
 }
 
 candidate_key_seen() {
@@ -551,6 +747,66 @@ auth_unavailable_output() {
   printf '%s\n' "$output" | grep -Eqi 'not logged in|auth login|setup-token|authentication'
 }
 
+claude_state_write_denied_output() {
+  local output="$1"
+
+  [ -n "$output" ] || return 1
+
+  printf '%s\n' "$output" | grep -Eqi "$CLAUDE_STATE_PATH_PATTERN" || return 1
+  printf '%s\n' "$output" | grep -Eqi "$CLAUDE_PERMISSION_DENIED_PATTERN" || return 1
+
+  return 0
+}
+
+claude_error_excerpt() {
+  local output="$1"
+  local excerpt=""
+  local strings=""
+  local permission_excerpt=""
+  local state_excerpt=""
+
+  [ -n "$output" ] || return 0
+
+  if command -v jq >/dev/null 2>&1; then
+    strings="$(printf '%s\n' "$output" | jq -r '.. | strings' 2>/dev/null || true)"
+  fi
+
+  [ -n "$strings" ] || strings="$output"
+
+  permission_excerpt="$(printf '%s\n' "$strings" | grep -Eim1 "$CLAUDE_PERMISSION_DENIED_PATTERN" || true)"
+  state_excerpt="$(printf '%s\n' "$strings" | grep -Eim1 "$CLAUDE_STATE_PATH_PATTERN" || true)"
+
+  if [ -n "$permission_excerpt" ] && [ -n "$state_excerpt" ] && [ "$permission_excerpt" != "$state_excerpt" ]; then
+    excerpt="${permission_excerpt} ${state_excerpt}"
+  else
+    excerpt="${permission_excerpt:-$state_excerpt}"
+  fi
+
+  if [ -z "$excerpt" ]; then
+    excerpt="$(printf '%s\n' "$strings" | grep -Eim1 "$CLAUDE_ERROR_EXCERPT_PATTERN" || true)"
+  fi
+
+  excerpt="$(printf '%s' "$excerpt" | tr '\r\n' '  ' | sed 's/[[:space:]][[:space:]]*/ /g' | cut -c 1-240)"
+  printf '%s' "$excerpt"
+}
+
+record_claude_state_write_denied_failure() {
+  local output="$1"
+  local excerpt=""
+  local question=""
+
+  question="$(trusted_review_bridge_guidance)"
+  excerpt="$(claude_error_excerpt "$output")"
+  if [ -n "$excerpt" ]; then
+    question="${question} Claude error: ${excerpt}"
+  fi
+
+  record_failure \
+    "claude_state_write_denied" \
+    "Claude Code was found, but Claude could not write its first-party auth/config state." \
+    "$question"
+}
+
 select_runner() {
   CLAUDE_RUNNER_KIND="$1"
   CLAUDE_RUNNER_SHELL="$2"
@@ -572,8 +828,8 @@ probe_runner_usability() {
   if ! run_candidate_claude "$kind" "$shell_bin" "$claude_bin" -v >/dev/null 2>&1; then
     record_failure \
       "unusable_runner" \
-      "Claude Code was found but could not run from one of the shell contexts this skill tried." \
-      "Check PATH, shell startup files, and Claude CLI permissions, then retry."
+      "Claude Code was found but could not run from the current Codex PATH." \
+      "Check PATH and Claude CLI permissions, then retry."
     return 1
   fi
 
@@ -621,6 +877,8 @@ probe_runner_usability() {
           "probe_budget_too_low" \
           "Claude subscription preflight hit the CLI budget cap before it could return." \
           "Increase LIVE_PROBE_BUDGET_USD or retry after the Claude model cache is warm."
+      elif claude_state_write_denied_output "$probe_output"; then
+        record_claude_state_write_denied_failure "$probe_output"
       elif logged_out_state "$auth_status" || auth_unavailable_output "$probe_output"; then
         record_failure \
           "subscription_auth_unavailable" \
@@ -630,7 +888,7 @@ probe_runner_usability() {
         record_failure \
           "ambiguous_auth" \
           "Claude Code was found, but a subscription-only preflight failed before review could run." \
-          "Check shell startup files, PATH, and the Claude subscription session visible to Codex, then retry."
+          "Check PATH and the Claude subscription session visible to Codex, then retry."
       fi
       return 1
     fi
@@ -652,6 +910,8 @@ probe_runner_usability() {
       "probe_budget_too_low" \
       "Claude subscription preflight hit the CLI budget cap before it could return." \
       "Increase LIVE_PROBE_BUDGET_USD or retry after the Claude model cache is warm."
+  elif claude_state_write_denied_output "$probe_output"; then
+    record_claude_state_write_denied_failure "$probe_output"
   elif logged_out_state "$auth_status" || auth_unavailable_output "$probe_output"; then
     record_failure \
       "subscription_auth_unavailable" \
@@ -661,7 +921,7 @@ probe_runner_usability() {
     record_failure \
       "ambiguous_auth" \
       "Claude Code was found, but a subscription-only preflight failed before review could run." \
-      "Check shell startup files, PATH, and the Claude subscription session visible to Codex, then retry."
+      "Check PATH and the Claude subscription session visible to Codex, then retry."
   fi
 
   return 1
@@ -674,6 +934,11 @@ try_direct_candidate() {
   claude_path="$(command -v claude 2>/dev/null || true)"
   [ -n "$claude_path" ] || return 1
 
+  if ! claude_bin_allowed "$claude_path"; then
+    record_unsafe_claude_candidate "$claude_path"
+    return 1
+  fi
+
   candidate_key="direct::$claude_path"
   candidate_key_seen "$candidate_key" && return 1
   mark_candidate_key "$candidate_key"
@@ -682,47 +947,19 @@ try_direct_candidate() {
   probe_runner_usability "direct" "" "$claude_path" "current shell"
 }
 
-try_shell_candidate() {
-  local shell_ref="$1"
-  local description="$2"
-  local shell_bin=""
-  local claude_path=""
-  local candidate_key=""
-
-  shell_bin="$(resolve_shell_bin "$shell_ref" 2>/dev/null || true)"
-  [ -n "$shell_bin" ] || return 1
-
-  claude_path="$("$shell_bin" -lc 'command -v claude' 2>/dev/null | head -n 1 | tr -d '\r')"
-  [ -n "$claude_path" ] || return 1
-
-  candidate_key="shell::$shell_bin::$claude_path"
-  candidate_key_seen "$candidate_key" && return 1
-  mark_candidate_key "$candidate_key"
-
-  CLAUDE_FOUND_ANY="true"
-  probe_runner_usability "shell" "$shell_bin" "$claude_path" "$description"
-}
-
 resolve_claude_runner() {
   try_direct_candidate && return 0
-
-  if [ -n "${SHELL:-}" ]; then
-    try_shell_candidate "$SHELL" "\$SHELL login shell" && return 0
-  fi
-
-  try_shell_candidate "zsh" "zsh login shell" && return 0
-  try_shell_candidate "bash" "bash login shell" && return 0
 
   if [ "$CLAUDE_FOUND_ANY" != "true" ]; then
     record_failure \
       "missing_binary" \
       "Claude Code CLI was not found from this Codex environment." \
-      "Install Claude Code and ensure claude is on PATH for Codex, then retry."
+      "Install Claude Code and ensure claude is on PATH for Codex without relying on shell startup files, then retry."
   elif [ -z "$CLAUDE_FAILURE_CODE" ]; then
     record_failure \
       "ambiguous_auth" \
       "Claude Code was found, but no usable subscription-authenticated Claude runner could be selected." \
-      "Check shell startup files, PATH, and the Claude subscription session visible to Codex, then retry."
+      "Check PATH and the Claude subscription session visible to Codex, then retry."
   fi
 
   return 1
@@ -753,6 +990,11 @@ classify_runtime_failure() {
     return
   fi
 
+  if claude_state_write_denied_output "$output"; then
+    record_claude_state_write_denied_failure "$output"
+    return
+  fi
+
   if auth_unavailable_output "$output"; then
     record_failure \
       "subscription_auth_unavailable" \
@@ -775,6 +1017,7 @@ classify_runtime_failure() {
     "Inspect the Claude CLI output, shell PATH, and the Claude subscription session visible to Codex, then retry."
 }
 
+validate_readable_inputs
 claude_config_load_file "$CONFIG_FILE"
 
 if [ ! -s "$ARTIFACT_FILE" ]; then

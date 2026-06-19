@@ -76,6 +76,36 @@ When these instructions refer to "inline review instructions," use the literal t
 after `/claude review` or `/claude review code`. Treat those as one-off appended
 instructions after bundled, user-level, and repo-level prompts.
 
+### Claude State Writes And Codex Sandbox Boundary
+
+Review flows may need to run `scripts/run-review.sh` outside the Codex filesystem
+sandbox when the command tool supports that choice. The bridge eventually shells out
+to `claude -p`, and Claude Code may need to create lock or refresh files under
+`~/.claude` even for report-only review. A sandboxed parent `bash` process causes the
+child `claude` process to inherit the same write restrictions, which can fail with
+`EPERM` on paths such as `~/.claude/.oauth_refresh.lock`.
+
+Use the normal sandbox for artifact builders, config helpers, and update checks. If
+Claude reports a denied write to `~/.claude` or `CLAUDE_CONFIG_DIR`, first determine
+whether the review bridge itself was sandboxed. Only the review bridge may need this
+boundary:
+
+```text
+approved prefix: ["bash", "<skill-dir>/scripts/run-review.sh"]
+```
+
+Approving that prefix grants unsandboxed execution to the installed skill script, so
+only approve the exact installed skill path you trust. Do not approve broad prefixes
+such as `["bash"]`, and do not approve repo-local or unreviewed copies of the helper.
+
+If the command tool cannot request unsandboxed execution and this prefix is not
+already approved, surface the blocked result from `run-review.sh` and tell the user
+to approve that exact trusted prefix before retrying. If the same error persists
+outside the Codex sandbox, tell the user to check ownership and permissions for
+`~/.claude` or `CLAUDE_CONFIG_DIR`. Do not treat this as Claude login failure when
+`auth status` is readable but the live probe reports `EPERM`, `.claude`, or
+`oauth_refresh.lock`.
+
 ### Update Preflight
 
 Before handling any `/claude ...` command except `/claude update` itself, check for a
@@ -137,7 +167,7 @@ REASON: No recent <proposed_plan> block is visible in this conversation.
 RECOMMENDATION: Create or paste a plan, then run /claude review plan again.
 ```
 
-3. Write the extracted plan text to a temp file under `/tmp`.
+3. Write the extracted plan text to a temp file matching `/tmp/claude-review-*`.
 4. Invoke:
 
 ```bash
@@ -170,6 +200,8 @@ bash <skill-dir>/scripts/build-review-artifact.sh \
   --base-branch <base-branch> \
   --output-file <temp-artifact-file>
 ```
+
+Use a temp artifact path matching `/tmp/claude-review-*`.
 
 4. If artifact building fails because merge base or base branch cannot be determined, respond:
 
@@ -223,6 +255,8 @@ bash <skill-dir>/scripts/build-review-artifact.sh \
   --pr-number <number> \
   --output-file <temp-artifact-file>
 ```
+
+Use a temp artifact path matching `/tmp/claude-review-*`.
 
 4. Invoke `scripts/run-review.sh` with `--mode pr`, the code-review prompt, both append prompts, and `--pr-number <number>`.
 5. Parse the returned JSON and render findings first, ordered by severity and grouped by category.
