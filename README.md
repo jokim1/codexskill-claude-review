@@ -31,46 +31,30 @@ when you want Claude Code to ask Codex for an adversarial second opinion.
 This repo exists for the opposite direction: Codex asking Claude for an adversarial
 review.
 
-The GStack Claude wrapper is powerful, but using it for Codex -> Claude review had
-practical limitations for this narrower workflow:
+When we tried to use GStack for Codex -> Claude review, the mismatch was not that
+GStack was bad. The mismatch was direction and contract. We wanted Codex to remain
+the primary operator while Claude acted as a narrow, independent reviewer.
 
-- it uses a broader `claude` command surface with review, challenge, and consult
-  behaviors
-- `/claude update` could route into a GStack Claude consult path instead of updating
-  this skill
-- nested read-only `claude -p` consult calls could hang without returning a review
-  result
-- the shared internal skill name `claude` created routing collisions when multiple
-  Claude-related skills were installed
-- the broader wrapper made it harder to guarantee this bridge's constraints:
-  subscription-only auth, no API-key fallback, no Claude-side repo tools, and
-  report-only output
+That required guarantees the GStack workflow was not designed to be responsible for
+in this direction:
 
-So the recommendation is simple:
+- Codex stays the implementer and fixer; Claude only reports findings.
+- Claude receives a bounded artifact that Codex builds from a plan, diff, or PR.
+- Claude does not inspect the repo directly and does not get editing tools.
+- Claude returns structured JSON that Codex can render, sort, and iterate on.
+- Auth is predictably Claude subscription auth, with Anthropic API env vars scrubbed.
+- Budget, timeout, sandbox, auth-state, and artifact-boundary failures are classified
+  locally instead of becoming ambiguous nested-agent failures.
+
+So the recommendation is simple and directional:
 
 - For Claude Code asking Codex to review something, use
   [GStack](https://github.com/garrytan/gstack). That direction works well.
 - For Codex asking Claude to review something, use this skill. It is a small bridge
   built specifically for that direction.
 
-This skill keeps the internal name `claude-review` while preserving the user-facing
-`/claude ...` commands for review, config, and update. If another installed skill
-still wins `/claude`, force this bridge explicitly:
-
-```text
-$claude-review /claude update --check
-```
-
-For a durable local fix, disable the duplicate GStack Claude skill in
-`~/.codex/config.toml`:
-
-```toml
-[[skills.config]]
-path = "/Users/josephkim/.gstack/repos/gstack/.agents/skills/gstack-claude/SKILL.md"
-enabled = false
-```
-
-Restart Codex or start a new thread after changing skill inventory or config.
+This is not a replacement for GStack. It is the small adapter for the other side of
+the cross-model review loop.
 
 ## Current Status
 
