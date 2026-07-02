@@ -879,6 +879,7 @@ probe_runner_usability() {
   probe_args=(
     -p \
     'Codex Claude skill preflight probe. Return {"ok": true} and nothing else.' \
+    --safe-mode
     --output-format
     json
     --json-schema
@@ -1120,6 +1121,7 @@ user_prompt="$(printf '%s\n' "${prompt_sections[@]}")"
 cmd_args=(
   -p
   "$user_prompt"
+  --safe-mode
   --output-format
   json
   --json-schema

@@ -399,6 +399,96 @@ EOF
   printf 'ok: probe timeout\n'
 }
 
+run_safe_mode_args_case() {
+  local fake_root tmpdir output arg_log
+
+  mkdir -p "$HOME/.codex"
+  fake_root="$(mktemp -d "$HOME/.codex/claude-test-bin-XXXXXX")"
+  tmpdir="$(mktemp -d /tmp/claude-review-test-XXXXXX)"
+  mkdir -p "$fake_root/bin"
+  printf 'review artifact\n' > "$tmpdir/claude-review-artifact.txt"
+  arg_log="$tmpdir/claude-args.log"
+
+  cat > "$fake_root/bin/claude" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [ "${1:-}" = "-v" ] || [ "${1:-}" = "--version" ]; then
+  printf 'Claude Code fake\n'
+  exit 0
+fi
+
+if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
+  printf '{"loggedIn":true,"apiProvider":"firstParty"}\n'
+  exit 0
+fi
+
+if [ "${1:-}" = "-p" ]; then
+  prompt="${2:-}"
+  has_safe_mode="false"
+  for arg in "$@"; do
+    if [ "$arg" = "--safe-mode" ]; then
+      has_safe_mode="true"
+    fi
+  done
+  if [[ "$prompt" == *"Codex Claude skill preflight probe"* ]]; then
+    printf 'probe_safe_mode=%s\n' "$has_safe_mode" >> "$FAKE_CLAUDE_ARG_LOG"
+    printf '{"ok":true}\n'
+    exit 0
+  fi
+
+  printf 'review_safe_mode=%s\n' "$has_safe_mode" >> "$FAKE_CLAUDE_ARG_LOG"
+  printf '{"status":"clean","mode":"code","summary":"ok","findings":[],"open_questions":[]}\n'
+  exit 0
+fi
+
+printf 'unexpected fake claude args: %s\n' "$*" >&2
+exit 2
+EOF
+  chmod +x "$fake_root/bin/claude"
+
+  output="$(
+    cd "$REPO_ROOT"
+    PATH="$fake_root/bin:$PATH" \
+      FAKE_CLAUDE_ARG_LOG="$arg_log" \
+      bash scripts/run-review.sh \
+        --mode code \
+        --artifact-file "$tmpdir/claude-review-artifact.txt" \
+        --base-prompt prompts/code-review.base.md \
+        --schema-file schemas/review-output.json \
+        --repo-root "$REPO_ROOT" \
+        --branch test \
+        --base-branch main
+  )" || {
+    rm -rf "$fake_root" "$tmpdir"
+    fail "safe mode args case exited non-zero"
+  }
+
+  OUTPUT_JSON="$output" python3 - <<'PY'
+import json
+import os
+import sys
+
+data = json.loads(os.environ["OUTPUT_JSON"])
+if data.get("status") != "clean" or data.get("summary") != "ok":
+    print(f"expected clean ok result, got {data!r}", file=sys.stderr)
+    sys.exit(1)
+PY
+
+  if ! grep -q '^probe_safe_mode=true$' "$arg_log"; then
+    rm -rf "$fake_root" "$tmpdir"
+    fail "preflight probe did not include --safe-mode"
+  fi
+  if ! grep -q '^review_safe_mode=true$' "$arg_log"; then
+    rm -rf "$fake_root" "$tmpdir"
+    fail "review call did not include --safe-mode"
+  fi
+
+  rm -rf "$fake_root" "$tmpdir"
+  printf 'ok: safe mode args\n'
+}
+
 sandbox_summary="Claude could not write its first-party auth/config state"
 generic_runtime_summary="Claude Code invocation failed"
 custom_config_dir="$HOME/.codex/claude-test-config-dir"
@@ -508,4 +598,5 @@ run_config_boundary_case
 run_unsafe_claude_candidate_case
 run_timeout_wrapper_closes_stdin_case
 run_probe_timeout_case
+run_safe_mode_args_case
 rm -f "$evil_shell"
