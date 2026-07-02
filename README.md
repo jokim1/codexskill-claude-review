@@ -69,6 +69,9 @@ Supported now:
 - `/claude-review plan`
 - `/claude-review plan <path-to-plan.md>`
 - `/claude-review pr <number>`
+- `/claude-review challenge`
+- `/claude-review challenge code [focus]`
+- `/claude-review challenge plan [path-to-plan.md]`
 - `/claude-review iterate`
 - `/claude-review iterate code`
 - `/claude-review iterate plan`
@@ -80,14 +83,10 @@ Supported now:
 - `/claude-review update`
 - `/claude-review update --check`
 
-Not supported in this bridge yet:
+Out of scope:
 
-- `/claude-review challenge`
-
-Challenge mode is planned in [docs/claude-review-challenge-plan.md](docs/claude-review-challenge-plan.md).
-Until that work lands, do not rely on `/claude-review challenge` as a command
-handled by this skill. If you intentionally run GStack's `/claude challenge` flow,
-that is a GStack command path, not this bridge.
+No `/claude ...` commands are handled by this bridge. If `/claude challenge` works
+on your machine, that is a separate installed skill, usually GStack's wrapper.
 
 ## How It Works
 
@@ -293,8 +292,8 @@ Typical challenge concerns include:
 
 ### Current Bridge Behavior
 
-This repo does not currently implement first-class challenge commands. These are
-not supported by the current `SKILL.md`, runner, or JSON schema:
+This repo implements first-class challenge commands through the same local runner,
+schema validation, and no-tools Claude invocation as normal review:
 
 ```text
 /claude-review challenge
@@ -303,47 +302,24 @@ not supported by the current `SKILL.md`, runner, or JSON schema:
 ```
 
 If `/claude challenge` works on your machine today, that is coming from another
-installed skill, usually GStack's `gstack-claude` wrapper. This bridge's planned
-challenge command family is `/claude-review challenge ...`.
+installed skill, usually GStack's `gstack-claude` wrapper. This bridge's challenge
+command family is `/claude-review challenge ...`.
 
-### Current Workaround In This Bridge
+### Challenge Usage
 
-Use normal review with explicit adversarial focus text:
+Use code challenge for the current diff:
 
 ```text
-/claude-review code focus on race conditions, retries, idempotency, stale state, partial failure, and data loss
+/claude-review challenge code focus on race conditions, retries, idempotency, stale state, partial failure, and data loss
 ```
 
 For plans:
 
 ```text
-/claude-review plan docs/checkout-refactor-plan.md
-```
-
-Then add the adversarial criteria to the plan itself or to your repo-level plan
-review append prompt:
-
-```text
-<repo>/.codex/claude/plan-review.append.md
-```
-
-This is not identical to a dedicated challenge prompt, but it keeps the work inside
-this bridge's subscription-authenticated, report-only runner.
-
-### Planned First-Class Challenge Journey
-
-The planned command family is documented in
-[docs/claude-review-challenge-plan.md](docs/claude-review-challenge-plan.md).
-
-The intended future journey is:
-
-```text
-/claude-review challenge
-/claude-review challenge code focus on retries and stale state
 /claude-review challenge plan docs/checkout-refactor-plan.md
 ```
 
-Expected behavior after implementation:
+Challenge behavior:
 
 1. Codex routes through the `claude-review` skill, not GStack.
 2. Code challenge builds the same bounded current-diff artifact as normal review.
@@ -351,9 +327,6 @@ Expected behavior after implementation:
 4. Claude receives a dedicated challenge prompt.
 5. The runner stamps the output mode as `challenge_code` or `challenge_plan`.
 6. Codex renders findings first and does not enter an automatic fix loop.
-
-Until that implementation lands, treat challenge support as roadmap, not shipped
-README surface.
 
 ## Command Reference
 
@@ -370,6 +343,16 @@ README surface.
 
 Bare `/claude-review` reviews the current diff. Use `/claude-review plan` for
 plan review.
+
+### Challenge
+
+```text
+/claude-review challenge
+/claude-review challenge code focus on retries and stale state
+/claude-review challenge plan docs/plan.md
+```
+
+Bare `/claude-review challenge` is a code challenge of the current diff.
 
 ### Iterate
 

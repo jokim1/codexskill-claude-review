@@ -1,7 +1,12 @@
 interface:
   display_name: "Claude Review"
-  short_description: "Run Claude Code for review-only or iterate-fix-review loops"
-  default_prompt: "Use /claude-review plan <path>, /claude-review plan, or /claude-review for report-only review. Use /claude-review iterate for a bounded fix-and-rereview loop."
+  short_description: "Run Claude Code for review-only and iterate-review loops"
+  default_prompt: >-
+    Use canonical /claude-review commands only. Use /claude-review or
+    /claude-review code <focus> for normal current-diff review, /claude-review
+    plan <path> for normal plan review, and /claude-review iterate for a bounded
+    fix-and-rereview loop. Use /claude-review challenge commands only after
+    confirming this installed skill routes challenge and has challenge prompts.
 
 policy:
   allow_implicit_invocation: true

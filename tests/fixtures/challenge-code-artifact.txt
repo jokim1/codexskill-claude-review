@@ -1,0 +1,50 @@
+diff --git a/src/retry-worker.ts b/src/retry-worker.ts
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/retry-worker.ts
+@@
++const processed = new Set<string>();
++
++export async function deliver(job: DeliveryJob) {
++  if (processed.has(job.id)) {
++    return;
++  }
++
++  const account = await db.accounts.get(job.accountId);
++  const staleAccountSnapshot = {
++    id: account.id,
++    balance: account.balance,
++    updatedAt: account.updatedAt,
++  };
++
++  await gateway.charge(job.cardToken, job.amount);
++  await db.accounts.update(job.accountId, {
++    balance: staleAccountSnapshot.balance - job.amount,
++  });
++
++  processed.add(job.id);
++}
++
++export async function retryFailedJobs(jobs: DeliveryJob[]) {
++  await Promise.all(jobs.map((job) => deliver(job)));
++}
+diff --git a/src/retry-budget.ts b/src/retry-budget.ts
+new file mode 100644
+index 0000000..2222222
+--- /dev/null
++++ b/src/retry-budget.ts
+@@
++export function shouldRetry(job: DeliveryJob) {
++  return job.attempts <= 3;
++}
++
++export function markRetryScheduled(job: DeliveryJob) {
++  return queue.enqueue({ ...job, attempts: job.attempts + 1 });
++}
+
+Known hazards intentionally included for prompt fixtures:
+- retry budget can schedule a fourth attempt and charge again after a timeout
+- stale state writes can overwrite another worker's balance update
+- duplicate work can happen because the in-memory processed set is per process and is
+  updated after the external charge

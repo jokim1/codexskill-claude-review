@@ -23,7 +23,9 @@
       "enum": [
         "plan",
         "code",
-        "pr"
+        "pr",
+        "challenge_code",
+        "challenge_plan"
       ]
     },
     "summary": {

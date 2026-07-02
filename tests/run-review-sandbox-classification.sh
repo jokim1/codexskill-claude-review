@@ -3,6 +3,28 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PYTHON_BIN="$(command -v python3)"
+REAL_JQ="$(command -v jq 2>/dev/null || true)"
+
+make_fake_claude_root() {
+  local tmp_base="${TMPDIR:-}"
+  local tmp_real=""
+
+  if [ -n "$tmp_base" ] && [ -d "$tmp_base" ]; then
+    tmp_real="$(cd "$tmp_base" && pwd -P)"
+    case "$tmp_real" in
+      /tmp|/private/tmp|/tmp/*|/private/tmp/*)
+        ;;
+      *)
+        mktemp -d "${tmp_base%/}/claude-review-test-bin-XXXXXX"
+        return 0
+        ;;
+    esac
+  fi
+
+  mkdir -p "$HOME/.codex"
+  mktemp -d "$HOME/.codex/claude-test-bin-XXXXXX"
+}
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -65,6 +87,41 @@ if reject_summary and reject_summary in summary:
 PY
 }
 
+assert_result_mode() {
+  local case_name="$1"
+  local output="$2"
+  local expected_status="$3"
+  local expected_mode="$4"
+  local expected_summary="${5:-ok}"
+
+  OUTPUT_JSON="$output" CASE_NAME="$case_name" EXPECTED_STATUS="$expected_status" EXPECTED_MODE="$expected_mode" EXPECTED_SUMMARY="$expected_summary" "$PYTHON_BIN" - <<'PY'
+import json
+import os
+import sys
+
+case_name = os.environ["CASE_NAME"]
+expected_status = os.environ["EXPECTED_STATUS"]
+expected_mode = os.environ["EXPECTED_MODE"]
+expected_summary = os.environ["EXPECTED_SUMMARY"]
+
+try:
+    data = json.loads(os.environ["OUTPUT_JSON"])
+except Exception as exc:
+    print(f"{case_name}: output was not JSON: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+if data.get("status") != expected_status:
+    print(f"{case_name}: expected status {expected_status!r}, got {data.get('status')!r}", file=sys.stderr)
+    sys.exit(1)
+if data.get("mode") != expected_mode:
+    print(f"{case_name}: expected mode {expected_mode!r}, got {data.get('mode')!r}", file=sys.stderr)
+    sys.exit(1)
+if data.get("summary") != expected_summary:
+    print(f"{case_name}: expected summary {expected_summary!r}, got {data.get('summary')!r}", file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
 run_case() {
   local case_name="$1"
   local probe_output="$2"
@@ -78,8 +135,7 @@ run_case() {
   local shell_path="${10:-/bin/bash}"
   local fake_root tmpdir output
 
-  mkdir -p "$HOME/.codex"
-  fake_root="$(mktemp -d "$HOME/.codex/claude-test-bin-XXXXXX")"
+  fake_root="$(make_fake_claude_root)"
   tmpdir="$(mktemp -d /tmp/claude-review-test-XXXXXX)"
   mkdir -p "$fake_root/bin"
 
@@ -149,6 +205,210 @@ EOF
 
   rm -rf "$fake_root" "$tmpdir"
   printf 'ok: %s\n' "$case_name"
+}
+
+run_schema_challenge_modes_case() {
+  "$PYTHON_BIN" - "$REPO_ROOT/schemas/review-output.json" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+schema = json.loads(Path(sys.argv[1]).read_text())
+modes = set(schema["properties"]["mode"]["enum"])
+missing = {"challenge_code", "challenge_plan"} - modes
+if missing:
+    print(f"schema is missing challenge modes: {sorted(missing)}", file=sys.stderr)
+    sys.exit(1)
+PY
+  printf 'ok: schema challenge modes\n'
+}
+
+write_fake_jq_stamp_failure() {
+  local fake_root="$1"
+
+  cat > "$fake_root/bin/jq" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+for arg in "$@"; do
+  if [[ "$arg" == *"structured_output.mode"* ]]; then
+    exit 127
+  fi
+done
+
+exec "$REAL_JQ_BIN" "$@"
+EOF
+  chmod +x "$fake_root/bin/jq"
+}
+
+write_fake_python_stamp_failure() {
+  local fake_root="$1"
+
+  cat > "$fake_root/bin/python3" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [ "${1:-}" = "-" ]; then
+  case "${3:-}" in
+    /tmp/claude-review-output-*)
+      exit 127
+      ;;
+  esac
+fi
+
+exec "$REAL_PYTHON_BIN" "$@"
+EOF
+  chmod +x "$fake_root/bin/python3"
+}
+
+run_mode_stamping_case() {
+  local case_name="$1"
+  local runner_mode="$2"
+  local review_output="$3"
+  local expected_mode="$4"
+  local fail_jq_stamp="${5:-false}"
+  local fail_python_stamp="${6:-false}"
+  local fake_root tmpdir output
+
+  fake_root="$(make_fake_claude_root)"
+  tmpdir="$(mktemp -d /tmp/claude-review-test-XXXXXX)"
+  mkdir -p "$fake_root/bin"
+  printf 'review artifact\n' > "$tmpdir/claude-review-artifact.txt"
+
+  if [ "$fail_jq_stamp" = "true" ] && [ -n "$REAL_JQ" ]; then
+    write_fake_jq_stamp_failure "$fake_root"
+  fi
+  if [ "$fail_python_stamp" = "true" ]; then
+    write_fake_python_stamp_failure "$fake_root"
+  fi
+
+  cat > "$fake_root/bin/claude" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [ "${1:-}" = "-v" ] || [ "${1:-}" = "--version" ]; then
+  printf 'Claude Code fake\n'
+  exit 0
+fi
+
+if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
+  printf '{"loggedIn":true,"apiProvider":"firstParty"}\n'
+  exit 0
+fi
+
+if [ "${1:-}" = "-p" ]; then
+  prompt="${2:-}"
+  if [[ "$prompt" == *"Codex Claude skill preflight probe"* ]]; then
+    printf '{"ok":true}\n'
+    exit 0
+  fi
+
+  printf '%s\n' "$FAKE_CLAUDE_REVIEW_OUTPUT"
+  exit 0
+fi
+
+printf 'unexpected fake claude args: %s\n' "$*" >&2
+exit 2
+EOF
+  chmod +x "$fake_root/bin/claude"
+
+  output="$(
+    cd "$REPO_ROOT"
+    PATH="$fake_root/bin:$PATH" \
+      REAL_JQ_BIN="$REAL_JQ" \
+      REAL_PYTHON_BIN="$PYTHON_BIN" \
+      FAKE_CLAUDE_REVIEW_OUTPUT="$review_output" \
+      bash scripts/run-review.sh \
+        --mode "$runner_mode" \
+        --artifact-file "$tmpdir/claude-review-artifact.txt" \
+        --base-prompt prompts/code-review.base.md \
+        --schema-file schemas/review-output.json \
+        --repo-root "$REPO_ROOT" \
+        --branch test \
+        --base-branch main
+  )" || {
+    rm -rf "$fake_root" "$tmpdir"
+    fail "$case_name exited non-zero"
+  }
+
+  assert_result_mode "$case_name" "$output" "clean" "$expected_mode"
+
+  rm -rf "$fake_root" "$tmpdir"
+  printf 'ok: %s\n' "$case_name"
+}
+
+run_mode_stamping_blocked_case() {
+  local fake_root tmpdir output
+
+  fake_root="$(make_fake_claude_root)"
+  tmpdir="$(mktemp -d /tmp/claude-review-test-XXXXXX)"
+  mkdir -p "$fake_root/bin"
+  printf 'review artifact\n' > "$tmpdir/claude-review-artifact.txt"
+
+  if [ -n "$REAL_JQ" ]; then
+    write_fake_jq_stamp_failure "$fake_root"
+  fi
+  write_fake_python_stamp_failure "$fake_root"
+
+  cat > "$fake_root/bin/claude" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [ "${1:-}" = "-v" ] || [ "${1:-}" = "--version" ]; then
+  printf 'Claude Code fake\n'
+  exit 0
+fi
+
+if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
+  printf '{"loggedIn":true,"apiProvider":"firstParty"}\n'
+  exit 0
+fi
+
+if [ "${1:-}" = "-p" ]; then
+  prompt="${2:-}"
+  if [[ "$prompt" == *"Codex Claude skill preflight probe"* ]]; then
+    printf '{"ok":true}\n'
+    exit 0
+  fi
+
+  printf '{"status":"clean","mode":"code","summary":"ok","findings":[],"open_questions":[]}\n'
+  exit 0
+fi
+
+printf 'unexpected fake claude args: %s\n' "$*" >&2
+exit 2
+EOF
+  chmod +x "$fake_root/bin/claude"
+
+  output="$(
+    cd "$REPO_ROOT"
+    PATH="$fake_root/bin:$PATH" \
+      REAL_JQ_BIN="$REAL_JQ" \
+      REAL_PYTHON_BIN="$PYTHON_BIN" \
+      bash scripts/run-review.sh \
+        --mode challenge_code \
+        --artifact-file "$tmpdir/claude-review-artifact.txt" \
+        --base-prompt prompts/code-review.base.md \
+        --schema-file schemas/review-output.json \
+        --repo-root "$REPO_ROOT" \
+        --branch test \
+        --base-branch main
+  )" || {
+    rm -rf "$fake_root" "$tmpdir"
+    fail "mode stamping blocked fallback exited non-zero"
+  }
+
+  if ! assert_blocked_result "mode stamping blocked fallback" "$output" "could not safely stamp" "Install jq or python3" ""; then
+    rm -rf "$fake_root" "$tmpdir"
+    fail "mode stamping blocked fallback assertion failed"
+  fi
+
+  rm -rf "$fake_root" "$tmpdir"
+  printf 'ok: mode stamping blocked fallback\n'
 }
 
 run_artifact_boundary_case() {
@@ -258,8 +518,7 @@ EOF
 run_timeout_wrapper_closes_stdin_case() {
   local fake_root tmpdir output
 
-  mkdir -p "$HOME/.codex"
-  fake_root="$(mktemp -d "$HOME/.codex/claude-test-bin-XXXXXX")"
+  fake_root="$(make_fake_claude_root)"
   tmpdir="$(mktemp -d /tmp/claude-review-test-XXXXXX)"
   mkdir -p "$fake_root/bin"
   printf 'review artifact\n' > "$tmpdir/claude-review-artifact.txt"
@@ -335,8 +594,7 @@ PY
 run_probe_timeout_case() {
   local fake_root tmpdir output
 
-  mkdir -p "$HOME/.codex"
-  fake_root="$(mktemp -d "$HOME/.codex/claude-test-bin-XXXXXX")"
+  fake_root="$(make_fake_claude_root)"
   tmpdir="$(mktemp -d /tmp/claude-review-test-XXXXXX)"
   mkdir -p "$fake_root/bin"
   printf 'review artifact\n' > "$tmpdir/claude-review-artifact.txt"
@@ -402,8 +660,7 @@ EOF
 run_safe_mode_args_case() {
   local fake_root tmpdir output arg_log
 
-  mkdir -p "$HOME/.codex"
-  fake_root="$(mktemp -d "$HOME/.codex/claude-test-bin-XXXXXX")"
+  fake_root="$(make_fake_claude_root)"
   tmpdir="$(mktemp -d /tmp/claude-review-test-XXXXXX)"
   mkdir -p "$fake_root/bin"
   printf 'review artifact\n' > "$tmpdir/claude-review-artifact.txt"
@@ -488,6 +745,35 @@ PY
   rm -rf "$fake_root" "$tmpdir"
   printf 'ok: safe mode args\n'
 }
+
+run_schema_challenge_modes_case
+run_mode_stamping_case \
+  "challenge_code accepted and stamped" \
+  "challenge_code" \
+  '{"status":"clean","mode":"challenge_code","summary":"ok","findings":[],"open_questions":[]}' \
+  "challenge_code"
+run_mode_stamping_case \
+  "challenge_plan accepted and stamped" \
+  "challenge_plan" \
+  '{"status":"clean","mode":"challenge_plan","summary":"ok","findings":[],"open_questions":[]}' \
+  "challenge_plan"
+run_mode_stamping_case \
+  "direct json mode stamping" \
+  "challenge_code" \
+  '{"status":"clean","mode":"code","summary":"ok","findings":[],"open_questions":[]}' \
+  "challenge_code"
+run_mode_stamping_case \
+  "wrapped json mode stamping" \
+  "challenge_plan" \
+  '{"type":"result","structured_output":{"status":"clean","mode":"plan","summary":"ok","findings":[],"open_questions":[]}}' \
+  "challenge_plan"
+run_mode_stamping_case \
+  "python mode stamping fallback" \
+  "challenge_code" \
+  '{"status":"clean","mode":"code","summary":"ok","findings":[],"open_questions":[]}' \
+  "challenge_code" \
+  "true"
+run_mode_stamping_blocked_case
 
 sandbox_summary="Claude could not write its first-party auth/config state"
 generic_runtime_summary="Claude Code invocation failed"

@@ -9,6 +9,9 @@ description: |
   Supports `/claude-review`, `/claude-review plan [path-to-markdown-plan]`,
   `/claude-review code [focus]`, `/claude-review iterate`, `/claude-review iterate plan`,
   `/claude-review iterate code`, `/claude-review pr <number>`,
+  `/claude-review challenge [inline review instructions]`,
+  `/claude-review challenge code [inline review instructions]`,
+  `/claude-review challenge plan [path-to-markdown-plan]`,
   `/claude-review instructions [plan|code]`,
   `/claude-review instructions set [plan|code] <markdown>`,
   `/claude-review instructions clear [plan|code]`,
@@ -53,8 +56,11 @@ Resolve these relative to the current repo and this skill's directory:
 - Bundled base prompts:
   - `prompts/code-review.base.md`
   - `prompts/plan-review.base.md`
+  - `prompts/challenge-code.base.md`
+  - `prompts/challenge-plan.base.md`
 - JSON schema: `schemas/review-output.json`
 - Config helper: `scripts/claude-config.sh`
+- Command router: `scripts/claude-command-router.sh`
 - Native Claude helper: `scripts/run-review.sh`
 - Artifact builder: `scripts/build-review-artifact.sh`
 - Update helper: `scripts/claude-update.sh`
@@ -73,6 +79,9 @@ Canonical review forms:
 - `/claude-review code [inline review instructions]`
 - `/claude-review plan [path]`
 - `/claude-review pr <number>`
+- `/claude-review challenge [inline review instructions]`
+- `/claude-review challenge code [inline review instructions]`
+- `/claude-review challenge plan [path]`
 - `/claude-review iterate`
 - `/claude-review iterate code`
 - `/claude-review iterate plan [path]`
@@ -106,6 +115,26 @@ Use these config forms:
 When these instructions refer to "inline review instructions," use the literal text
 after `/claude-review code` or `/claude-review review code`. Treat those as one-off
 appended instructions after bundled, user-level, and repo-level prompts.
+
+Before executing a `/claude-review ...` command, route it through:
+
+```bash
+bash <skill-dir>/scripts/claude-command-router.sh \
+  --repo-root <repo-root> \
+  --skill-root <skill-dir> \
+  --has-visible-plan <true|false> \
+  -- /claude-review <tokens...>
+```
+
+Pass user-controlled command text as argv data after `--`; do not interpolate the
+literal user command into a shell string. If a caller must use `--command`, pass it
+as a tool argument value, not by constructing a shell command with user text inside
+quotes.
+
+Validate the router output before invoking Claude or any admin helper. If the router
+output is invalid JSON, missing `status`, has an unknown `flow`, or returns
+`needs_context` without a non-empty `message`, respond with `STATUS: BLOCKED`,
+explain that command routing returned malformed output, and do not invoke Claude.
 
 ### Claude State Writes And Codex Sandbox Boundary
 
@@ -287,6 +316,62 @@ bash <skill-dir>/scripts/run-review.sh \
 ```
 
 6. Parse the returned JSON and render findings first, ordered by severity and grouped by category.
+
+### `/claude-review challenge [inline challenge focus]`
+
+Equivalent to `/claude-review challenge code [inline challenge focus]`.
+
+### `/claude-review challenge code [inline challenge focus]`
+
+1. Resolve the repo root and detect the base branch with the same steps as
+   `/claude-review code`.
+2. Build the current-diff artifact with `scripts/build-review-artifact.sh --mode code`.
+   Challenge mode changes the Claude prompt and returned `mode`; it does not use a
+   separate artifact-builder mode.
+3. Invoke:
+
+```bash
+bash <skill-dir>/scripts/run-review.sh \
+  --mode challenge_code \
+  --artifact-file <temp-artifact-file> \
+  --base-prompt <skill-dir>/prompts/challenge-code.base.md \
+  --append-prompt ~/.codex/claude/code-review.append.md \
+  --append-prompt <repo>/.codex/claude/code-review.append.md \
+  --config-file <repo>/.codex/claude/config.env \
+  --schema-file <skill-dir>/schemas/review-output.json \
+  --repo-root <repo-root> \
+  --branch <current-branch> \
+  --base-branch <base-branch> \
+  --instructions "<inline challenge focus>"
+```
+
+4. Parse the returned JSON and render findings first, ordered by severity and
+   grouped by category. Do not enter iterate/fix loops from a challenge result.
+
+### `/claude-review challenge plan [path]`
+
+1. Use the same plan source rules as `/claude-review plan [path]`: a readable,
+   non-empty path from the router when present, otherwise the most recent visible
+   `<proposed_plan>` block when available.
+2. Write the plan text to a temp file matching `/tmp/claude-review-*`.
+3. Invoke:
+
+```bash
+bash <skill-dir>/scripts/run-review.sh \
+  --mode challenge_plan \
+  --artifact-file <temp-plan-file> \
+  --base-prompt <skill-dir>/prompts/challenge-plan.base.md \
+  --append-prompt ~/.codex/claude/plan-review.append.md \
+  --append-prompt <repo>/.codex/claude/plan-review.append.md \
+  --config-file <repo>/.codex/claude/config.env \
+  --schema-file <skill-dir>/schemas/review-output.json \
+  --repo-root <repo-root> \
+  --branch <current-branch>
+```
+
+4. Parse the returned JSON and render findings first, ordered by severity and
+   grouped by category. Do not revise the plan automatically from a challenge
+   result; stop after surfacing the adversarial findings.
 
 ### `/claude-review pr <number>`
 
@@ -606,4 +691,7 @@ Codex review style.
 - Improve review quality by strengthening prompts and artifacts, not by letting Claude inspect the repo directly.
 - Keep plain `/claude-review` report-only.
 - In iterate mode, Claude remains report-only; Codex performs the plan or code changes between rounds.
+- Challenge modes (`challenge_code`, `challenge_plan`) are report-only. Render
+  findings and stop; do not route challenge results into `/claude-review iterate`
+  or any automatic fix-and-rereview loop.
 - Never exceed 10 Claude review rounds in a single iterate invocation.

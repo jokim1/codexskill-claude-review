@@ -63,7 +63,7 @@ CLAUDE_ERROR_EXCERPT_PATTERN="${CLAUDE_PERMISSION_DENIED_PATTERN}|oauth_refresh\
 usage() {
   cat <<'EOF'
 Usage:
-  run-review.sh --mode <plan|code|pr> --artifact-file <path> \
+  run-review.sh --mode <plan|code|pr|challenge_code|challenge_plan> --artifact-file <path> \
     --base-prompt <path> --schema-file <path> [options]
 
 Options:
@@ -152,6 +152,16 @@ if [ -z "$MODE" ] || [ -z "$ARTIFACT_FILE" ] || [ -z "$BASE_PROMPT" ] || [ -z "$
   usage >&2
   exit 2
 fi
+
+case "$MODE" in
+  plan|code|pr|challenge_code|challenge_plan)
+    ;;
+  *)
+    echo "Unsupported mode: $MODE" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
 
 ARTIFACT_FILE="$(normalize_cli_path "$ARTIFACT_FILE")"
 BASE_PROMPT="$(normalize_cli_path "$BASE_PROMPT")"
@@ -742,21 +752,61 @@ result_is_error() {
   printf '%s\n' "$output" | grep -q '"is_error":[[:space:]]*true'
 }
 
-extract_structured_output() {
+stamp_review_output_mode() {
   local output="$1"
+  local tmp_output=""
 
   if [ -z "$output" ]; then
     return 1
   fi
 
   if command -v jq >/dev/null 2>&1; then
-    if printf '%s\n' "$output" | jq -e '.structured_output != null' >/dev/null 2>&1; then
-      printf '%s\n' "$output" | jq '.structured_output'
+    if printf '%s\n' "$output" | jq --arg mode "$MODE" '
+      if type == "object" and (.structured_output | type == "object") then
+        (.structured_output.mode = $mode) | .structured_output
+      elif type == "object" then
+        .mode = $mode
+      else
+        error("review output is not a JSON object")
+      end
+    '; then
       return 0
     fi
   fi
 
-  printf '%s\n' "$output"
+  if command -v python3 >/dev/null 2>&1; then
+    tmp_output="$(mktemp /tmp/claude-review-output-XXXXXX)"
+    printf '%s\n' "$output" > "$tmp_output"
+    if python3 - "$MODE" "$tmp_output" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+mode = sys.argv[1]
+output_path = Path(sys.argv[2])
+
+with output_path.open() as handle:
+    data = json.load(handle)
+
+if not isinstance(data, dict):
+    raise ValueError("review output is not a JSON object")
+
+structured_output = data.get("structured_output")
+if isinstance(structured_output, dict):
+    data = structured_output
+
+data["mode"] = mode
+json.dump(data, sys.stdout, indent=2)
+sys.stdout.write("\n")
+PY
+    then
+      rm -f "$tmp_output"
+      return 0
+    fi
+    rm -f "$tmp_output"
+  fi
+
+  return 1
 }
 
 budget_exhausted_output() {
@@ -1182,4 +1232,12 @@ if result_is_error "$output"; then
   exit 0
 fi
 
-extract_structured_output "$output"
+if ! stamped_output="$(stamp_review_output_mode "$output")"; then
+  emit_json \
+    "blocked" \
+    "Claude review returned output, but the runner could not safely stamp the requested mode." \
+    "Install jq or python3, or retry after ensuring Claude returns valid structured JSON."
+  exit 0
+fi
+
+printf '%s\n' "$stamped_output"
