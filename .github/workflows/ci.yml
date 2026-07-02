@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  shell-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Shell syntax
+        run: bash -n scripts/*.sh tests/*.sh
+
+      - name: Whitespace check
+        run: git diff --check
+
+      - name: Command router tests
+        run: bash tests/claude-command-router.sh
+
+      - name: Doctor tests
+        run: bash tests/claude-doctor.sh
+
+      - name: Runner classification tests
+        run: bash tests/run-review-sandbox-classification.sh
+
+      - name: Challenge prompt fixture tests
+        run: bash tests/challenge-prompt-fixtures.sh
+
+      - name: Challenge consumer tests
+        run: bash tests/challenge-mode-consumers.sh
+
+      - name: Router guard docs test
+        run: bash tests/claude-router-guard-docs.sh

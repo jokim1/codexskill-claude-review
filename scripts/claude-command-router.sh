@@ -90,6 +90,7 @@ EXECUTABLE_FLOWS = {
     "admin_show",
     "admin_set",
     "admin_instructions",
+    "admin_doctor",
 }
 
 CODE_PROMPT = "prompts/code-review.base.md"
@@ -345,6 +346,11 @@ def route_admin(tokens, *, legacy_alias):
             return unsupported("/claude-review show does not accept arguments.")
         return admin_result("admin_show", "show", [], legacy_alias=legacy_alias)
 
+    if head == "doctor":
+        if tail:
+            return unsupported("/claude-review doctor does not accept arguments.")
+        return admin_result("admin_doctor", "doctor", [], legacy_alias=legacy_alias)
+
     if head == "set":
         if len(tail) != 2:
             return needs_context("Use /claude-review set <effort|model|budget|timeout> <value>.")
@@ -551,7 +557,7 @@ def route_review_command(tokens, *, visible_plan, legacy_alias):
 
     if legacy_alias:
         return unsupported("Unsupported /claude-review review alias. Use code, plan, pr, iterate, or instructions.")
-    return unsupported("Unsupported /claude-review command. Use code, plan, pr, iterate, challenge, instructions, show, set, or update.")
+    return unsupported("Unsupported /claude-review command. Use code, plan, pr, iterate, challenge, instructions, show, set, doctor, or update.")
 
 
 visible_plan, bool_error = parse_bool(has_visible_plan_raw)
@@ -585,7 +591,7 @@ if args[0] == "review":
         emit(route_review_command(legacy_args, visible_plan=visible_plan, legacy_alias=True))
     sys.exit(0)
 
-if args[0] in {"update", "show", "set", "instructions"}:
+if args[0] in {"update", "show", "set", "instructions", "doctor"}:
     emit(route_admin(args, legacy_alias=False))
     sys.exit(0)
 

@@ -294,6 +294,14 @@ assert_case "canonical show routes to admin show" false \
   "/claude-review show" \
   '{"status":"ok","flow":"admin_show","admin_action":"show","admin_args":[]}'
 
+assert_case "canonical doctor routes to admin doctor" false \
+  "/claude-review doctor" \
+  '{"status":"ok","flow":"admin_doctor","admin_action":"doctor","admin_args":[]}'
+
+assert_case "canonical doctor rejects arguments" false \
+  "/claude-review doctor now" \
+  '{"status":"unsupported"}'
+
 assert_case "canonical set routes key and value" false \
   "/claude-review set timeout 900" \
   '{"status":"ok","flow":"admin_set","admin_action":"set","admin_args":["timeout","900"]}'

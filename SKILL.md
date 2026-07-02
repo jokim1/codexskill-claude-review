@@ -17,7 +17,8 @@ description: |
   `/claude-review instructions clear [plan|code]`,
   `/claude-review instructions set global [plan|code] <markdown>`,
   `/claude-review instructions clear global [plan|code]`,
-  `/claude-review show`, `/claude-review set effort <low|medium|high|xhigh|max>`,
+  `/claude-review show`, `/claude-review doctor`,
+  `/claude-review set effort <low|medium|high|xhigh|max>`,
   `/claude-review set model <alias-or-full-model>`,
   `/claude-review set budget <usd>`,
   `/claude-review set timeout <seconds>`, `/claude-review update`,
@@ -61,6 +62,7 @@ Resolve these relative to the current repo and this skill's directory:
 - JSON schema: `schemas/review-output.json`
 - Config helper: `scripts/claude-config.sh`
 - Command router: `scripts/claude-command-router.sh`
+- Doctor helper: `scripts/claude-doctor.sh`
 - Native Claude helper: `scripts/run-review.sh`
 - Artifact builder: `scripts/build-review-artifact.sh`
 - Update helper: `scripts/claude-update.sh`
@@ -105,6 +107,7 @@ Legacy aliases remain supported:
 Use these config forms:
 
 - `/claude-review show`
+- `/claude-review doctor`
 - `/claude-review set effort <low|medium|high|xhigh|max>`
 - `/claude-review set model <alias-or-full-model>`
 - `/claude-review set budget <usd>`
@@ -135,6 +138,10 @@ Validate the router output before invoking Claude or any admin helper. If the ro
 output is invalid JSON, missing `status`, has an unknown `flow`, or returns
 `needs_context` without a non-empty `message`, respond with `STATUS: BLOCKED`,
 explain that command routing returned malformed output, and do not invoke Claude.
+
+Do not run raw `claude -p` health checks directly from the Codex rendering layer.
+Use `scripts/claude-doctor.sh` for diagnostics and `scripts/run-review.sh` for all
+review probes and review invocations. Both helpers own the hardened Claude flags.
 
 ### Claude State Writes And Codex Sandbox Boundary
 
@@ -168,8 +175,8 @@ outside the Codex sandbox, tell the user to check ownership and permissions for
 
 ### Update Preflight
 
-Before handling any `/claude-review ...` command except `/claude-review update` itself, check for a
-newer skill version:
+Before handling any `/claude-review ...` command except `/claude-review update` and
+`/claude-review doctor` themselves, check for a newer skill version:
 
 ```bash
 bash <skill-dir>/scripts/claude-update-check.sh
@@ -566,6 +573,22 @@ bash <skill-dir>/scripts/claude-config.sh show \
 ```
 
 Print the returned effective values.
+
+### `/claude-review doctor`
+
+Run:
+
+```bash
+bash <skill-dir>/scripts/claude-doctor.sh \
+  --repo-root <repo-root> \
+  --skill-root <skill-dir> \
+  --config-file <repo>/.codex/claude/config.env
+```
+
+Render the command output directly. Use this command to diagnose stale skill
+checkouts, stale Codex thread routing, missing safe-mode runner flags, Claude CLI
+auth/config problems, and update state. Do not replace it with a hand-written
+`claude -p` probe.
 
 ### `/claude-review update`
 

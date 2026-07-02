@@ -76,6 +76,7 @@ Supported now:
 - `/claude-review iterate code`
 - `/claude-review iterate plan`
 - `/claude-review show`
+- `/claude-review doctor`
 - `/claude-review set effort <low|medium|high|xhigh|max>`
 - `/claude-review set model <alias-or-full-model>`
 - `/claude-review set budget <usd>`
@@ -162,6 +163,11 @@ claude auth login --claudeai
 
 The bridge treats `claude auth status` as advisory. The real source of truth is
 whether a scrubbed `claude -p` call works from the same environment Codex uses.
+Use the bridge doctor for the exact diagnostics Codex will see:
+
+```text
+/claude-review doctor
+```
 
 ## End-To-End Journey: Claude Review
 
@@ -369,6 +375,7 @@ Claude edit files.
 
 ```text
 /claude-review show
+/claude-review doctor
 /claude-review set effort <low|medium|high|xhigh|max>
 /claude-review set model <alias-or-full-model>
 /claude-review set budget <usd>
@@ -468,6 +475,19 @@ Do not rely on `/claude ...` for this skill.
 The bridge treats `claude auth status` as advisory. If the real scrubbed `claude -p`
 probe works, review continues.
 
+### A review still uses raw `claude -p`
+
+Run:
+
+```text
+/claude-review doctor
+```
+
+The doctor reports the installed skill SHA, router and runner paths, whether the
+runner contains the hardened `--safe-mode` flags, and bounded plain vs safe-mode
+Claude probes. If the runner is current but another thread still runs raw
+`claude -p`, restart Codex or open a new thread so the skill instructions reload.
+
 ### Preflight says the budget is too low
 
 Raise the live probe budget:
@@ -503,6 +523,8 @@ Important files:
 - `SKILL.md`
 - `agents/openai.yaml`
 - `scripts/run-review.sh`
+- `scripts/claude-doctor.sh`
+- `scripts/claude-command-router.sh`
 - `scripts/claude-subscription-env.sh`
 - `scripts/build-review-artifact.sh`
 - `scripts/claude-config.sh`
@@ -529,5 +551,7 @@ Useful checks:
 
 ```bash
 bash -n scripts/*.sh tests/*.sh
+bash tests/claude-command-router.sh
+bash tests/claude-doctor.sh
 bash tests/run-review-sandbox-classification.sh
 ```

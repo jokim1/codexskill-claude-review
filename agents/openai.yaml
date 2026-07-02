@@ -7,6 +7,8 @@ interface:
     plan <path> for normal plan review, and /claude-review iterate for a bounded
     fix-and-rereview loop. Use /claude-review challenge commands only after
     confirming this installed skill routes challenge and has challenge prompts.
+    Use /claude-review doctor for diagnostics; do not hand-roll raw claude -p
+    health checks.
 
 policy:
   allow_implicit_invocation: true
