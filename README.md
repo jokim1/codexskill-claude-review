@@ -18,37 +18,44 @@ is still `/claude ...` for review, config, and update commands.
 
 ## Why This Exists
 
-This repo was built because the broader GStack Claude wrapper was doing too much
-for the workflow we wanted.
+Adversarial code review is one of the highest-leverage decorrelated reviews you can
+add to an AI coding workflow. If Codex writes or plans the change, a separate Claude
+pass is useful precisely because it is a different model, a different prompt, and a
+different failure surface.
 
-GStack's older `gstack-claude` skill declares:
+[GStack](https://github.com/garrytan/gstack) is Garry Tan's excellent open-source
+skill stack for Claude Code and other AI coding agents. It includes review,
+planning, QA, release, and challenge workflows, and it is usually the right answer
+when you want Claude Code to ask Codex for an adversarial second opinion.
 
-```yaml
-name: claude
-```
+This repo exists for the opposite direction: Codex asking Claude for an adversarial
+review.
 
-That wrapper supports multiple behaviors, including review, challenge, and consult
-style flows. That is useful when you intentionally want the GStack workflow, but it
-caused problems for this narrower Codex review bridge:
+The GStack Claude wrapper is powerful, but using it for Codex -> Claude review had
+practical limitations for this narrower workflow:
 
-- `/claude update` could route into GStack's Claude consult behavior instead of
-  updating this skill.
-- A nested read-only `claude -p` consult process could hang without returning a
-  review result.
-- The shared `name: claude` skill name created routing collisions when more than
-  one Claude-related skill was installed.
-- The broader wrapper made it harder to guarantee subscription-only auth, no API-key
-  fallback, no Claude-side repo tools, and report-only behavior.
+- it uses a broader `claude` command surface with review, challenge, and consult
+  behaviors
+- `/claude update` could route into a GStack Claude consult path instead of updating
+  this skill
+- nested read-only `claude -p` consult calls could hang without returning a review
+  result
+- the shared internal skill name `claude` created routing collisions when multiple
+  Claude-related skills were installed
+- the broader wrapper made it harder to guarantee this bridge's constraints:
+  subscription-only auth, no API-key fallback, no Claude-side repo tools, and
+  report-only output
 
-This skill solves that by keeping the internal skill name distinct:
+So the recommendation is simple:
 
-```yaml
-name: claude-review
-```
+- For Claude Code asking Codex to review something, use
+  [GStack](https://github.com/garrytan/gstack). That direction works well.
+- For Codex asking Claude to review something, use this skill. It is a small bridge
+  built specifically for that direction.
 
-Codex can still see normal user commands like `/claude review code`, but the skill
-metadata is collision-resistant. If another installed skill still wins `/claude`,
-force this skill explicitly:
+This skill keeps the internal name `claude-review` while preserving the user-facing
+`/claude ...` commands for review, config, and update. If another installed skill
+still wins `/claude`, force this bridge explicitly:
 
 ```text
 $claude-review /claude update --check
