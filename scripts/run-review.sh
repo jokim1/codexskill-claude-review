@@ -327,7 +327,7 @@ append_prompt_allowed() {
 }
 
 trusted_review_bridge_guidance() {
-  local installed_run_review="$HOME/.codex/skills/claude/scripts/run-review.sh"
+  local installed_run_review="$HOME/.codex/skills/claude-review/scripts/run-review.sh"
 
   if [ -e "$installed_run_review" ]; then
     printf 'If this review bridge is running inside the Codex filesystem sandbox, run it outside that sandbox or approve this exact trusted installed-skill command prefix: ["bash", "%s"]. Do not approve repo-local worktree copies or broad prefixes such as ["bash"]. If it still fails outside the sandbox, check ownership and permissions for ~/.claude or CLAUDE_CONFIG_DIR.' "$installed_run_review"
@@ -984,7 +984,7 @@ classify_runtime_failure() {
     record_failure \
       "review_timed_out" \
       "Claude review timed out after ${timeout_attempts} attempt(s) (${timeout_attempt_seconds}) before it could return a result." \
-      "The configured timeout is ${configured_timeout}s; the effective timeout was ${effective_timeout}s based on artifact size, model=${configured_model}, and effort=${EFFORT}. Retry with a narrower scope or increase the timeout with `/claude set timeout <seconds>`."
+      "The configured timeout is ${configured_timeout}s; the effective timeout was ${effective_timeout}s based on artifact size, model=${configured_model}, and effort=${EFFORT}. Retry with a narrower scope or increase the timeout with `/claude-review set timeout <seconds>`."
     return
   fi
 
@@ -992,7 +992,7 @@ classify_runtime_failure() {
     record_failure \
       "review_budget_too_low" \
       "Claude review hit the configured budget cap ($${MAX_BUDGET_USD}) before it could return a result." \
-      "Retry with a smaller artifact (current artifact=${artifact_bytes:-unknown} bytes), a cheaper model/effort pair, or increase the budget with `/claude set budget <usd>`."
+      "Retry with a smaller artifact (current artifact=${artifact_bytes:-unknown} bytes), a cheaper model/effort pair, or increase the budget with `/claude-review set budget <usd>`."
     return
   fi
 
@@ -1033,7 +1033,7 @@ fi
 
 artifact_bytes="$(wc -c < "$ARTIFACT_FILE" | tr -d '[:space:]')"
 if [ "${artifact_bytes:-0}" -gt "$MAX_ARTIFACT_BYTES" ]; then
-  emit_json "needs_context" "The review artifact is too large for a reliable single-shot review (${artifact_bytes} bytes > ${MAX_ARTIFACT_BYTES} bytes)." "Narrow the scope or use /claude review pr <number>."
+  emit_json "needs_context" "The review artifact is too large for a reliable single-shot review (${artifact_bytes} bytes > ${MAX_ARTIFACT_BYTES} bytes)." "Narrow the scope or use /claude-review review pr <number>."
   exit 0
 fi
 

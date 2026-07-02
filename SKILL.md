@@ -1,24 +1,24 @@
 ---
 name: claude-review
 description: |
-  Authoritative handler for the `/claude ...` command family from this installed
+  Authoritative handler for the `/claude-review ...` command family from this installed
   skill. Use this instead of any GStack-provided claude/gstack-claude skill when
-  the user asks for `/claude review`, `/claude review plan`, `/claude review code`,
-  `/claude update`, or any command listed here. Runs Claude Code from Codex for
+  the user asks for `/claude-review review`, `/claude-review review plan`, `/claude-review review code`,
+  `/claude-review update`, or any command listed here. Runs Claude Code from Codex for
   independent native-only plan review or code review without leaving Codex.
-  Supports `/claude review`, `/claude review plan [path-to-markdown-plan]`,
-  `/claude review code`, `/claude review iterate`, `/claude review iterate plan`,
-  `/claude review iterate code`, `/claude review pr <number>`,
-  `/claude review instructions [plan|code]`,
-  `/claude review instructions set [plan|code] <markdown>`,
-  `/claude review instructions clear [plan|code]`,
-  `/claude review instructions set global [plan|code] <markdown>`,
-  `/claude review instructions clear global [plan|code]`,
-  `/claude show`, `/claude set effort <low|medium|high|xhigh|max>`,
-  `/claude set model <alias-or-full-model>`,
-  `/claude set budget <usd>`,
-  `/claude set timeout <seconds>`,
-  `/claude update`, and `/claude update --check`.
+  Supports `/claude-review review`, `/claude-review review plan [path-to-markdown-plan]`,
+  `/claude-review review code`, `/claude-review review iterate`, `/claude-review review iterate plan`,
+  `/claude-review review iterate code`, `/claude-review review pr <number>`,
+  `/claude-review review instructions [plan|code]`,
+  `/claude-review review instructions set [plan|code] <markdown>`,
+  `/claude-review review instructions clear [plan|code]`,
+  `/claude-review review instructions set global [plan|code] <markdown>`,
+  `/claude-review review instructions clear global [plan|code]`,
+  `/claude-review show`, `/claude-review set effort <low|medium|high|xhigh|max>`,
+  `/claude-review set model <alias-or-full-model>`,
+  `/claude-review set budget <usd>`,
+  `/claude-review set timeout <seconds>`,
+  `/claude-review update`, and `/claude-review update --check`.
 ---
 
 # Claude Review Bridge
@@ -64,20 +64,20 @@ the skill directory.
 
 ## Command Routing
 
-Match only the explicit `/claude ...` command family.
+Match only the explicit `/claude-review ...` command family.
 
 Use these config forms:
 
-- `/claude show`
-- `/claude set effort <low|medium|high|xhigh|max>`
-- `/claude set model <alias-or-full-model>`
-- `/claude set budget <usd>`
-- `/claude set timeout <seconds>`
-- `/claude update`
-- `/claude update --check`
+- `/claude-review show`
+- `/claude-review set effort <low|medium|high|xhigh|max>`
+- `/claude-review set model <alias-or-full-model>`
+- `/claude-review set budget <usd>`
+- `/claude-review set timeout <seconds>`
+- `/claude-review update`
+- `/claude-review update --check`
 
 When these instructions refer to "inline review instructions," use the literal text
-after `/claude review` or `/claude review code`. Treat those as one-off appended
+after `/claude-review review` or `/claude-review review code`. Treat those as one-off appended
 instructions after bundled, user-level, and repo-level prompts.
 
 ### Claude State Writes And Codex Sandbox Boundary
@@ -112,7 +112,7 @@ outside the Codex sandbox, tell the user to check ownership and permissions for
 
 ### Update Preflight
 
-Before handling any `/claude ...` command except `/claude update` itself, check for a
+Before handling any `/claude-review ...` command except `/claude-review update` itself, check for a
 newer skill version:
 
 ```bash
@@ -122,7 +122,7 @@ bash <skill-dir>/scripts/claude-update-check.sh
 If the output includes `JUST_UPDATED <old> <new>`, tell the user:
 
 ```text
-Running /claude at <new> (just updated from <old>).
+Running /claude-review at <new> (just updated from <old>).
 ```
 
 Then continue the requested command.
@@ -131,7 +131,7 @@ If the output includes `UPDATE_AVAILABLE <old> <new> <new-full-sha>`, ask the us
 exactly:
 
 ```text
-There is a new /claude update available (<old> -> <new>). Reply Y to update now, or N to skip for now.
+There is a new /claude-review update available (<old> -> <new>). Reply Y to update now, or N to skip for now.
 ```
 
 Do not continue the requested command until the user answers. If the user answers
@@ -142,7 +142,7 @@ bash <skill-dir>/scripts/claude-update.sh
 ```
 
 Then tell the user the update result. If the update succeeded, stop and ask the user
-to rerun the originally requested `/claude ...` command so Codex reloads the updated
+to rerun the originally requested `/claude-review ...` command so Codex reloads the updated
 skill instructions. Do not continue the original command in the same invocation.
 If the user declines, run:
 
@@ -152,17 +152,17 @@ bash <skill-dir>/scripts/claude-update-check.sh --snooze <new-full-sha>
 
 Then continue the originally requested command. If the update check fails or returns
 no output, ignore it and continue. Never run the update preflight more than once per
-user `/claude ...` invocation.
+user `/claude-review ...` invocation.
 
-### `/claude review`
+### `/claude-review review`
 
 1. Inspect the last 6 visible conversation messages, newest first.
-2. If there is a recent assistant `<proposed_plan>` block, run `/claude review plan`.
-3. Otherwise run `/claude review code`.
+2. If there is a recent assistant `<proposed_plan>` block, run `/claude-review review plan`.
+3. Otherwise run `/claude-review review code`.
 
-### `/claude review plan [path]`
+### `/claude-review review plan [path]`
 
-1. Parse an optional plan path after `/claude review plan`.
+1. Parse an optional plan path after `/claude-review review plan`.
 2. If a path is supplied:
    - Resolve it relative to the repo root unless it is absolute.
    - Require it to be a readable regular file.
@@ -173,7 +173,7 @@ user `/claude ...` invocation.
 ```text
 STATUS: NEEDS_CONTEXT
 REASON: The requested plan file could not be read.
-RECOMMENDATION: Check the path, then run /claude review plan <path> again.
+RECOMMENDATION: Check the path, then run /claude-review review plan <path> again.
 ```
 
 3. If no path is supplied, extract the most recent visible assistant
@@ -183,7 +183,7 @@ RECOMMENDATION: Check the path, then run /claude review plan <path> again.
 ```text
 STATUS: NEEDS_CONTEXT
 REASON: No recent <proposed_plan> block is visible in this conversation.
-RECOMMENDATION: Create or paste a plan, or run /claude review plan <path-to-plan.md>.
+RECOMMENDATION: Create or paste a plan, or run /claude-review review plan <path-to-plan.md>.
 ```
 
 5. Write the plan text to a temp file matching `/tmp/claude-review-*`.
@@ -202,7 +202,7 @@ bash <skill-dir>/scripts/run-review.sh \
 
 7. Parse the returned JSON and render findings first, ordered by severity and grouped by category.
 
-### `/claude review code`
+### `/claude-review review code`
 
 1. Resolve the repo root.
 2. Detect the base branch in this order:
@@ -227,7 +227,7 @@ Use a temp artifact path matching `/tmp/claude-review-*`.
 ```text
 STATUS: BLOCKED
 REASON: Could not determine a merge base for code review.
-RECOMMENDATION: Ensure the repo has a reachable base branch or use /claude review pr <number>.
+RECOMMENDATION: Ensure the repo has a reachable base branch or use /claude-review review pr <number>.
 ```
 
 5. Invoke:
@@ -249,7 +249,7 @@ bash <skill-dir>/scripts/run-review.sh \
 
 6. Parse the returned JSON and render findings first, ordered by severity and grouped by category.
 
-### `/claude review pr <number>`
+### `/claude-review review pr <number>`
 
 1. Validate the PR with:
 
@@ -280,15 +280,15 @@ Use a temp artifact path matching `/tmp/claude-review-*`.
 4. Invoke `scripts/run-review.sh` with `--mode pr`, the code-review prompt, both append prompts, and `--pr-number <number>`.
 5. Parse the returned JSON and render findings first, ordered by severity and grouped by category.
 
-### `/claude review iterate`
+### `/claude-review review iterate`
 
 1. Inspect the last 6 visible conversation messages, newest first.
-2. If there is a recent assistant `<proposed_plan>` block, run `/claude review iterate plan`.
-3. Otherwise run `/claude review iterate code`.
+2. If there is a recent assistant `<proposed_plan>` block, run `/claude-review review iterate plan`.
+3. Otherwise run `/claude-review review iterate code`.
 
-### `/claude review iterate plan [path]`
+### `/claude-review review iterate plan [path]`
 
-1. Run the same artifact-building and `scripts/run-review.sh --mode plan` flow as `/claude review plan [path]`.
+1. Run the same artifact-building and `scripts/run-review.sh --mode plan` flow as `/claude-review review plan [path]`.
 2. If Claude returns `clean`, stop and report success.
 3. If Claude returns `needs_context` or `blocked`, stop and surface that result.
 4. If Claude returns `issues_found`, follow this sequence in every round:
@@ -315,9 +315,9 @@ Use a temp artifact path matching `/tmp/claude-review-*`.
    - unresolved decisions, if any
    - the final improved `<proposed_plan>` block when you changed the plan
 
-### `/claude review iterate code`
+### `/claude-review review iterate code`
 
-1. Run the same base-branch detection, artifact-building, and `scripts/run-review.sh --mode code` flow as `/claude review code`.
+1. Run the same base-branch detection, artifact-building, and `scripts/run-review.sh --mode code` flow as `/claude-review review code`.
 2. If Claude returns `clean`, stop and report success.
 3. If Claude returns `needs_context` or `blocked`, stop and surface that result.
 4. If Claude returns `issues_found`, follow this sequence in every round:
@@ -347,7 +347,7 @@ Use a temp artifact path matching `/tmp/claude-review-*`.
    - what you fixed
    - what remains, if anything
 
-### `/claude review iterate pr <number>`
+### `/claude-review review iterate pr <number>`
 
 Do not run an automatic fix loop from a PR number alone.
 
@@ -356,10 +356,10 @@ Respond:
 ```text
 STATUS: NEEDS_CONTEXT
 REASON: Iteration requires a checked-out branch or a visible plan, not just a remote PR diff.
-RECOMMENDATION: Check out the PR branch locally and run /claude review iterate code, or use /claude review pr <number> for report-only review.
+RECOMMENDATION: Check out the PR branch locally and run /claude-review review iterate code, or use /claude-review review pr <number> for report-only review.
 ```
 
-### `/claude review instructions [plan|code]`
+### `/claude-review review instructions [plan|code]`
 
 1. Default to `code` unless the user explicitly requested `plan`.
 2. Read the bundled base prompt for that mode.
@@ -379,7 +379,7 @@ bash <skill-dir>/scripts/claude-config.sh show \
    - effective merged prompt in base -> user -> repo order
    - current config values
 
-### `/claude review instructions set [plan|code] <markdown>`
+### `/claude-review review instructions set [plan|code] <markdown>`
 
 1. Determine the target mode from the command.
 2. Treat everything after the mode token as literal markdown.
@@ -387,13 +387,13 @@ bash <skill-dir>/scripts/claude-config.sh show \
 4. Replace the repo-level append file for that mode with exactly that markdown.
 5. Confirm the path written, then show the effective instructions for that mode.
 
-### `/claude review instructions clear [plan|code]`
+### `/claude-review review instructions clear [plan|code]`
 
 1. Determine the target mode from the command.
 2. Remove the repo-level append file for that mode if it exists.
 3. Confirm the clear action, then show the effective instructions for that mode.
 
-### `/claude review instructions set global [plan|code] <markdown>`
+### `/claude-review review instructions set global [plan|code] <markdown>`
 
 1. Determine the target mode from the command.
 2. Treat everything after the mode token as literal markdown.
@@ -401,13 +401,13 @@ bash <skill-dir>/scripts/claude-config.sh show \
 4. Replace the user-level append file for that mode with exactly that markdown.
 5. Confirm the path written, then show the effective instructions for that mode.
 
-### `/claude review instructions clear global [plan|code]`
+### `/claude-review review instructions clear global [plan|code]`
 
 1. Determine the target mode from the command.
 2. Remove the user-level append file for that mode if it exists.
 3. Confirm the clear action, then show the effective instructions for that mode.
 
-### `/claude show`
+### `/claude-review show`
 
 Run:
 
@@ -418,7 +418,7 @@ bash <skill-dir>/scripts/claude-config.sh show \
 
 Print the returned effective values.
 
-### `/claude update`
+### `/claude-review update`
 
 If the user passes `--check`, run:
 
@@ -436,7 +436,7 @@ Render the command output directly. If the update is blocked by a dirty checkout
 detached checkout, missing git install, or non-fast-forward history, surface the
 blocker and do not try to repair it automatically.
 
-### `/claude set effort <low|medium|high|xhigh|max>`
+### `/claude-review set effort <low|medium|high|xhigh|max>`
 
 Run:
 
@@ -448,7 +448,7 @@ bash <skill-dir>/scripts/claude-config.sh set effort <value> \
 Print the returned effective values and confirm the updated effort. Treat
 `extra-high` as a user-facing alias for `xhigh` when setting effort.
 
-### `/claude set model <alias-or-full-model>`
+### `/claude-review set model <alias-or-full-model>`
 
 Run:
 
@@ -459,7 +459,7 @@ bash <skill-dir>/scripts/claude-config.sh set model <value> \
 
 Print the returned effective values and confirm the updated model.
 
-### `/claude set budget <usd>`
+### `/claude-review set budget <usd>`
 
 Run:
 
@@ -470,7 +470,7 @@ bash <skill-dir>/scripts/claude-config.sh set budget <value> \
 
 Print the returned effective values and confirm the updated budget.
 
-### `/claude set timeout <seconds>`
+### `/claude-review set timeout <seconds>`
 
 Run:
 
@@ -496,8 +496,8 @@ For `blocked` results caused by budget or timeout:
 
 - explicitly call out the configured/effective limit that was hit
 - include the corresponding command hint:
-  - budget: `/claude set budget <usd>`
-  - timeout: `/claude set timeout <seconds>`
+  - budget: `/claude-review set budget <usd>`
+  - timeout: `/claude-review set timeout <seconds>`
 - keep the hint short and concrete
 
 `scripts/run-review.sh` treats `REVIEW_TIMEOUT_SECONDS` as the configured floor for
@@ -507,7 +507,7 @@ out. Do not retry additional times in the Codex rendering layer.
 
 Do not include budget or timeout on every successful review result. Show them only when:
 
-- the user asks for config with `/claude show`
+- the user asks for config with `/claude-review show`
 - the bridge blocks on budget or timeout
 - the user explicitly asks for diagnostics
 
@@ -540,6 +540,6 @@ Codex review style.
 - Do not give Claude tools. Keep `--tools ""`.
 - Update checks are allowed to use `git ls-remote`/`git fetch` against this skill's origin, but review flows remain native-only and report-only.
 - Improve review quality by strengthening prompts and artifacts, not by letting Claude inspect the repo directly.
-- Keep plain `/claude review` report-only.
+- Keep plain `/claude-review review` report-only.
 - In iterate mode, Claude remains report-only; Codex performs the plan or code changes between rounds.
 - Never exceed 10 Claude review rounds in a single iterate invocation.

@@ -13,8 +13,8 @@ It is intentionally narrow:
 - Review artifacts are bounded, schema-checked, and routed through local shell
   helpers so failures are diagnosable.
 
-The internal Codex skill name is `claude-review`. The user-facing command family
-is still `/claude ...` for review, config, and update commands.
+The Codex skill name and supported command family are both `claude-review`.
+Use `/claude-review ...` for review, config, and update commands.
 
 ## Why This Exists
 
@@ -56,35 +56,38 @@ So the recommendation is simple and directional:
 This is not a replacement for GStack. It is the small adapter for the other side of
 the cross-model review loop.
 
+`/claude ...` is intentionally not documented as a supported command for this
+skill. If another installed skill owns `/claude`, usually GStack, that is fine. Use
+`/claude-review ...` when you want this bridge.
+
 ## Current Status
 
 Supported now:
 
-- `/claude review`
-- `/claude review code`
-- `/claude review plan`
-- `/claude review plan <path-to-plan.md>`
-- `/claude review pr <number>`
-- `/claude review iterate`
-- `/claude review iterate code`
-- `/claude review iterate plan`
-- `/claude show`
-- `/claude set effort <low|medium|high|xhigh|max>`
-- `/claude set model <alias-or-full-model>`
-- `/claude set budget <usd>`
-- `/claude set timeout <seconds>`
-- `/claude update`
-- `/claude update --check`
+- `/claude-review review`
+- `/claude-review review code`
+- `/claude-review review plan`
+- `/claude-review review plan <path-to-plan.md>`
+- `/claude-review review pr <number>`
+- `/claude-review review iterate`
+- `/claude-review review iterate code`
+- `/claude-review review iterate plan`
+- `/claude-review show`
+- `/claude-review set effort <low|medium|high|xhigh|max>`
+- `/claude-review set model <alias-or-full-model>`
+- `/claude-review set budget <usd>`
+- `/claude-review set timeout <seconds>`
+- `/claude-review update`
+- `/claude-review update --check`
 
 Not supported in this bridge yet:
 
-- `/claude challenge`
 - `/claude-review challenge`
 
 Challenge mode is planned in [docs/claude-review-challenge-plan.md](docs/claude-review-challenge-plan.md).
-Until that work lands, do not document or rely on `/claude challenge` as a command
-handled by this skill. If you intentionally run GStack's challenge flow, that is a
-GStack command path, not this bridge.
+Until that work lands, do not rely on `/claude-review challenge` as a command
+handled by this skill. If you intentionally run GStack's `/claude challenge` flow,
+that is a GStack command path, not this bridge.
 
 ## How It Works
 
@@ -106,8 +109,8 @@ The important consequence: Claude is an independent reviewer, not the implemente
 Clone this repo into your Codex skills directory:
 
 ```bash
-git clone https://github.com/jokim1/codexskill-claude-review.git ~/.codex/skills/claude
-chmod +x ~/.codex/skills/claude/scripts/*.sh
+git clone https://github.com/jokim1/codexskill-claude-review.git ~/.codex/skills/claude-review
+chmod +x ~/.codex/skills/claude-review/scripts/*.sh
 ```
 
 Then restart Codex.
@@ -116,8 +119,8 @@ For local development, keep a source checkout and symlink the installed skill:
 
 ```bash
 git clone https://github.com/jokim1/codexskill-claude-review.git /Users/josephkim/dev/codexskill-claude-review
-rm -rf ~/.codex/skills/claude
-ln -s /Users/josephkim/dev/codexskill-claude-review ~/.codex/skills/claude
+rm -rf ~/.codex/skills/claude-review
+ln -s /Users/josephkim/dev/codexskill-claude-review ~/.codex/skills/claude-review
 chmod +x /Users/josephkim/dev/codexskill-claude-review/scripts/*.sh
 ```
 
@@ -132,7 +135,7 @@ You need:
 - `git`
 - `python3`
 - `jq`
-- `gh` for `/claude review pr <number>`
+- `gh` for `/claude-review review pr <number>`
 
 Use Claude subscription login:
 
@@ -176,7 +179,7 @@ docs/checkout-refactor-plan.md
 Run:
 
 ```text
-/claude review plan docs/checkout-refactor-plan.md
+/claude-review review plan docs/checkout-refactor-plan.md
 ```
 
 Codex will:
@@ -195,7 +198,7 @@ writes code.
 Make code changes in your repo, then run:
 
 ```text
-/claude review code
+/claude-review review code
 ```
 
 Codex will:
@@ -208,18 +211,18 @@ Codex will:
 You can add one-off focus text:
 
 ```text
-/claude review code focus on migration risk and dead abstractions
+/claude-review review code focus on migration risk and dead abstractions
 ```
 
 ### 3. Let Codex Fix Findings
 
-For a report-only pass, run `/claude review code` and then ask Codex to fix the
+For a report-only pass, run `/claude-review review code` and then ask Codex to fix the
 findings you accept.
 
 For a bounded fix-and-rereview loop, run:
 
 ```text
-/claude review iterate code
+/claude-review review iterate code
 ```
 
 Codex will:
@@ -237,7 +240,7 @@ Claude remains report-only during the loop. Codex performs all edits.
 If the repository is connected to GitHub and `gh` is authenticated:
 
 ```text
-/claude review pr 123
+/claude-review review pr 123
 ```
 
 Codex will use `gh pr view` and `gh pr diff` to build the review artifact.
@@ -247,25 +250,25 @@ Codex will use `gh pr view` and `gh pr diff` to build the review artifact.
 Show current config:
 
 ```text
-/claude show
+/claude-review show
 ```
 
 Increase timeout for large diffs:
 
 ```text
-/claude set timeout 600
+/claude-review set timeout 600
 ```
 
 Raise the review budget guardrail:
 
 ```text
-/claude set budget 8
+/claude-review set budget 8
 ```
 
 Set effort:
 
 ```text
-/claude set effort xhigh
+/claude-review set effort xhigh
 ```
 
 The config is stored per repo at:
@@ -294,27 +297,27 @@ This repo does not currently implement first-class challenge commands. These are
 not supported by the current `SKILL.md`, runner, or JSON schema:
 
 ```text
-/claude challenge
-/claude challenge code
-/claude challenge plan
 /claude-review challenge
+/claude-review challenge code
+/claude-review challenge plan
 ```
 
-If those commands work on your machine today, they are coming from another installed
-skill, usually GStack's `gstack-claude` wrapper.
+If `/claude challenge` works on your machine today, that is coming from another
+installed skill, usually GStack's `gstack-claude` wrapper. This bridge's planned
+challenge command family is `/claude-review challenge ...`.
 
 ### Current Workaround In This Bridge
 
 Use normal review with explicit adversarial focus text:
 
 ```text
-/claude review code focus on race conditions, retries, idempotency, stale state, partial failure, and data loss
+/claude-review review code focus on race conditions, retries, idempotency, stale state, partial failure, and data loss
 ```
 
 For plans:
 
 ```text
-/claude review plan docs/checkout-refactor-plan.md
+/claude-review review plan docs/checkout-refactor-plan.md
 ```
 
 Then add the adversarial criteria to the plan itself or to your repo-level plan
@@ -357,23 +360,23 @@ README surface.
 ### Review
 
 ```text
-/claude review
-/claude review code
-/claude review code focus on auth edge cases
-/claude review plan
-/claude review plan docs/plan.md
-/claude review pr 123
+/claude-review review
+/claude-review review code
+/claude-review review code focus on auth edge cases
+/claude-review review plan
+/claude-review review plan docs/plan.md
+/claude-review review pr 123
 ```
 
-`/claude review` auto-selects plan review when a recent visible
+`/claude-review review` auto-selects plan review when a recent visible
 `<proposed_plan>` block exists; otherwise it reviews the current diff.
 
 ### Iterate
 
 ```text
-/claude review iterate
-/claude review iterate code
-/claude review iterate plan
+/claude-review review iterate
+/claude-review review iterate code
+/claude-review review iterate plan
 ```
 
 Iterate mode lets Codex fix and verify between Claude review rounds. It never lets
@@ -382,11 +385,11 @@ Claude edit files.
 ### Config
 
 ```text
-/claude show
-/claude set effort <low|medium|high|xhigh|max>
-/claude set model <alias-or-full-model>
-/claude set budget <usd>
-/claude set timeout <seconds>
+/claude-review show
+/claude-review set effort <low|medium|high|xhigh|max>
+/claude-review set model <alias-or-full-model>
+/claude-review set budget <usd>
+/claude-review set timeout <seconds>
 ```
 
 `extra-high` is accepted as a user-facing alias for `xhigh`.
@@ -394,16 +397,17 @@ Claude edit files.
 ### Update
 
 ```text
-/claude update --check
-/claude update
+/claude-review update --check
+/claude-review update
 ```
 
 The updater fetches `origin/main` for the installed skill checkout and performs a
 fast-forward-only merge. It blocks on tracked local changes, detached checkouts,
 non-fast-forward history, and untracked files that would be overwritten.
 
-Every `/claude ...` command except `/claude update` runs a low-noise update check
-first. If a new version is available, Codex asks whether to update before continuing.
+Every `/claude-review ...` command except `/claude-review update` runs a low-noise
+update check first. If a new version is available, Codex asks whether to update
+before continuing.
 
 ## Config File
 
@@ -450,7 +454,7 @@ with paths like:
 If that happens, approve only the exact installed helper path:
 
 ```text
-["bash", "/Users/<you>/.codex/skills/claude/scripts/run-review.sh"]
+["bash", "/Users/<you>/.codex/skills/claude-review/scripts/run-review.sh"]
 ```
 
 Do not approve broad prefixes such as `["bash"]`, and do not approve repo-local or
@@ -460,21 +464,21 @@ Artifact builders, config helpers, and update checks do not need that approval.
 
 ## Troubleshooting
 
-### `/claude review` is not visible
+### `/claude-review review` is not visible
 
 Restart Codex after first install, replacing the installed skill, or changing a
 symlinked install path.
 
-### `/claude update` routes to GStack
+### `/claude ...` routes to GStack
 
-This means another installed skill is still winning the `/claude` prompt. Use:
+That is expected if GStack owns `/claude`. Use this bridge's canonical command
+family instead:
 
 ```text
-$claude-review /claude update --check
+/claude-review update --check
 ```
 
-Then disable the duplicate GStack Claude skill or restart Codex after updating this
-skill.
+Do not rely on `/claude ...` for this skill.
 
 ### `claude auth status` looks wrong
 
@@ -495,7 +499,7 @@ Large artifacts can take several minutes, especially with Opus and `xhigh` effor
 Raise the timeout or narrow the diff:
 
 ```text
-/claude set timeout 600
+/claude-review set timeout 600
 ```
 
 ### Subscription auth is unavailable
@@ -534,9 +538,9 @@ changes should live.
 For the symlinked development layout:
 
 1. Patch this source repo.
-2. Keep `~/.codex/skills/claude` pointed at this checkout.
+2. Keep `~/.codex/skills/claude-review` pointed at this checkout.
 3. Restart Codex when skill metadata or routing changes.
-4. Re-run a real `/claude review` path.
+4. Re-run a real `/claude-review review` path.
 
 Useful checks:
 

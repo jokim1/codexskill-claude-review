@@ -45,7 +45,7 @@ atomic_write() {
 
 git_network() {
   command -v python3 >/dev/null 2>&1 || {
-    echo "/claude update requires python3 for bounded git operations." >&2
+    echo "/claude-review update requires python3 for bounded git operations." >&2
     return 1
   }
 
@@ -184,34 +184,34 @@ check_untracked_collisions() {
     return 0
   fi
 
-  echo "/claude update is blocked because these untracked or ignored local files would be overwritten:" >&2
+  echo "/claude-review update is blocked because these untracked or ignored local files would be overwritten:" >&2
   printf '  %s\n' "${collisions[@]}" >&2
-  echo "Move, remove, or commit those files, then rerun /claude update." >&2
+  echo "Move, remove, or commit those files, then rerun /claude-review update." >&2
   return 1
 }
 
 validate_update_ready() {
   if [ "$CURRENT_BRANCH_REF" != "refs/heads/$REMOTE_BRANCH" ]; then
-    echo "/claude update is blocked because the skill checkout is not on ${REMOTE_BRANCH}." >&2
+    echo "/claude-review update is blocked because the skill checkout is not on ${REMOTE_BRANCH}." >&2
     if [ -n "$CURRENT_BRANCH_REF" ]; then
       echo "Current branch: ${CURRENT_BRANCH_REF#refs/heads/}" >&2
     else
       echo "Current checkout is detached." >&2
     fi
-    echo "Check out ${REMOTE_BRANCH} in $SKILL_DIR, then rerun /claude update." >&2
+    echo "Check out ${REMOTE_BRANCH} in $SKILL_DIR, then rerun /claude-review update." >&2
     return 1
   fi
 
   DIRTY_TRACKED="$(git -C "$SKILL_DIR" status --porcelain --untracked-files=no)"
   if [ -n "$DIRTY_TRACKED" ]; then
-    echo "/claude update is blocked because the skill checkout has tracked local changes:" >&2
+    echo "/claude-review update is blocked because the skill checkout has tracked local changes:" >&2
     printf '%s\n' "$DIRTY_TRACKED" >&2
-    echo "Commit, stash, or revert those changes, then rerun /claude update." >&2
+    echo "Commit, stash, or revert those changes, then rerun /claude-review update." >&2
     return 1
   fi
 
   if ! git -C "$SKILL_DIR" merge-base --is-ancestor "$LOCAL_SHA" "$REMOTE_SHA"; then
-    echo "/claude update is blocked because ${REMOTE_NAME}/${REMOTE_BRANCH} is not a fast-forward from the installed checkout." >&2
+    echo "/claude-review update is blocked because ${REMOTE_NAME}/${REMOTE_BRANCH} is not a fast-forward from the installed checkout." >&2
     echo "Resolve the git history manually in $SKILL_DIR." >&2
     return 1
   fi
@@ -221,8 +221,8 @@ validate_update_ready() {
   fi
 
   if ! prepare_state_dir; then
-    echo "/claude update is blocked because update state cannot be written to $STATE_DIR." >&2
-    echo "Fix permissions or disk space, then rerun /claude update." >&2
+    echo "/claude-review update is blocked because update state cannot be written to $STATE_DIR." >&2
+    echo "Fix permissions or disk space, then rerun /claude-review update." >&2
     return 1
   fi
 }
@@ -242,7 +242,7 @@ while [ "$#" -gt 0 ]; do
       shift 2
       ;;
     --yes|-y)
-      # Backward-compatible no-op. Invoking /claude update is already consent.
+      # Backward-compatible no-op. Invoking /claude-review update is already consent.
       shift
       ;;
     -h|--help)
@@ -258,8 +258,8 @@ while [ "$#" -gt 0 ]; do
 done
 
 if ! git -C "$SKILL_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  echo "/claude update is only available for git-based installs." >&2
-  echo "Reinstall with: git clone https://github.com/jokim1/codexskill-claude-review.git ~/.codex/skills/claude" >&2
+  echo "/claude-review update is only available for git-based installs." >&2
+  echo "Reinstall with: git clone https://github.com/jokim1/codexskill-claude-review.git ~/.codex/skills/claude-review" >&2
   exit 1
 fi
 
@@ -268,18 +268,18 @@ CURRENT_BRANCH_REF="$(git -C "$SKILL_DIR" symbolic-ref -q HEAD 2>/dev/null || tr
 
 REMOTE_REF="refs/remotes/${REMOTE_NAME}/${REMOTE_BRANCH}"
 if ! git_network git -c core.hooksPath=/dev/null -C "$SKILL_DIR" fetch --quiet --no-tags "$REMOTE_NAME" "+refs/heads/${REMOTE_BRANCH}:${REMOTE_REF}"; then
-  echo "/claude update could not fetch ${REMOTE_NAME}/${REMOTE_BRANCH}." >&2
+  echo "/claude-review update could not fetch ${REMOTE_NAME}/${REMOTE_BRANCH}." >&2
   exit 1
 fi
 REMOTE_SHA="$(git -C "$SKILL_DIR" rev-parse "$REMOTE_REF")"
 
 print_status() {
   if [ "$LOCAL_SHA" = "$REMOTE_SHA" ]; then
-    printf '/claude is up to date (%s).\n' "$(short_sha "$LOCAL_SHA")"
+    printf '/claude-review is up to date (%s).\n' "$(short_sha "$LOCAL_SHA")"
     return 0
   fi
 
-  printf '/claude update available.\n'
+  printf '/claude-review update available.\n'
   printf '  Installed: %s\n' "$(short_sha "$LOCAL_SHA")"
   printf '  Latest %s/%s: %s\n' "$REMOTE_NAME" "$REMOTE_BRANCH" "$(short_sha "$REMOTE_SHA")"
 
@@ -308,16 +308,16 @@ if ! validate_update_ready; then
 fi
 
 if ! git_network git -c core.hooksPath=/dev/null -C "$SKILL_DIR" merge --ff-only "$REMOTE_REF"; then
-  echo "/claude update could not fast-forward merge ${REMOTE_NAME}/${REMOTE_BRANCH}." >&2
+  echo "/claude-review update could not fast-forward merge ${REMOTE_NAME}/${REMOTE_BRANCH}." >&2
   exit 1
 fi
 
 if ! atomic_write "$STATE_DIR/just-updated-from" "$LOCAL_SHA"; then
-  echo "Warning: /claude updated, but could not write the just-updated marker at $STATE_DIR." >&2
+  echo "Warning: /claude-review updated, but could not write the just-updated marker at $STATE_DIR." >&2
 fi
 if ! rm -f "$STATE_DIR/last-update-check" "$STATE_DIR/update-snoozed"; then
-  echo "Warning: /claude updated, but could not clear cached update state at $STATE_DIR." >&2
+  echo "Warning: /claude-review updated, but could not clear cached update state at $STATE_DIR." >&2
 fi
 
-printf '/claude updated from %s to %s.\n' "$(short_sha "$LOCAL_SHA")" "$(short_sha "$REMOTE_SHA")"
+printf '/claude-review updated from %s to %s.\n' "$(short_sha "$LOCAL_SHA")" "$(short_sha "$REMOTE_SHA")"
 printf 'Restart Codex if skill discovery is already loaded.\n'
