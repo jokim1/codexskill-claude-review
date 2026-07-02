@@ -3,22 +3,23 @@ name: claude-review
 description: |
   Authoritative handler for the `/claude-review ...` command family from this installed
   skill. Use this instead of any GStack-provided claude/gstack-claude skill when
-  the user asks for `/claude-review review`, `/claude-review review plan`, `/claude-review review code`,
+  the user asks for `/claude-review`, `/claude-review plan`, `/claude-review code`,
   `/claude-review update`, or any command listed here. Runs Claude Code from Codex for
   independent native-only plan review or code review without leaving Codex.
-  Supports `/claude-review review`, `/claude-review review plan [path-to-markdown-plan]`,
-  `/claude-review review code`, `/claude-review review iterate`, `/claude-review review iterate plan`,
-  `/claude-review review iterate code`, `/claude-review review pr <number>`,
-  `/claude-review review instructions [plan|code]`,
-  `/claude-review review instructions set [plan|code] <markdown>`,
-  `/claude-review review instructions clear [plan|code]`,
-  `/claude-review review instructions set global [plan|code] <markdown>`,
-  `/claude-review review instructions clear global [plan|code]`,
+  Supports `/claude-review`, `/claude-review plan [path-to-markdown-plan]`,
+  `/claude-review code [focus]`, `/claude-review iterate`, `/claude-review iterate plan`,
+  `/claude-review iterate code`, `/claude-review pr <number>`,
+  `/claude-review instructions [plan|code]`,
+  `/claude-review instructions set [plan|code] <markdown>`,
+  `/claude-review instructions clear [plan|code]`,
+  `/claude-review instructions set global [plan|code] <markdown>`,
+  `/claude-review instructions clear global [plan|code]`,
   `/claude-review show`, `/claude-review set effort <low|medium|high|xhigh|max>`,
   `/claude-review set model <alias-or-full-model>`,
   `/claude-review set budget <usd>`,
-  `/claude-review set timeout <seconds>`,
-  `/claude-review update`, and `/claude-review update --check`.
+  `/claude-review set timeout <seconds>`, `/claude-review update`,
+  `/claude-review update --check`, plus legacy aliases under
+  `/claude-review review ...`.
 ---
 
 # Claude Review Bridge
@@ -64,7 +65,33 @@ the skill directory.
 
 ## Command Routing
 
-Match only the explicit `/claude-review ...` command family.
+Match only the explicit `/claude-review` command and `/claude-review ...` command family.
+
+Canonical review forms:
+
+- `/claude-review`
+- `/claude-review code [inline review instructions]`
+- `/claude-review plan [path]`
+- `/claude-review pr <number>`
+- `/claude-review iterate`
+- `/claude-review iterate code`
+- `/claude-review iterate plan [path]`
+- `/claude-review instructions [plan|code]`
+- `/claude-review instructions set [plan|code] <markdown>`
+- `/claude-review instructions clear [plan|code]`
+- `/claude-review instructions set global [plan|code] <markdown>`
+- `/claude-review instructions clear global [plan|code]`
+
+Legacy aliases remain supported:
+
+- `/claude-review review`
+- `/claude-review review code [inline review instructions]`
+- `/claude-review review plan [path]`
+- `/claude-review review pr <number>`
+- `/claude-review review iterate`
+- `/claude-review review iterate code`
+- `/claude-review review iterate plan [path]`
+- `/claude-review review instructions ...`
 
 Use these config forms:
 
@@ -77,8 +104,8 @@ Use these config forms:
 - `/claude-review update --check`
 
 When these instructions refer to "inline review instructions," use the literal text
-after `/claude-review review` or `/claude-review review code`. Treat those as one-off appended
-instructions after bundled, user-level, and repo-level prompts.
+after `/claude-review code` or `/claude-review review code`. Treat those as one-off
+appended instructions after bundled, user-level, and repo-level prompts.
 
 ### Claude State Writes And Codex Sandbox Boundary
 
@@ -154,15 +181,25 @@ Then continue the originally requested command. If the update check fails or ret
 no output, ignore it and continue. Never run the update preflight more than once per
 user `/claude-review ...` invocation.
 
+### `/claude-review`
+
+Run `/claude-review code`. Bare `/claude-review` always reviews the current code
+diff; it does not auto-select plan review from recent context. Use
+`/claude-review plan` for plan review.
+
 ### `/claude-review review`
 
+Legacy alias. Preserve the historical auto-select behavior:
+
 1. Inspect the last 6 visible conversation messages, newest first.
-2. If there is a recent assistant `<proposed_plan>` block, run `/claude-review review plan`.
-3. Otherwise run `/claude-review review code`.
+2. If there is a recent assistant `<proposed_plan>` block, run `/claude-review plan`.
+3. Otherwise run `/claude-review code`.
 
-### `/claude-review review plan [path]`
+### `/claude-review plan [path]`
 
-1. Parse an optional plan path after `/claude-review review plan`.
+Legacy alias: `/claude-review review plan [path]`.
+
+1. Parse an optional plan path after `/claude-review plan` or `/claude-review review plan`.
 2. If a path is supplied:
    - Resolve it relative to the repo root unless it is absolute.
    - Require it to be a readable regular file.
@@ -173,7 +210,7 @@ user `/claude-review ...` invocation.
 ```text
 STATUS: NEEDS_CONTEXT
 REASON: The requested plan file could not be read.
-RECOMMENDATION: Check the path, then run /claude-review review plan <path> again.
+RECOMMENDATION: Check the path, then run /claude-review plan <path> again.
 ```
 
 3. If no path is supplied, extract the most recent visible assistant
@@ -183,7 +220,7 @@ RECOMMENDATION: Check the path, then run /claude-review review plan <path> again
 ```text
 STATUS: NEEDS_CONTEXT
 REASON: No recent <proposed_plan> block is visible in this conversation.
-RECOMMENDATION: Create or paste a plan, or run /claude-review review plan <path-to-plan.md>.
+RECOMMENDATION: Create or paste a plan, or run /claude-review plan <path-to-plan.md>.
 ```
 
 5. Write the plan text to a temp file matching `/tmp/claude-review-*`.
@@ -202,7 +239,9 @@ bash <skill-dir>/scripts/run-review.sh \
 
 7. Parse the returned JSON and render findings first, ordered by severity and grouped by category.
 
-### `/claude-review review code`
+### `/claude-review code [inline review instructions]`
+
+Legacy alias: `/claude-review review code [inline review instructions]`.
 
 1. Resolve the repo root.
 2. Detect the base branch in this order:
@@ -227,7 +266,7 @@ Use a temp artifact path matching `/tmp/claude-review-*`.
 ```text
 STATUS: BLOCKED
 REASON: Could not determine a merge base for code review.
-RECOMMENDATION: Ensure the repo has a reachable base branch or use /claude-review review pr <number>.
+RECOMMENDATION: Ensure the repo has a reachable base branch or use /claude-review pr <number>.
 ```
 
 5. Invoke:
@@ -249,7 +288,9 @@ bash <skill-dir>/scripts/run-review.sh \
 
 6. Parse the returned JSON and render findings first, ordered by severity and grouped by category.
 
-### `/claude-review review pr <number>`
+### `/claude-review pr <number>`
+
+Legacy alias: `/claude-review review pr <number>`.
 
 1. Validate the PR with:
 
@@ -280,15 +321,24 @@ Use a temp artifact path matching `/tmp/claude-review-*`.
 4. Invoke `scripts/run-review.sh` with `--mode pr`, the code-review prompt, both append prompts, and `--pr-number <number>`.
 5. Parse the returned JSON and render findings first, ordered by severity and grouped by category.
 
+### `/claude-review iterate`
+
+Run `/claude-review iterate code`. Canonical iterate defaults to the current code
+diff. Use `/claude-review iterate plan` for plan iteration.
+
 ### `/claude-review review iterate`
 
+Legacy alias. Preserve the historical auto-select behavior:
+
 1. Inspect the last 6 visible conversation messages, newest first.
-2. If there is a recent assistant `<proposed_plan>` block, run `/claude-review review iterate plan`.
-3. Otherwise run `/claude-review review iterate code`.
+2. If there is a recent assistant `<proposed_plan>` block, run `/claude-review iterate plan`.
+3. Otherwise run `/claude-review iterate code`.
 
-### `/claude-review review iterate plan [path]`
+### `/claude-review iterate plan [path]`
 
-1. Run the same artifact-building and `scripts/run-review.sh --mode plan` flow as `/claude-review review plan [path]`.
+Legacy alias: `/claude-review review iterate plan [path]`.
+
+1. Run the same artifact-building and `scripts/run-review.sh --mode plan` flow as `/claude-review plan [path]`.
 2. If Claude returns `clean`, stop and report success.
 3. If Claude returns `needs_context` or `blocked`, stop and surface that result.
 4. If Claude returns `issues_found`, follow this sequence in every round:
@@ -315,9 +365,11 @@ Use a temp artifact path matching `/tmp/claude-review-*`.
    - unresolved decisions, if any
    - the final improved `<proposed_plan>` block when you changed the plan
 
-### `/claude-review review iterate code`
+### `/claude-review iterate code`
 
-1. Run the same base-branch detection, artifact-building, and `scripts/run-review.sh --mode code` flow as `/claude-review review code`.
+Legacy alias: `/claude-review review iterate code`.
+
+1. Run the same base-branch detection, artifact-building, and `scripts/run-review.sh --mode code` flow as `/claude-review code`.
 2. If Claude returns `clean`, stop and report success.
 3. If Claude returns `needs_context` or `blocked`, stop and surface that result.
 4. If Claude returns `issues_found`, follow this sequence in every round:
@@ -347,7 +399,9 @@ Use a temp artifact path matching `/tmp/claude-review-*`.
    - what you fixed
    - what remains, if anything
 
-### `/claude-review review iterate pr <number>`
+### `/claude-review iterate pr <number>`
+
+Legacy alias: `/claude-review review iterate pr <number>`.
 
 Do not run an automatic fix loop from a PR number alone.
 
@@ -356,10 +410,12 @@ Respond:
 ```text
 STATUS: NEEDS_CONTEXT
 REASON: Iteration requires a checked-out branch or a visible plan, not just a remote PR diff.
-RECOMMENDATION: Check out the PR branch locally and run /claude-review review iterate code, or use /claude-review review pr <number> for report-only review.
+RECOMMENDATION: Check out the PR branch locally and run /claude-review iterate code, or use /claude-review pr <number> for report-only review.
 ```
 
-### `/claude-review review instructions [plan|code]`
+### `/claude-review instructions [plan|code]`
+
+Legacy alias: `/claude-review review instructions [plan|code]`.
 
 1. Default to `code` unless the user explicitly requested `plan`.
 2. Read the bundled base prompt for that mode.
@@ -379,7 +435,9 @@ bash <skill-dir>/scripts/claude-config.sh show \
    - effective merged prompt in base -> user -> repo order
    - current config values
 
-### `/claude-review review instructions set [plan|code] <markdown>`
+### `/claude-review instructions set [plan|code] <markdown>`
+
+Legacy alias: `/claude-review review instructions set [plan|code] <markdown>`.
 
 1. Determine the target mode from the command.
 2. Treat everything after the mode token as literal markdown.
@@ -387,13 +445,17 @@ bash <skill-dir>/scripts/claude-config.sh show \
 4. Replace the repo-level append file for that mode with exactly that markdown.
 5. Confirm the path written, then show the effective instructions for that mode.
 
-### `/claude-review review instructions clear [plan|code]`
+### `/claude-review instructions clear [plan|code]`
+
+Legacy alias: `/claude-review review instructions clear [plan|code]`.
 
 1. Determine the target mode from the command.
 2. Remove the repo-level append file for that mode if it exists.
 3. Confirm the clear action, then show the effective instructions for that mode.
 
-### `/claude-review review instructions set global [plan|code] <markdown>`
+### `/claude-review instructions set global [plan|code] <markdown>`
+
+Legacy alias: `/claude-review review instructions set global [plan|code] <markdown>`.
 
 1. Determine the target mode from the command.
 2. Treat everything after the mode token as literal markdown.
@@ -401,7 +463,9 @@ bash <skill-dir>/scripts/claude-config.sh show \
 4. Replace the user-level append file for that mode with exactly that markdown.
 5. Confirm the path written, then show the effective instructions for that mode.
 
-### `/claude-review review instructions clear global [plan|code]`
+### `/claude-review instructions clear global [plan|code]`
+
+Legacy alias: `/claude-review review instructions clear global [plan|code]`.
 
 1. Determine the target mode from the command.
 2. Remove the user-level append file for that mode if it exists.
@@ -540,6 +604,6 @@ Codex review style.
 - Do not give Claude tools. Keep `--tools ""`.
 - Update checks are allowed to use `git ls-remote`/`git fetch` against this skill's origin, but review flows remain native-only and report-only.
 - Improve review quality by strengthening prompts and artifacts, not by letting Claude inspect the repo directly.
-- Keep plain `/claude-review review` report-only.
+- Keep plain `/claude-review` report-only.
 - In iterate mode, Claude remains report-only; Codex performs the plan or code changes between rounds.
 - Never exceed 10 Claude review rounds in a single iterate invocation.

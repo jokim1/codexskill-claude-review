@@ -33,10 +33,15 @@ test `/claude ...` aliases in this feature.
 Canonical commands:
 
 ```text
-/claude-review review code
-/claude-review review plan
-/claude-review review plan <path-to-plan.md>
-/claude-review review pr <number>
+/claude-review
+/claude-review code
+/claude-review code <focus>
+/claude-review plan
+/claude-review plan <path-to-plan.md>
+/claude-review pr <number>
+/claude-review iterate
+/claude-review iterate code
+/claude-review iterate plan
 /claude-review challenge code
 /claude-review challenge plan
 /claude-review challenge plan <path-to-plan.md>
@@ -49,30 +54,30 @@ Canonical commands:
 /claude-review set timeout <seconds>
 ```
 
-Convenience shorthand:
+Legacy aliases:
 
 ```text
-/claude-review code
-/claude-review plan
-/claude-review plan <path-to-plan.md>
-/claude-review challenge
+/claude-review review code
+/claude-review review plan
+/claude-review review plan <path-to-plan.md>
+/claude-review review pr <number>
 ```
 
-Shorthand rules:
+Compatibility rules:
 
-- `/claude-review code` maps to `/claude-review review code`.
-- `/claude-review plan [path]` maps to `/claude-review review plan [path]`.
+- `/claude-review` maps to normal code review.
+- `/claude-review review ...` remains accepted as a legacy alias.
 - `/claude-review challenge` maps to `/claude-review challenge code`.
 
 Canonical routing table:
 
 | User command | Resolved flow | Runner mode | Artifact source | Base prompt | Instructions |
 | --- | --- | --- | --- | --- | --- |
-| `/claude-review review code [focus]` | normal code review | `code` | current diff artifact | `prompts/code-review.base.md` | optional focus text |
+| `/claude-review` | normal code review | `code` | current diff artifact | `prompts/code-review.base.md` | none |
 | `/claude-review code [focus]` | normal code review | `code` | current diff artifact | `prompts/code-review.base.md` | optional focus text |
-| `/claude-review review plan [path]` | normal plan review | `plan` | path or visible `<proposed_plan>` | `prompts/plan-review.base.md` | none |
 | `/claude-review plan [path]` | normal plan review | `plan` | path or visible `<proposed_plan>` | `prompts/plan-review.base.md` | none |
-| `/claude-review review pr <number>` | normal PR review | `pr` | PR diff artifact | `prompts/code-review.base.md` | none |
+| `/claude-review pr <number>` | normal PR review | `pr` | PR diff artifact | `prompts/code-review.base.md` | none |
+| `/claude-review review ...` | legacy normal review alias | varies | varies | varies | varies |
 | `/claude-review challenge` | code challenge | `challenge_code` | current diff artifact | `prompts/challenge-code.base.md` | none |
 | `/claude-review challenge [focus]` | code challenge | `challenge_code` | current diff artifact | `prompts/challenge-code.base.md` | focus text |
 | `/claude-review challenge code [focus]` | code challenge | `challenge_code` | current diff artifact | `prompts/challenge-code.base.md` | optional focus text |
@@ -336,8 +341,8 @@ Minimum helper behavior:
 - Support a context flag such as `--has-visible-plan true|false` so tests can verify
   that `/claude-review challenge plan` with no path and no visible plan returns
   `needs_context` before Claude is invoked.
-- Use the same visible-plan guard for normal `/claude-review plan` and
-  `/claude-review review plan`.
+- Use the same visible-plan guard for normal `/claude-review plan` and the legacy
+  `/claude-review review plan` alias.
 - Resolve supplied plan paths relative to the repo root unless they are absolute.
 - Validate supplied plan paths before invoking Claude. The file must exist, be
   readable, and be non-empty; otherwise return `needs_context` with guidance to pass
@@ -442,17 +447,16 @@ Add route-level acceptance coverage:
 - Add shell tests for `scripts/claude-command-router.sh`:
   - every router fixture validates against the required fields and allowed enum values
     in the router output contract.
-  - `/claude-review review code` resolves to normal code review.
+  - `/claude-review` resolves to normal code review.
   - `/claude-review code focus on auth` resolves to normal code review and forwards
     `focus on auth`.
-  - `/claude-review review plan docs/x.md` resolves to normal plan review and path
-    `docs/x.md`.
   - `/claude-review plan docs/x.md` resolves to normal plan review and path
     `docs/x.md`.
   - `/claude-review plan` with `--has-visible-plan false` returns `needs_context`.
-  - `/claude-review review plan` with `--has-visible-plan false` returns
-    `needs_context`.
-  - `/claude-review review pr 123` resolves to normal PR review and PR number `123`.
+  - `/claude-review pr 123` resolves to normal PR review and PR number `123`.
+  - `/claude-review review code` resolves to normal code review as a legacy alias.
+  - `/claude-review review plan docs/x.md` resolves to normal plan review as a
+    legacy alias.
   - `/claude-review update` resolves to `admin_update`.
   - `/claude-review update --check` resolves to `admin_update_check`.
   - `/claude-review show` resolves to `admin_show`.
@@ -489,7 +493,7 @@ Manual smoke tests after restarting Codex:
 /claude-review challenge
 /claude-review challenge code focus on retries and stale state
 /claude-review challenge plan docs/claude-review-challenge-plan.md
-/claude-review review plan docs/claude-review-challenge-plan.md
+/claude-review plan docs/claude-review-challenge-plan.md
 ```
 
 ## Failure Modes
@@ -497,7 +501,7 @@ Manual smoke tests after restarting Codex:
 - If the schema is not updated, Claude may produce valid-looking challenge output
   that fails validation.
 - If challenge code reuses the normal review prompt, it will be too soft and not
-  meaningfully different from `/claude-review review code`.
+  meaningfully different from `/claude-review code`.
 - If plan challenge reuses the normal plan prompt, it will overfocus on structure and
   underfocus on implementation failure.
 - If docs still list `/claude ...` as a supported command, users with GStack installed

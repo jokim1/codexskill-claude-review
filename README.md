@@ -64,14 +64,15 @@ skill. If another installed skill owns `/claude`, usually GStack, that is fine. 
 
 Supported now:
 
-- `/claude-review review`
-- `/claude-review review code`
-- `/claude-review review plan`
-- `/claude-review review plan <path-to-plan.md>`
-- `/claude-review review pr <number>`
-- `/claude-review review iterate`
-- `/claude-review review iterate code`
-- `/claude-review review iterate plan`
+- `/claude-review`
+- `/claude-review code`
+- `/claude-review plan`
+- `/claude-review plan <path-to-plan.md>`
+- `/claude-review pr <number>`
+- `/claude-review iterate`
+- `/claude-review iterate code`
+- `/claude-review iterate plan`
+- legacy aliases under `/claude-review review ...`
 - `/claude-review show`
 - `/claude-review set effort <low|medium|high|xhigh|max>`
 - `/claude-review set model <alias-or-full-model>`
@@ -135,7 +136,7 @@ You need:
 - `git`
 - `python3`
 - `jq`
-- `gh` for `/claude-review review pr <number>`
+- `gh` for `/claude-review pr <number>`
 
 Use Claude subscription login:
 
@@ -179,7 +180,7 @@ docs/checkout-refactor-plan.md
 Run:
 
 ```text
-/claude-review review plan docs/checkout-refactor-plan.md
+/claude-review plan docs/checkout-refactor-plan.md
 ```
 
 Codex will:
@@ -198,7 +199,7 @@ writes code.
 Make code changes in your repo, then run:
 
 ```text
-/claude-review review code
+/claude-review
 ```
 
 Codex will:
@@ -211,18 +212,18 @@ Codex will:
 You can add one-off focus text:
 
 ```text
-/claude-review review code focus on migration risk and dead abstractions
+/claude-review code focus on migration risk and dead abstractions
 ```
 
 ### 3. Let Codex Fix Findings
 
-For a report-only pass, run `/claude-review review code` and then ask Codex to fix the
+For a report-only pass, run `/claude-review` and then ask Codex to fix the
 findings you accept.
 
 For a bounded fix-and-rereview loop, run:
 
 ```text
-/claude-review review iterate code
+/claude-review iterate
 ```
 
 Codex will:
@@ -240,7 +241,7 @@ Claude remains report-only during the loop. Codex performs all edits.
 If the repository is connected to GitHub and `gh` is authenticated:
 
 ```text
-/claude-review review pr 123
+/claude-review pr 123
 ```
 
 Codex will use `gh pr view` and `gh pr diff` to build the review artifact.
@@ -311,13 +312,13 @@ challenge command family is `/claude-review challenge ...`.
 Use normal review with explicit adversarial focus text:
 
 ```text
-/claude-review review code focus on race conditions, retries, idempotency, stale state, partial failure, and data loss
+/claude-review code focus on race conditions, retries, idempotency, stale state, partial failure, and data loss
 ```
 
 For plans:
 
 ```text
-/claude-review review plan docs/checkout-refactor-plan.md
+/claude-review plan docs/checkout-refactor-plan.md
 ```
 
 Then add the adversarial criteria to the plan itself or to your repo-level plan
@@ -360,23 +361,24 @@ README surface.
 ### Review
 
 ```text
-/claude-review review
-/claude-review review code
-/claude-review review code focus on auth edge cases
-/claude-review review plan
-/claude-review review plan docs/plan.md
-/claude-review review pr 123
+/claude-review
+/claude-review code
+/claude-review code focus on auth edge cases
+/claude-review plan
+/claude-review plan docs/plan.md
+/claude-review pr 123
 ```
 
-`/claude-review review` auto-selects plan review when a recent visible
-`<proposed_plan>` block exists; otherwise it reviews the current diff.
+Bare `/claude-review` reviews the current diff. Use `/claude-review plan` for
+plan review. The older `/claude-review review ...` commands remain supported as
+legacy aliases.
 
 ### Iterate
 
 ```text
-/claude-review review iterate
-/claude-review review iterate code
-/claude-review review iterate plan
+/claude-review iterate
+/claude-review iterate code
+/claude-review iterate plan
 ```
 
 Iterate mode lets Codex fix and verify between Claude review rounds. It never lets
@@ -464,7 +466,7 @@ Artifact builders, config helpers, and update checks do not need that approval.
 
 ## Troubleshooting
 
-### `/claude-review review` is not visible
+### `/claude-review` is not visible
 
 Restart Codex after first install, replacing the installed skill, or changing a
 symlinked install path.
@@ -540,7 +542,7 @@ For the symlinked development layout:
 1. Patch this source repo.
 2. Keep `~/.codex/skills/claude-review` pointed at this checkout.
 3. Restart Codex when skill metadata or routing changes.
-4. Re-run a real `/claude-review review` path.
+4. Re-run a real `/claude-review` path.
 
 Useful checks:
 
