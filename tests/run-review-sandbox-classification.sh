@@ -332,6 +332,73 @@ PY
   printf 'ok: timeout wrapper closes stdin\n'
 }
 
+run_probe_timeout_case() {
+  local fake_root tmpdir output
+
+  mkdir -p "$HOME/.codex"
+  fake_root="$(mktemp -d "$HOME/.codex/claude-test-bin-XXXXXX")"
+  tmpdir="$(mktemp -d /tmp/claude-review-test-XXXXXX)"
+  mkdir -p "$fake_root/bin"
+  printf 'review artifact\n' > "$tmpdir/claude-review-artifact.txt"
+
+  cat > "$fake_root/bin/claude" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [ "${1:-}" = "-v" ] || [ "${1:-}" = "--version" ]; then
+  printf 'Claude Code fake\n'
+  exit 0
+fi
+
+if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
+  printf '{"loggedIn":true,"apiProvider":"firstParty"}\n'
+  exit 0
+fi
+
+if [ "${1:-}" = "-p" ]; then
+  prompt="${2:-}"
+  if [[ "$prompt" == *"Codex Claude skill preflight probe"* ]]; then
+    sleep 5
+    printf '{"ok":true}\n'
+    exit 0
+  fi
+
+  printf '{"status":"clean","mode":"code","summary":"ok","findings":[],"open_questions":[]}\n'
+  exit 0
+fi
+
+printf 'unexpected fake claude args: %s\n' "$*" >&2
+exit 2
+EOF
+  chmod +x "$fake_root/bin/claude"
+
+  output="$(
+    cd "$REPO_ROOT"
+    PATH="$fake_root/bin:$PATH" \
+      LIVE_PROBE_TIMEOUT_SECONDS=1 \
+      bash scripts/run-review.sh \
+        --mode code \
+        --artifact-file "$tmpdir/claude-review-artifact.txt" \
+        --base-prompt prompts/code-review.base.md \
+        --schema-file schemas/review-output.json \
+        --repo-root "$REPO_ROOT" \
+        --branch test \
+        --base-branch main
+  )" || {
+    rm -rf "$fake_root" "$tmpdir"
+    fail "probe timeout case exited non-zero"
+  }
+
+  if ! assert_blocked_result "probe timeout" "$output" "preflight timed out after 1s" "LIVE_PROBE_TIMEOUT_SECONDS" "Claude Code invocation failed"; then
+    rm -rf "$fake_root" "$tmpdir"
+    fail "probe timeout assertion failed"
+  fi
+
+  rm -rf "$fake_root" "$tmpdir"
+  printf 'ok: probe timeout\n'
+}
+
 sandbox_summary="Claude could not write its first-party auth/config state"
 generic_runtime_summary="Claude Code invocation failed"
 custom_config_dir="$HOME/.codex/claude-test-config-dir"
@@ -440,4 +507,5 @@ run_artifact_boundary_case
 run_config_boundary_case
 run_unsafe_claude_candidate_case
 run_timeout_wrapper_closes_stdin_case
+run_probe_timeout_case
 rm -f "$evil_shell"

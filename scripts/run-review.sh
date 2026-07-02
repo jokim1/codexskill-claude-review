@@ -47,6 +47,7 @@ REVIEW_EFFECTIVE_TIMEOUT_SECONDS=""
 REVIEW_RETRY_TIMEOUT_SECONDS=""
 REVIEW_TIMEOUT_ATTEMPTS="0"
 REVIEW_TIMEOUT_ATTEMPT_SECONDS=""
+LIVE_PROBE_TIMEOUT_SECONDS="${LIVE_PROBE_TIMEOUT_SECONDS:-30}"
 CLAUDE_HOME_ERE="$(printf '%s' "$HOME" | sed 's/[][(){}.^$*+?|\\]/\\&/g')"
 CLAUDE_CONFIG_DIR_ERE=""
 if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
@@ -417,6 +418,9 @@ failure_priority() {
     ambiguous_auth)
       printf '5'
       ;;
+    probe_timed_out)
+      printf '6'
+      ;;
     claude_state_write_denied)
       printf '6'
       ;;
@@ -507,18 +511,16 @@ run_selected_claude() {
   run_candidate_claude "$CLAUDE_RUNNER_KIND" "$CLAUDE_RUNNER_SHELL" "$CLAUDE_BIN" "$@"
 }
 
-run_selected_claude_with_timeout() {
+run_built_claude_cmd_with_timeout() {
   local timeout_seconds="$1"
   shift
 
   if [ -z "$timeout_seconds" ] || [ "${timeout_seconds:-0}" -le 0 ] || ! command -v python3 >/dev/null 2>&1; then
-    run_selected_claude "$@"
+    "$@"
     return
   fi
 
-  build_candidate_claude_cmd "$CLAUDE_RUNNER_KIND" "$CLAUDE_RUNNER_SHELL" "$CLAUDE_BIN" "$@"
-
-  python3 - "$timeout_seconds" "${SELECTED_CLAUDE_CMD[@]}" <<'PY'
+  python3 - "$timeout_seconds" "$@" <<'PY'
 import subprocess
 import sys
 
@@ -544,6 +546,24 @@ sys.stdout.write(completed.stdout)
 sys.stderr.write(completed.stderr)
 sys.exit(completed.returncode)
 PY
+}
+
+run_candidate_claude_with_timeout() {
+  local timeout_seconds="$1"
+  local kind="$2"
+  local shell_bin="$3"
+  local claude_bin="$4"
+  shift 4
+
+  build_candidate_claude_cmd "$kind" "$shell_bin" "$claude_bin" "$@"
+  run_built_claude_cmd_with_timeout "$timeout_seconds" "${SELECTED_CLAUDE_CMD[@]}"
+}
+
+run_selected_claude_with_timeout() {
+  local timeout_seconds="$1"
+  shift
+
+  run_candidate_claude_with_timeout "$timeout_seconds" "$CLAUDE_RUNNER_KIND" "$CLAUDE_RUNNER_SHELL" "$CLAUDE_BIN" "$@"
 }
 
 review_timeout_model_is_opus() {
@@ -828,8 +848,16 @@ probe_runner_usability() {
   local description="$4"
   local auth_status=""
   local probe_output=""
+  local probe_status=0
+  local probe_timeout_seconds="$LIVE_PROBE_TIMEOUT_SECONDS"
   local probe_schema='{"type":"object","properties":{"ok":{"const":true}},"required":["ok"],"additionalProperties":false}'
   local probe_args=()
+
+  case "$probe_timeout_seconds" in
+    ''|*[!0-9]*|0)
+      probe_timeout_seconds="30"
+      ;;
+  esac
 
   if ! run_candidate_claude "$kind" "$shell_bin" "$claude_bin" -v >/dev/null 2>&1; then
     record_failure \
@@ -876,7 +904,12 @@ probe_runner_usability() {
     )
   fi
 
-  if probe_output="$(run_candidate_claude "$kind" "$shell_bin" "$claude_bin" "${probe_args[@]}" 2>&1)"; then
+  set +e
+  probe_output="$(run_candidate_claude_with_timeout "$probe_timeout_seconds" "$kind" "$shell_bin" "$claude_bin" "${probe_args[@]}" 2>&1)"
+  probe_status=$?
+  set -e
+
+  if [ "$probe_status" -eq 0 ]; then
     if result_is_error "$probe_output"; then
       if budget_exhausted_output "$probe_output"; then
         record_failure \
@@ -923,6 +956,11 @@ probe_runner_usability() {
       "subscription_auth_unavailable" \
       "Claude Code was found, but Claude subscription auth is unavailable from the shell context this skill uses." \
       "Run claude auth login --claudeai in the same environment Codex uses, then retry."
+  elif [ "$probe_status" -eq 124 ]; then
+    record_failure \
+      "probe_timed_out" \
+      "Claude subscription preflight timed out after ${probe_timeout_seconds}s before it could return." \
+      "The review was not started. Check Claude Code startup hooks, MCP/config loading, and user/global settings, or retry after increasing LIVE_PROBE_TIMEOUT_SECONDS."
   else
     record_failure \
       "ambiguous_auth" \
