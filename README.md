@@ -72,7 +72,6 @@ Supported now:
 - `/claude-review iterate`
 - `/claude-review iterate code`
 - `/claude-review iterate plan`
-- legacy aliases under `/claude-review review ...`
 - `/claude-review show`
 - `/claude-review set effort <low|medium|high|xhigh|max>`
 - `/claude-review set model <alias-or-full-model>`
@@ -370,8 +369,7 @@ README surface.
 ```
 
 Bare `/claude-review` reviews the current diff. Use `/claude-review plan` for
-plan review. The older `/claude-review review ...` commands remain supported as
-legacy aliases.
+plan review.
 
 ### Iterate
 
