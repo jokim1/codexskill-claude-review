@@ -1,9 +1,12 @@
 ---
-name: claude
+name: claude-review
 description: |
-  Use when the user explicitly asks for `/claude ...` or wants to run Claude Code
-  from Codex for an independent native-only plan review or code review without
-  leaving Codex. Supports `/claude review`, `/claude review plan`,
+  Authoritative handler for the `/claude ...` command family from this installed
+  skill. Use this instead of any GStack-provided claude/gstack-claude skill when
+  the user asks for `/claude review`, `/claude review plan`, `/claude review code`,
+  `/claude update`, or any command listed here. Runs Claude Code from Codex for
+  independent native-only plan review or code review without leaving Codex.
+  Supports `/claude review`, `/claude review plan [path-to-markdown-plan]`,
   `/claude review code`, `/claude review iterate`, `/claude review iterate plan`,
   `/claude review iterate code`, `/claude review pr <number>`,
   `/claude review instructions [plan|code]`,
@@ -24,7 +27,8 @@ This skill uses the local `claude` CLI with the user's existing Claude subscript
 login. It intentionally ignores Anthropic API credential env vars and does not fall
 back to Anthropic API keys. Keep the workflow narrow, deterministic, and native-only:
 
-- Plan review uses the most recent visible `<proposed_plan>` block from the last 6 messages.
+- Plan review uses an explicit plan file path when supplied, otherwise the most
+  recent visible `<proposed_plan>` block from the last 6 messages.
 - Plain code review uses the current repo diff against the detected base branch.
 - PR review uses `gh pr view` plus `gh pr diff`.
 - Claude runs in prompt-only mode with `--tools ""`. Do not let it edit files.
@@ -156,19 +160,34 @@ user `/claude ...` invocation.
 2. If there is a recent assistant `<proposed_plan>` block, run `/claude review plan`.
 3. Otherwise run `/claude review code`.
 
-### `/claude review plan`
+### `/claude review plan [path]`
 
-1. Extract the most recent visible assistant `<proposed_plan>` block from the last 6 messages.
-2. If none is visible, respond:
+1. Parse an optional plan path after `/claude review plan`.
+2. If a path is supplied:
+   - Resolve it relative to the repo root unless it is absolute.
+   - Require it to be a readable regular file.
+   - Treat the full file contents as the plan artifact. Do not ask for a
+     `<proposed_plan>` block.
+   - If the file cannot be read, respond:
+
+```text
+STATUS: NEEDS_CONTEXT
+REASON: The requested plan file could not be read.
+RECOMMENDATION: Check the path, then run /claude review plan <path> again.
+```
+
+3. If no path is supplied, extract the most recent visible assistant
+   `<proposed_plan>` block from the last 6 messages.
+4. If no path is supplied and no visible plan block exists, respond:
 
 ```text
 STATUS: NEEDS_CONTEXT
 REASON: No recent <proposed_plan> block is visible in this conversation.
-RECOMMENDATION: Create or paste a plan, then run /claude review plan again.
+RECOMMENDATION: Create or paste a plan, or run /claude review plan <path-to-plan.md>.
 ```
 
-3. Write the extracted plan text to a temp file matching `/tmp/claude-review-*`.
-4. Invoke:
+5. Write the plan text to a temp file matching `/tmp/claude-review-*`.
+6. Invoke:
 
 ```bash
 bash <skill-dir>/scripts/run-review.sh \
@@ -181,7 +200,7 @@ bash <skill-dir>/scripts/run-review.sh \
   --schema-file <skill-dir>/schemas/review-output.json
 ```
 
-5. Parse the returned JSON and render findings first, ordered by severity and grouped by category.
+7. Parse the returned JSON and render findings first, ordered by severity and grouped by category.
 
 ### `/claude review code`
 
@@ -267,9 +286,9 @@ Use a temp artifact path matching `/tmp/claude-review-*`.
 2. If there is a recent assistant `<proposed_plan>` block, run `/claude review iterate plan`.
 3. Otherwise run `/claude review iterate code`.
 
-### `/claude review iterate plan`
+### `/claude review iterate plan [path]`
 
-1. Run the same artifact-building and `scripts/run-review.sh --mode plan` flow as `/claude review plan`.
+1. Run the same artifact-building and `scripts/run-review.sh --mode plan` flow as `/claude review plan [path]`.
 2. If Claude returns `clean`, stop and report success.
 3. If Claude returns `needs_context` or `blocked`, stop and surface that result.
 4. If Claude returns `issues_found`, follow this sequence in every round:

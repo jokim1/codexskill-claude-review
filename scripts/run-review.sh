@@ -526,7 +526,13 @@ timeout = int(sys.argv[1])
 cmd = sys.argv[2:]
 
 try:
-    completed = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    completed = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        stdin=subprocess.DEVNULL,
+    )
 except subprocess.TimeoutExpired as exc:
     if exc.stdout:
         sys.stdout.write(exc.stdout if isinstance(exc.stdout, str) else exc.stdout.decode())

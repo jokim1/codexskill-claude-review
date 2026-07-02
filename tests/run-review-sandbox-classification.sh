@@ -255,6 +255,83 @@ EOF
   printf 'ok: unsafe claude candidate\n'
 }
 
+run_timeout_wrapper_closes_stdin_case() {
+  local fake_root tmpdir output
+
+  mkdir -p "$HOME/.codex"
+  fake_root="$(mktemp -d "$HOME/.codex/claude-test-bin-XXXXXX")"
+  tmpdir="$(mktemp -d /tmp/claude-review-test-XXXXXX)"
+  mkdir -p "$fake_root/bin"
+  printf 'review artifact\n' > "$tmpdir/claude-review-artifact.txt"
+
+  cat > "$fake_root/bin/claude" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [ "${1:-}" = "-v" ] || [ "${1:-}" = "--version" ]; then
+  printf 'Claude Code fake\n'
+  exit 0
+fi
+
+if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
+  printf '{"loggedIn":true,"apiProvider":"firstParty"}\n'
+  exit 0
+fi
+
+if [ "${1:-}" = "-p" ]; then
+  prompt="${2:-}"
+  if [[ "$prompt" == *"Codex Claude skill preflight probe"* ]]; then
+    printf '{"ok":true}\n'
+    exit 0
+  fi
+
+  stdin_payload="$(cat || true)"
+  if [ -n "$stdin_payload" ]; then
+    printf 'fake claude received unexpected stdin: %s bytes\n' "${#stdin_payload}" >&2
+    exit 42
+  fi
+
+  printf '{"status":"clean","mode":"code","summary":"ok","findings":[],"open_questions":[]}\n'
+  exit 0
+fi
+
+printf 'unexpected fake claude args: %s\n' "$*" >&2
+exit 2
+EOF
+  chmod +x "$fake_root/bin/claude"
+
+  output="$(
+    cd "$REPO_ROOT"
+    PATH="$fake_root/bin:$PATH" \
+      bash scripts/run-review.sh \
+        --mode code \
+        --artifact-file "$tmpdir/claude-review-artifact.txt" \
+        --base-prompt prompts/code-review.base.md \
+        --schema-file schemas/review-output.json \
+        --repo-root "$REPO_ROOT" \
+        --branch test \
+        --base-branch main
+  )" || {
+    rm -rf "$fake_root" "$tmpdir"
+    fail "timeout wrapper stdin case exited non-zero"
+  }
+
+  OUTPUT_JSON="$output" python3 - <<'PY'
+import json
+import os
+import sys
+
+data = json.loads(os.environ["OUTPUT_JSON"])
+if data.get("status") != "clean" or data.get("summary") != "ok":
+    print(f"expected clean ok result, got {data!r}", file=sys.stderr)
+    sys.exit(1)
+PY
+
+  rm -rf "$fake_root" "$tmpdir"
+  printf 'ok: timeout wrapper closes stdin\n'
+}
+
 sandbox_summary="Claude could not write its first-party auth/config state"
 generic_runtime_summary="Claude Code invocation failed"
 custom_config_dir="$HOME/.codex/claude-test-config-dir"
@@ -362,4 +439,5 @@ run_case \
 run_artifact_boundary_case
 run_config_boundary_case
 run_unsafe_claude_candidate_case
+run_timeout_wrapper_closes_stdin_case
 rm -f "$evil_shell"
