@@ -104,6 +104,43 @@ The bridge keeps a strict division of labor:
 
 The important consequence: Claude is an independent reviewer, not the implementer.
 
+## Which Command Should I Use?
+
+Use `/claude-review code` when you want a normal merge-readiness review of the
+current diff. This is the default review mode. It asks Claude to look for concrete
+issues that could change what ships, how the change is implemented, or what needs
+to be tested before merge.
+
+Use `/claude-review challenge` when you want an adversarial production-pressure
+review of the current diff. It looks at the same code artifact as normal code
+review, but uses a narrower prompt focused on ways the change can fail in real
+systems: retries, stale state, duplicate work, partial failure, bad ordering,
+concurrency, rollback, auth, and trust-boundary mistakes.
+
+Use `/claude-review iterate` when you want Codex to run review, fix actionable
+findings, verify locally, and ask Claude to review again. Claude stays
+report-only. Codex performs the code or plan changes between rounds.
+
+Quick rule of thumb:
+
+| Command | What it reviews | Best for | What happens after findings |
+| --- | --- | --- | --- |
+| `/claude-review` or `/claude-review code` | Current diff | Default pre-merge review for correctness, regressions, security, tests, and maintainability | Report-only. Codex shows findings and waits for the next instruction. |
+| `/claude-review challenge` | Current diff | Risky production changes involving auth, data writes, jobs, queues, migrations, payments, webhooks, retries, or concurrency | Report-only. Codex shows adversarial failure-mode findings and stops. |
+| `/claude-review iterate` | Current diff | When you want Codex to fix Claude's actionable findings and rerun review until clean or stopped | Fix-and-rereview loop, up to 10 review rounds. |
+| `/claude-review plan <path>` | Plan file or visible plan | Checking a plan before implementation | Report-only plan findings. |
+| `/claude-review iterate plan <path>` | Plan file or visible plan | Improving a plan until it is decision-complete and testable | Codex revises the plan and reruns plan review, up to 10 rounds. |
+
+For important or high-risk changes, a good sequence is:
+
+```text
+/claude-review code
+/claude-review challenge
+```
+
+Run `code` first for broad review coverage, then `challenge` for adversarial
+failure-mode pressure testing.
+
 ## Install
 
 Clone this repo into your Codex skills directory:
@@ -213,6 +250,10 @@ Codex will:
 - call Claude with `prompts/code-review.base.md`
 - render structured findings with file and line references when available
 
+This is the standard broad review path. Use it before merge when you want coverage
+for correctness, regressions, security, data-safety, tests, user-visible edge
+cases, and major maintainability problems.
+
 You can add one-off focus text:
 
 ```text
@@ -238,7 +279,9 @@ Codex will:
 - rerun Claude review
 - stop when clean, blocked, repeated, or after 10 rounds
 
-Claude remains report-only during the loop. Codex performs all edits.
+Claude remains report-only during the loop. Codex performs all edits. Iterate is
+useful when you want review findings handled immediately instead of manually
+choosing each next step.
 
 ### 4. Review a PR
 
@@ -286,6 +329,10 @@ The config is stored per repo at:
 
 Challenge review means an adversarial pass: instead of asking "is this correct
 enough to ship?", it asks "how does this break under production pressure?"
+
+Use challenge after normal code review, or on its own when the diff touches a
+failure-prone path such as auth, data mutation, queues, webhooks, payments,
+migrations, retries, concurrency, rollback, or external side effects.
 
 Typical challenge concerns include:
 
@@ -368,8 +415,12 @@ Bare `/claude-review challenge` is a code challenge of the current diff.
 /claude-review iterate plan
 ```
 
+Bare `/claude-review iterate` is the same as `/claude-review iterate code`.
+
 Iterate mode lets Codex fix and verify between Claude review rounds. It never lets
-Claude edit files.
+Claude edit files. It stops when the review is clean, a user decision is needed,
+the same important findings repeat, no meaningful fix was made, verification is
+blocked, only low-signal nits remain, or 10 rounds have been attempted.
 
 ### Config
 
