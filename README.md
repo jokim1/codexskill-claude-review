@@ -66,51 +66,42 @@ Supported commands:
 
 ### Code Review
 
-- `/claude-review` - review the current code diff. This is the same as
-  `/claude-review code`.
-- `/claude-review code [focus]` - run the normal broad pre-merge review for
-  correctness, regressions, security, tests, and maintainability. Optional focus
-  text narrows the review, such as `focus on auth edge cases`.
-- `/claude-review challenge` - run an adversarial failure-mode review of the
-  current code diff. This is the same as `/claude-review challenge code`.
-- `/claude-review challenge code [focus]` - run code challenge mode with optional
-  one-off focus text, such as retries, stale state, auth, or concurrency.
-- `/claude-review iterate` - let Codex fix actionable findings and rerun code
-  review. This is the same as `/claude-review iterate code`.
-- `/claude-review iterate code` - run the code fix-and-rereview loop until clean,
-  blocked, repeated, or 10 rounds have been attempted.
+| Command | What it does |
+| --- | --- |
+| `/claude-review` | Review the current code diff. Same as `/claude-review code`. |
+| `/claude-review code [optional focus]` | Run the normal broad pre-merge review for correctness, regressions, security, tests, and maintainability. Optional focus text narrows the review, such as `focus on auth edge cases`. |
+| `/claude-review challenge` | Run an adversarial failure-mode review of the current code diff. Same as `/claude-review challenge code`. |
+| `/claude-review challenge code [optional focus]` | Run code challenge mode with optional one-off focus text, such as retries, stale state, auth, or concurrency. |
+| `/claude-review iterate` | Let Codex fix actionable findings and rerun code review. Same as `/claude-review iterate code`. |
+| `/claude-review iterate code` | Run the code fix-and-rereview loop until clean, blocked, repeated, or 10 rounds have been attempted. |
 
 ### Plan Review
 
-- `/claude-review plan` - review the most recent visible `<proposed_plan>` block
-  in the conversation.
-- `/claude-review plan <path-to-plan.md>` - review a specific markdown plan file.
-- `/claude-review challenge plan [path-to-plan.md]` - run an adversarial
-  failure-mode review of a visible plan or plan file.
-- `/claude-review iterate plan [path-to-plan.md]` - let Codex revise the visible
-  plan or plan file and rerun plan review until clean, blocked, repeated, or 10
-  rounds have been attempted.
+| Command | What it does |
+| --- | --- |
+| `/claude-review plan` | Review the most recent visible `<proposed_plan>` block in the conversation. |
+| `/claude-review plan [path to plan doc]` | Review a specific markdown plan file. |
+| `/claude-review challenge plan [path to plan doc]` | Run an adversarial failure-mode review of a visible plan or plan file. |
+| `/claude-review iterate plan [path to plan doc]` | Let Codex revise the visible plan or plan file and rerun plan review until clean, blocked, repeated, or 10 rounds have been attempted. |
 
 ### Pull Request Review
 
-- `/claude-review pr <number>` - review a GitHub PR using `gh pr view` and
-  `gh pr diff`.
+| Command | What it does |
+| --- | --- |
+| `/claude-review pr [PR number]` | Review a GitHub PR using `gh pr view` and `gh pr diff`. |
 
 ### Housekeeping
 
-- `/claude-review show` - show the effective repo-local review configuration.
-- `/claude-review doctor` - diagnose install, routing, Claude auth, sandbox, and
-  runner issues.
-- `/claude-review set effort <low|medium|high|xhigh|max>` - set Claude review
-  effort for this repo. `extra-high` is accepted as an alias for `xhigh`.
-- `/claude-review set model <alias-or-full-model>` - set the Claude model for this
-  repo.
-- `/claude-review set budget <usd>` - set the review budget guardrail.
-- `/claude-review set timeout <seconds>` - set the review timeout floor.
-- `/claude-review update` - update the installed skill checkout with a
-  fast-forward-only merge from `origin/main`.
-- `/claude-review update --check` - check whether an update is available without
-  changing the installed skill checkout.
+| Command | What it does |
+| --- | --- |
+| `/claude-review show` | Show the effective repo-local review configuration. |
+| `/claude-review doctor` | Diagnose install, routing, Claude auth, sandbox, and runner issues. |
+| `/claude-review set effort [effort level]` | Set Claude review effort for this repo. Choose `low`, `medium`, `high`, `xhigh`, or `max`. `extra-high` is accepted as an alias for `xhigh`. |
+| `/claude-review set model [model alias or full model id]` | Set the Claude model for this repo. |
+| `/claude-review set budget [budget in USD]` | Set the review budget guardrail. |
+| `/claude-review set timeout [timeout in seconds]` | Set the review timeout floor. |
+| `/claude-review update` | Update the installed skill checkout with a fast-forward-only merge from `origin/main`. |
+| `/claude-review update --check` | Check whether an update is available without changing the installed skill checkout. |
 
 Every `/claude-review ...` command except `/claude-review update` runs a low-noise
 update check first. If a new version is available, Codex asks whether to update
