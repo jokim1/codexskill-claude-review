@@ -64,25 +64,49 @@ skill. If another installed skill owns `/claude`, usually GStack, that is fine. 
 
 Supported now:
 
-- `/claude-review`
-- `/claude-review code`
-- `/claude-review plan`
-- `/claude-review plan <path-to-plan.md>`
-- `/claude-review pr <number>`
-- `/claude-review challenge`
-- `/claude-review challenge code [focus]`
-- `/claude-review challenge plan [path-to-plan.md]`
-- `/claude-review iterate`
-- `/claude-review iterate code`
-- `/claude-review iterate plan`
-- `/claude-review show`
-- `/claude-review doctor`
-- `/claude-review set effort <low|medium|high|xhigh|max>`
-- `/claude-review set model <alias-or-full-model>`
-- `/claude-review set budget <usd>`
-- `/claude-review set timeout <seconds>`
-- `/claude-review update`
-- `/claude-review update --check`
+### Code Review
+
+- `/claude-review` - review the current code diff. This is the same as
+  `/claude-review code`.
+- `/claude-review code` - run the normal broad pre-merge review for correctness,
+  regressions, security, tests, and maintainability.
+- `/claude-review challenge` - run an adversarial failure-mode review of the
+  current code diff. This is the same as `/claude-review challenge code`.
+- `/claude-review challenge code [focus]` - run code challenge mode with optional
+  one-off focus text, such as retries, stale state, auth, or concurrency.
+- `/claude-review iterate` - let Codex fix actionable findings and rerun code
+  review. This is the same as `/claude-review iterate code`.
+- `/claude-review iterate code` - run the code fix-and-rereview loop until clean,
+  blocked, repeated, or 10 rounds have been attempted.
+
+### Plan Review
+
+- `/claude-review plan` - review the most recent visible `<proposed_plan>` block
+  in the conversation.
+- `/claude-review plan <path-to-plan.md>` - review a specific markdown plan file.
+- `/claude-review challenge plan [path-to-plan.md]` - run an adversarial
+  failure-mode review of a visible plan or plan file.
+- `/claude-review iterate plan` - let Codex revise the visible plan and rerun plan
+  review until clean, blocked, repeated, or 10 rounds have been attempted.
+
+### Pull Request Review
+
+- `/claude-review pr <number>` - review a GitHub PR using `gh pr view` and
+  `gh pr diff`.
+
+### Housekeeping
+
+- `/claude-review show` - show the effective repo-local review configuration.
+- `/claude-review doctor` - diagnose install, routing, Claude auth, sandbox, and
+  runner issues.
+- `/claude-review set effort <low|medium|high|xhigh|max>` - set Claude review
+  effort for this repo.
+- `/claude-review set model <alias-or-full-model>` - set the Claude model for this
+  repo.
+- `/claude-review set budget <usd>` - set the review budget guardrail.
+- `/claude-review set timeout <seconds>` - set the review timeout floor.
+- `/claude-review update` - update the installed skill checkout.
+- `/claude-review update --check` - check whether an update is available.
 
 Out of scope:
 
