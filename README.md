@@ -60,16 +60,17 @@ the cross-model review loop.
 skill. If another installed skill owns `/claude`, usually GStack, that is fine. Use
 `/claude-review ...` when you want this bridge.
 
-## Current Status
+## Command Reference
 
-Supported now:
+Supported commands:
 
 ### Code Review
 
 - `/claude-review` - review the current code diff. This is the same as
   `/claude-review code`.
-- `/claude-review code` - run the normal broad pre-merge review for correctness,
-  regressions, security, tests, and maintainability.
+- `/claude-review code [focus]` - run the normal broad pre-merge review for
+  correctness, regressions, security, tests, and maintainability. Optional focus
+  text narrows the review, such as `focus on auth edge cases`.
 - `/claude-review challenge` - run an adversarial failure-mode review of the
   current code diff. This is the same as `/claude-review challenge code`.
 - `/claude-review challenge code [focus]` - run code challenge mode with optional
@@ -86,8 +87,9 @@ Supported now:
 - `/claude-review plan <path-to-plan.md>` - review a specific markdown plan file.
 - `/claude-review challenge plan [path-to-plan.md]` - run an adversarial
   failure-mode review of a visible plan or plan file.
-- `/claude-review iterate plan` - let Codex revise the visible plan and rerun plan
-  review until clean, blocked, repeated, or 10 rounds have been attempted.
+- `/claude-review iterate plan [path-to-plan.md]` - let Codex revise the visible
+  plan or plan file and rerun plan review until clean, blocked, repeated, or 10
+  rounds have been attempted.
 
 ### Pull Request Review
 
@@ -100,13 +102,19 @@ Supported now:
 - `/claude-review doctor` - diagnose install, routing, Claude auth, sandbox, and
   runner issues.
 - `/claude-review set effort <low|medium|high|xhigh|max>` - set Claude review
-  effort for this repo.
+  effort for this repo. `extra-high` is accepted as an alias for `xhigh`.
 - `/claude-review set model <alias-or-full-model>` - set the Claude model for this
   repo.
 - `/claude-review set budget <usd>` - set the review budget guardrail.
 - `/claude-review set timeout <seconds>` - set the review timeout floor.
-- `/claude-review update` - update the installed skill checkout.
-- `/claude-review update --check` - check whether an update is available.
+- `/claude-review update` - update the installed skill checkout with a
+  fast-forward-only merge from `origin/main`.
+- `/claude-review update --check` - check whether an update is available without
+  changing the installed skill checkout.
+
+Every `/claude-review ...` command except `/claude-review update` runs a low-noise
+update check first. If a new version is available, Codex asks whether to update
+before continuing.
 
 Out of scope:
 
@@ -404,75 +412,6 @@ Challenge behavior:
 4. Claude receives a dedicated challenge prompt.
 5. The runner stamps the output mode as `challenge_code` or `challenge_plan`.
 6. Codex renders findings first and does not enter an automatic fix loop.
-
-## Command Reference
-
-### Review
-
-```text
-/claude-review
-/claude-review code
-/claude-review code focus on auth edge cases
-/claude-review plan
-/claude-review plan docs/plan.md
-/claude-review pr 123
-```
-
-Bare `/claude-review` reviews the current diff. Use `/claude-review plan` for
-plan review.
-
-### Challenge
-
-```text
-/claude-review challenge
-/claude-review challenge code focus on retries and stale state
-/claude-review challenge plan docs/plan.md
-```
-
-Bare `/claude-review challenge` is a code challenge of the current diff.
-
-### Iterate
-
-```text
-/claude-review iterate
-/claude-review iterate code
-/claude-review iterate plan
-```
-
-Bare `/claude-review iterate` is the same as `/claude-review iterate code`.
-
-Iterate mode lets Codex fix and verify between Claude review rounds. It never lets
-Claude edit files. It stops when the review is clean, a user decision is needed,
-the same important findings repeat, no meaningful fix was made, verification is
-blocked, only low-signal nits remain, or 10 rounds have been attempted.
-
-### Config
-
-```text
-/claude-review show
-/claude-review doctor
-/claude-review set effort <low|medium|high|xhigh|max>
-/claude-review set model <alias-or-full-model>
-/claude-review set budget <usd>
-/claude-review set timeout <seconds>
-```
-
-`extra-high` is accepted as a user-facing alias for `xhigh`.
-
-### Update
-
-```text
-/claude-review update --check
-/claude-review update
-```
-
-The updater fetches `origin/main` for the installed skill checkout and performs a
-fast-forward-only merge. It blocks on tracked local changes, detached checkouts,
-non-fast-forward history, and untracked files that would be overwritten.
-
-Every `/claude-review ...` command except `/claude-review update` runs a low-noise
-update check first. If a new version is available, Codex asks whether to update
-before continuing.
 
 ## Config File
 
