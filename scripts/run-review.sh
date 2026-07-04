@@ -13,12 +13,12 @@ BRANCH=""
 BASE_BRANCH=""
 PR_NUMBER=""
 REVIEW_INSTRUCTIONS=""
-MAX_ARTIFACT_BYTES=60000
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG_HELPER="$SCRIPT_DIR/claude-config.sh"
 CLAUDE_SUBSCRIPTION_HELPER="$SCRIPT_DIR/claude-subscription-env.sh"
+MAX_ARTIFACT_BYTES=""
 # shellcheck source=/dev/null
 source "$CONFIG_HELPER"
 
@@ -212,6 +212,33 @@ emit_json() {
     printf '  "open_questions": []\n'
   fi
   printf '}\n'
+}
+
+load_artifact_limits_or_emit_json() {
+  local limits_error_file limits_error
+
+  limits_error_file="$(mktemp /tmp/claude-review-limits-XXXXXX)"
+  # shellcheck source=/dev/null
+  if ! source "$SCRIPT_DIR/artifact-limits.sh" 2>"$limits_error_file"; then
+    limits_error="$(cat "$limits_error_file")"
+    rm -f "$limits_error_file"
+    emit_json \
+      "blocked" \
+      "${limits_error:-Invalid CLAUDE_REVIEW_MAX_ARTIFACT_BYTES.}" \
+      "Set CLAUDE_REVIEW_MAX_ARTIFACT_BYTES to a positive integer byte limit, or unset it to use 200000."
+    exit 0
+  fi
+  rm -f "$limits_error_file"
+  MAX_ARTIFACT_BYTES="$CLAUDE_REVIEW_MAX_ARTIFACT_BYTES"
+}
+
+load_artifact_limits_or_emit_json
+
+artifact_is_split_part() {
+  local first_line=""
+
+  IFS= read -r first_line < "$ARTIFACT_FILE" || true
+  [ "$first_line" = "Review Artifact Split Part" ]
 }
 
 canonical_path() {
@@ -1122,7 +1149,11 @@ fi
 
 artifact_bytes="$(wc -c < "$ARTIFACT_FILE" | tr -d '[:space:]')"
 if [ "${artifact_bytes:-0}" -gt "$MAX_ARTIFACT_BYTES" ]; then
-  emit_json "needs_context" "The review artifact is too large for a reliable single-shot review (${artifact_bytes} bytes > ${MAX_ARTIFACT_BYTES} bytes)." "Narrow the scope or use /claude-review review pr <number>."
+  if artifact_is_split_part; then
+    emit_json "needs_context" "The split review artifact is too large for this runner cap (${artifact_bytes} bytes > ${MAX_ARTIFACT_BYTES} bytes), likely because it was built with a higher CLAUDE_REVIEW_MAX_ARTIFACT_BYTES than the review step." "Export the same CLAUDE_REVIEW_MAX_ARTIFACT_BYTES for build-review-artifact.sh and every run-review.sh split-part call, or rebuild with a lower cap."
+  else
+    emit_json "needs_context" "The review artifact is too large for one review pass (${artifact_bytes} bytes > ${MAX_ARTIFACT_BYTES} bytes)." "Split code or PR artifacts with build-review-artifact.sh --split-output-dir, or narrow the plan scope."
+  fi
   exit 0
 fi
 

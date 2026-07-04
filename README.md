@@ -40,6 +40,10 @@ in this direction:
 
 - Codex stays the implementer and fixer; Claude only reports findings.
 - Claude receives a bounded artifact that Codex builds from a plan, diff, or PR.
+  Code and PR artifacts are never silently truncated; oversized artifacts are split
+  into multiple bounded review parts. Split reviews preserve the content across
+  parts, but each Claude call sees only one part plus repeated scope metadata, so
+  cross-file reasoning can be weaker than a single whole-diff review.
 - Claude does not inspect the repo directly and does not get editing tools.
 - Claude returns structured JSON that Codex can render, sort, and iterate on.
 - Auth is predictably Claude subscription auth, with Anthropic API env vars scrubbed.
@@ -117,13 +121,21 @@ on your machine, that is a separate installed skill, usually GStack's wrapper.
 The bridge keeps a strict division of labor:
 
 1. Codex builds a review artifact from the visible plan, current diff, or PR diff.
-2. Codex calls `scripts/run-review.sh`.
-3. The runner scrubs Anthropic API credential env vars.
-4. The runner performs a tiny subscription-auth preflight through the local
+2. If a code or PR artifact exceeds 200000 bytes, Codex reviews split artifact
+   parts instead of truncating the diff. For tightly coupled cross-file changes,
+   narrow the diff when possible so related code lands in the same review call.
+   Split directories are fresh and single-use so retries cannot clobber parts that
+   a prior review call may still be consuming.
+   If `CLAUDE_REVIEW_MAX_ARTIFACT_BYTES` is overridden, use the same value for the
+   build step and every review call; the runner never raises its cap from artifact
+   headers.
+3. Codex calls `scripts/run-review.sh`.
+4. The runner scrubs Anthropic API credential env vars.
+5. The runner performs a tiny subscription-auth preflight through the local
    `claude` CLI.
-5. Claude receives only the artifact and bundled prompt, with no tools.
-6. Claude returns structured JSON matching `schemas/review-output.json`.
-7. Codex renders findings first, then decides what to fix.
+6. Claude receives only the artifact and bundled prompt, with no tools.
+7. Claude returns structured JSON matching `schemas/review-output.json`.
+8. Codex renders findings first, then decides what to fix.
 
 The important consequence: Claude is an independent reviewer, not the implementer.
 
@@ -269,7 +281,9 @@ Make code changes in your repo, then run:
 Codex will:
 
 - detect the base branch
-- build a bounded artifact from the current diff
+- build an untruncated artifact from the current diff
+- split the review into bounded 200000-byte parts when the artifact is too large,
+  up to the configured split-part cap, using a fresh single-use split directory
 - call Claude with `prompts/code-review.base.md`
 - render structured findings with file and line references when available
 
@@ -398,7 +412,8 @@ For plans:
 Challenge behavior:
 
 1. Codex routes through the `claude-review` skill, not GStack.
-2. Code challenge builds the same bounded current-diff artifact as normal review.
+2. Code challenge uses the same untruncated, split-capable current-diff artifact
+   flow as normal review.
 3. Plan challenge uses a file path or visible `<proposed_plan>`.
 4. Claude receives a dedicated challenge prompt.
 5. The runner stamps the output mode as `challenge_code` or `challenge_plan`.

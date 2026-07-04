@@ -15,7 +15,8 @@ repo's subscription-authenticated, timeout-bounded runner.
 - `scripts/run-review.sh` already owns Claude CLI execution, subscription auth
   preflight, Anthropic API credential scrubbing, budget classification,
   timeout/retry behavior, and sandbox/auth-state diagnostics.
-- `scripts/build-review-artifact.sh` already builds bounded code and PR artifacts.
+- `scripts/build-review-artifact.sh` builds untruncated code and PR artifacts and
+  can split oversized artifacts into bounded review parts.
 - `prompts/code-review.base.md` and `prompts/plan-review.base.md` already define
   structured review behavior for normal code and plan review.
 - `schemas/review-output.json` already provides the shared response contract.
@@ -370,8 +371,10 @@ Challenge code flow:
 
 1. Resolve repo root.
 2. Detect base branch using the same order as normal code review.
-3. Build the same code artifact with `scripts/build-review-artifact.sh --mode code`.
-4. Invoke `scripts/run-review.sh --mode challenge_code`.
+3. Build the same split-capable code artifact with
+   `scripts/build-review-artifact.sh --mode code`.
+4. Invoke `scripts/run-review.sh --mode challenge_code` once for the full artifact
+   or once per split part.
 5. Use `prompts/challenge-code.base.md`.
 6. Pass user focus text through `--instructions`.
 7. Render findings first, same as normal review.

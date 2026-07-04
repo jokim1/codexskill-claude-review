@@ -71,6 +71,70 @@ Resolve these relative to the current repo and this skill's directory:
 The bundled files live adjacent to this `SKILL.md`. Resolve those paths relative to
 the skill directory.
 
+## Artifact Size And Split Reviews
+
+Each single Claude review call receives at most `200000` bytes of artifact content.
+This is a review-quality guardrail, not a model context-window limit. The artifact
+builder must never silently truncate source, test, template, or diff content to fit
+that guardrail. Code and PR review splitting is capped at 12 parts by default
+(`CLAUDE_REVIEW_MAX_SPLIT_PARTS`) to avoid unbounded Claude-call fan-out on huge or
+generated diffs.
+
+If `CLAUDE_REVIEW_MAX_ARTIFACT_BYTES` is overridden for artifact building, export
+the same value for every corresponding `scripts/run-review.sh` call. The runner
+does not trust or raise its byte guardrail from artifact content, including split
+part headers.
+
+For code and PR reviews, always pass `--split-output-dir <temp-split-dir>` to
+`scripts/build-review-artifact.sh`. Use a freshly-created temp artifact file and a
+fresh, single-use split directory under `/tmp`; the split directory basename must
+start with `claude-review-`. Do not reuse a split directory after the builder exits,
+because its manifest and part files may still be consumed by later review calls.
+The split directory lock is a build-time guard for fresh temp directories, not a
+durable lease for deterministic or reused paths.
+
+The builder writes the full, untruncated artifact to `--output-file` in every case.
+If that full artifact fits under `200000` bytes, no split manifest is written and
+the normal single `scripts/run-review.sh` call should review `--output-file`.
+
+If the full artifact exceeds `200000` bytes, the builder writes:
+
+- `<temp-split-dir>/manifest.txt`
+- one or more `/tmp/.../claude-review-part-NNN.txt` split artifacts
+
+In that case, do not pass the full artifact to `scripts/run-review.sh`; the runner
+will reject it as oversized. Instead, read `manifest.txt`, run the same
+`scripts/run-review.sh` command once per listed `Part file:`, and render one merged
+review result.
+
+Split review preserves the full artifact across bounded parts, but it is not
+identical to one whole-diff Claude call. Each Claude call sees the repeated scope
+metadata plus only the files or diff chunks listed for that part, so cross-file
+reasoning can be weaker when a defect depends on simultaneously reading code split
+across different parts. When that fidelity matters, narrow the diff or split the
+change into tighter, related review batches.
+
+Merged split review rendering rules:
+
+- First classify every listed part. If any part failed, returned unparseable
+  output, or returned `blocked`/`needs_context`, surface those part-level
+  blockers/questions even when other parts returned `issues_found`.
+- If some parts completed and some parts did not, mark the merged result as
+  partial coverage, including the completed-part count and total-part count.
+- If every part completed and any part returns `issues_found`, merge all findings,
+  annotate unclear evidence with the split part number, then order by severity and
+  category as usual.
+- If every part completed as `clean`, report that no significant issues were found
+  across all split parts.
+- Do not treat split parts as Claude edit/fix rounds. In iterate mode, one split
+  review cycle may contain multiple Claude calls, but the 10-round iterate limit
+  still counts fix-and-rereview cycles, not individual split parts.
+
+If artifact building exits because a full artifact is too large and split artifacts
+could not be produced, or because the split would exceed the configured max part
+count, respond with `STATUS: BLOCKED`, explain the split-generation failure, and
+recommend narrowing the diff.
+
 ## Command Routing
 
 Match only the explicit `/claude-review` command and `/claude-review ...` command family.
@@ -292,10 +356,12 @@ bash <skill-dir>/scripts/build-review-artifact.sh \
   --mode code \
   --repo-root <repo-root> \
   --base-branch <base-branch> \
-  --output-file <temp-artifact-file>
+  --output-file <temp-artifact-file> \
+  --split-output-dir <temp-split-dir>
 ```
 
-Use a temp artifact path matching `/tmp/claude-review-*`.
+Use a temp artifact path matching `/tmp/claude-review-*` and a fresh, single-use
+temp split directory under `/tmp` matching `/tmp/claude-review-*`.
 
 4. If artifact building fails because merge base or base branch cannot be determined, respond:
 
@@ -305,7 +371,9 @@ REASON: Could not determine a merge base for code review.
 RECOMMENDATION: Ensure the repo has a reachable base branch or use /claude-review pr <number>.
 ```
 
-5. Invoke:
+5. If `<temp-split-dir>/manifest.txt` exists, run the split review flow from
+   "Artifact Size And Split Reviews" using the same mode, prompt, config, branch,
+   base branch, and inline instructions for every listed part. Otherwise invoke:
 
 ```bash
 bash <skill-dir>/scripts/run-review.sh \
@@ -322,7 +390,8 @@ bash <skill-dir>/scripts/run-review.sh \
   --instructions "<inline review instructions>"
 ```
 
-6. Parse the returned JSON and render findings first, ordered by severity and grouped by category.
+6. Parse the returned JSON or merged split JSON and render findings first, ordered
+   by severity and grouped by category.
 
 ### `/claude-review challenge [inline challenge focus]`
 
@@ -332,10 +401,13 @@ Equivalent to `/claude-review challenge code [inline challenge focus]`.
 
 1. Resolve the repo root and detect the base branch with the same steps as
    `/claude-review code`.
-2. Build the current-diff artifact with `scripts/build-review-artifact.sh --mode code`.
+2. Build the current-diff artifact with the same `scripts/build-review-artifact.sh
+   --mode code --split-output-dir <temp-split-dir>` flow as `/claude-review code`.
    Challenge mode changes the Claude prompt and returned `mode`; it does not use a
    separate artifact-builder mode.
-3. Invoke:
+3. If `<temp-split-dir>/manifest.txt` exists, run the split review flow from
+   "Artifact Size And Split Reviews" using `--mode challenge_code` for every listed
+   part. Otherwise invoke:
 
 ```bash
 bash <skill-dir>/scripts/run-review.sh \
@@ -405,12 +477,19 @@ bash <skill-dir>/scripts/build-review-artifact.sh \
   --mode pr \
   --repo-root <repo-root> \
   --pr-number <number> \
-  --output-file <temp-artifact-file>
+  --output-file <temp-artifact-file> \
+  --split-output-dir <temp-split-dir>
 ```
 
-Use a temp artifact path matching `/tmp/claude-review-*`.
+Use a temp artifact path matching `/tmp/claude-review-*` and a fresh, single-use
+temp split directory under `/tmp` matching `/tmp/claude-review-*`.
 
-4. Invoke `scripts/run-review.sh` with `--mode pr`, the code-review prompt, both append prompts, and `--pr-number <number>`.
+4. If `<temp-split-dir>/manifest.txt` exists, run the split review flow from
+   "Artifact Size And Split Reviews" using `--mode pr`, the code-review prompt,
+   both append prompts, and `--pr-number <number>` for every listed part.
+   Otherwise invoke `scripts/run-review.sh` once with `--mode pr`, the full
+   artifact, the code-review prompt, both append prompts, and `--pr-number
+   <number>`.
 5. Parse the returned JSON and render findings first, ordered by severity and grouped by category.
 
 ### `/claude-review iterate`
