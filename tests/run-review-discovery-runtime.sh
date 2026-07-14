@@ -6,7 +6,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_ROOT="$(mktemp -d "$HOME/claude-runner-test-XXXXXX")"
 ARTIFACT_ROOT="$(mktemp -d /tmp/claude-review-discovery-test-XXXXXX)"
 SYSTEM_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
-trap 'rm -rf "$TEST_ROOT" "$ARTIFACT_ROOT"' EXIT
+trap 'chmod -R u+w "$TEST_ROOT" "$ARTIFACT_ROOT" 2>/dev/null || true; rm -rf "$TEST_ROOT" "$ARTIFACT_ROOT"' EXIT
 printf 'review artifact\n' > "$ARTIFACT_ROOT/claude-review-artifact.txt"
 
 fail() {

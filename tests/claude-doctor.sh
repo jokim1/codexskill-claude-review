@@ -244,7 +244,9 @@ for secret in doctor-auth-secret doctor-probe-secret-stdout doctor-probe-secret-
 done
 assert_not_contains "$basic_output" "stdout_head" "raw stdout excerpt removed"
 assert_not_contains "$basic_output" "stderr_head" "raw stderr excerpt removed"
-grep -q '^ANTHROPIC_API_KEY=absent$' "$path_log" || fail "doctor version/auth/probes scrub API credentials"
+for scrubbed_name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN; do
+  grep -q "^${scrubbed_name}=absent$" "$path_log" || fail "doctor version/auth/probes did not scrub $scrubbed_name"
+done
 grep -q '^BASH_ENV=absent$' "$path_log" || fail "doctor runtime scrubs BASH_ENV"
 grep -q '^ENV=absent$' "$path_log" || fail "doctor runtime scrubs ENV"
 [ "$(grep '^path=' "$path_log" | sort -u)" = "path=$path_value" ] || fail "doctor preserves PATH byte-for-byte"

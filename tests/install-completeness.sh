@@ -68,13 +68,19 @@ pass "production callers migrated while compatibility entry point remains"
 # Exercise runner and doctor bootstrap from the tested checkout without executing
 # a real Claude installation.
 bootstrap_skill="$TEST_ROOT/bootstrap-skill"
-mkdir -p "$TEST_ROOT/home" "$bootstrap_skill/scripts"
+bootstrap_tools="$TEST_ROOT/bootstrap-tools"
+mkdir -p "$TEST_ROOT/home" "$bootstrap_skill/scripts" "$bootstrap_tools"
 cp "$ROOT"/scripts/*.sh "$bootstrap_skill/scripts/"
 chmod 755 "$bootstrap_skill"/scripts/*.sh
 disable_homebrew_paths "$bootstrap_skill/scripts/claude-locator.sh" "$TEST_ROOT/disabled-homebrew/claude"
+for tool_name in awk basename chmod cut dirname git grep head id mktemp python3 pwd readlink rm sed sort stat tail tr uname wc; do
+  tool_path="$(type -P "$tool_name" 2>/dev/null || true)"
+  [ -n "$tool_path" ] || fail "bootstrap tool unavailable: $tool_name"
+  ln -s "$tool_path" "$bootstrap_tools/$tool_name"
+done
 doctor_output="$({
   cd "$ROOT"
-  HOME="$TEST_ROOT/home" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+  HOME="$TEST_ROOT/home" PATH="$bootstrap_tools" \
     /bin/bash "$bootstrap_skill/scripts/claude-doctor.sh" \
       --repo-root "$ROOT" \
       --skill-root "$bootstrap_skill" \
@@ -88,7 +94,7 @@ printf '%s\n' "$doctor_output" | grep -Fqx 'claude_runtime_contract=direct_inher
 printf 'artifact\n' > "$TEST_ROOT/claude-review-artifact.txt"
 runner_output="$({
   cd "$ROOT"
-  HOME="$TEST_ROOT/home" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+  HOME="$TEST_ROOT/home" PATH="$bootstrap_tools" \
     /bin/bash "$bootstrap_skill/scripts/run-review.sh" \
       --mode code \
       --artifact-file "$TEST_ROOT/claude-review-artifact.txt" \
