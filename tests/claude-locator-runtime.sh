@@ -421,6 +421,48 @@ cp "$TEST_ROOT/work/subprocess.py" "$python_injection_root/subprocess.py"
 claude_runtime_resolve_trusted_python "$ROOT" "$TEST_ROOT/work" "$TEST_ROOT/work" || fail "trusted Python resolution"
 assert_eq "safe" "$CLAUDE_RUNTIME_PYTHON_STATUS" "trusted Python status"
 claude_runtime_write_python_driver "$python_driver"
+"$CLAUDE_RUNTIME_PYTHON_BIN" -I - "$python_driver" <<'PY'
+import importlib.util
+import io
+import subprocess
+import sys
+
+spec = importlib.util.spec_from_file_location("claude_runtime_driver", sys.argv[1])
+driver = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(driver)
+
+
+class TimedOutProcess:
+    pid = 999999999
+
+    def __init__(self):
+        self.stdin = io.BytesIO()
+        self.stdout = io.BytesIO()
+        self.stderr = io.BytesIO()
+        self.communicate_calls = 0
+
+    def communicate(self, timeout):
+        self.communicate_calls += 1
+        raise subprocess.TimeoutExpired(
+            "fixture",
+            timeout,
+            output="partial-☃".encode("utf-8"),
+            stderr=b"bounded-stderr",
+        )
+
+    def wait(self, timeout):
+        return 1
+
+
+proc = TimedOutProcess()
+out, err = driver._bounded_timeout_cleanup(proc, None)
+if out != "partial-☃" or err != "bounded-stderr":
+    raise SystemExit(f"timeout output was not normalized: out={out!r} err={err!r}")
+if proc.communicate_calls != 2:
+    raise SystemExit(f"unexpected bounded cleanup calls: {proc.communicate_calls}")
+if not proc.stdin.closed or not proc.stdout.closed or not proc.stderr.closed:
+    raise SystemExit("bounded cleanup did not close retained pipes")
+PY
 (
   PATH="${CLAUDE_RUNTIME_PYTHON_BIN%/*}"
   CLAUDE_RUNTIME_INHERITED_PATH=""

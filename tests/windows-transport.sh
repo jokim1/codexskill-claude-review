@@ -24,6 +24,9 @@ for token in (
     "TerminateJobObject",
     "subprocess.CREATE_NEW_PROCESS_GROUP",
     'process_options["start_new_session"] = True',
+    'encoding="utf-8"',
+    'errors="replace"',
+    'return _as_text(exc.output), _as_text(exc.stderr)',
     "proc.communicate(timeout=3)",
     "proc.wait(timeout=1)",
 ):
@@ -136,6 +139,31 @@ claude_runtime_resolve_trusted_python "$ROOT" "$PWD" "$runtime_cwd" || fail "tru
 [ "$CLAUDE_RUNTIME_PYTHON_STATUS" = "safe" ] || fail "trusted Windows Python status"
 process_driver="$runtime_cwd/process-driver.py"
 claude_runtime_write_python_driver "$process_driver"
+"$python_bin" - "$process_driver" <<'PY'
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("claude_runtime_driver", sys.argv[1])
+driver = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(driver)
+expected = "windows-unicode-☃-東京\n"
+proc, out, err, timed_out = driver._run_process(
+    10,
+    False,
+    "",
+    "-",
+    [
+        sys.executable,
+        "-c",
+        "import sys; sys.stdout.buffer.write(" + repr(expected.encode("utf-8")) + ")",
+    ],
+)
+if proc.returncode != 0 or out != expected or err or timed_out:
+    raise SystemExit(
+        f"UTF-8 pipe transport failed: rc={proc.returncode} out={out!r} "
+        f"err={err!r} timed_out={timed_out}"
+    )
+PY
 claude_runtime_check_launcher_dependency "$windows_claude_target" "$runtime_cwd" || fail "native Windows executable classification"
 [ "$CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_KIND" = "direct" ] || fail "native .exe transport kind"
 claude_runtime_build_command \

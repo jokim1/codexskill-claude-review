@@ -280,6 +280,12 @@ def _close_pipe(pipe):
             pass
 
 
+def _as_text(value):
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value or ""
+
+
 def _bounded_timeout_cleanup(proc, job):
     _stop_process_tree(proc, job, False)
     try:
@@ -296,7 +302,7 @@ def _bounded_timeout_cleanup(proc, job):
                 proc.wait(timeout=1)
             except subprocess.TimeoutExpired:
                 pass
-            return exc.output or "", exc.stderr or ""
+            return _as_text(exc.output), _as_text(exc.stderr)
 
 
 def _child_environment(msys_present, msys_value):
@@ -337,6 +343,8 @@ def _run_process(timeout, msys_present, msys_value, input_path, cmd):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             env=_child_environment(msys_present, msys_value),
             **process_options,
         )
