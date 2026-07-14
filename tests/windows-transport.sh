@@ -52,8 +52,9 @@ runtime_cwd="$(mktemp -d /tmp/claude-review-runtime-windows-XXXXXX)"
 shim_root="$(mktemp -d "$HOME/claude-review Windows=shim-XXXXXX")"
 artifact_file="$(mktemp /tmp/claude-review-windows-artifact-XXXXXX)"
 trap 'rm -rf "$fixture_root" "$runtime_cwd" "$shim_root" "$artifact_file"' EXIT
-windows_cmd="$(cygpath -u "$WINDIR/System32/cmd.exe")"
-cp "$windows_cmd" "$fixture_root/claude.exe"
+windows_bash="$(type -P bash 2>/dev/null || true)"
+[ -n "$windows_bash" ] || fail "Git Bash executable unavailable"
+cp "$windows_bash" "$fixture_root/claude.exe"
 chmod 755 "$fixture_root/claude.exe"
 
 PATH="$fixture_root:$PATH"
@@ -76,7 +77,12 @@ export ANTHROPIC_CONSOLE_AUTH_TOKEN=secret
 export BASH_ENV="$fixture_root/never-source"
 export ENV="$fixture_root/never-source-env"
 
-claude_runtime_build_command "$CLAUDE_LOCATOR_LAUNCH_PATH" /d /c "if defined ANTHROPIC_API_KEY (exit /b 41) else (echo direct-ok)"
+claude_runtime_build_command \
+  "$CLAUDE_LOCATOR_LAUNCH_PATH" \
+  --noprofile \
+  --norc \
+  -c \
+  'if [ -n "${ANTHROPIC_API_KEY+x}" ]; then exit 41; else printf "direct-ok\n"; fi'
 direct_output="$({
   claude_runtime_scrub_environment
   cd "$runtime_cwd"
@@ -84,20 +90,35 @@ direct_output="$({
 })"
 printf '%s' "$direct_output" | grep -Fq 'direct-ok' || fail "direct .exe transport or env scrubbing"
 
-claude_runtime_build_command "$CLAUDE_LOCATOR_LAUNCH_PATH" /d /c echo "space arg" "" "equals=value"
+claude_runtime_build_command \
+  "$CLAUDE_LOCATOR_LAUNCH_PATH" \
+  --noprofile \
+  --norc \
+  -c \
+  'printf "<%s>\n" "$@"' \
+  claude \
+  "space arg" \
+  "" \
+  "equals=value"
 argv_output="$({
   claude_runtime_scrub_environment
   cd "$runtime_cwd"
   MSYS2_ARG_CONV_EXCL='*' "${CLAUDE_RUNTIME_COMMAND[@]}"
 })"
 printf '%s' "$argv_output" | grep -Fq 'space arg' || fail "space argv lost"
+printf '%s' "$argv_output" | grep -Fq '<>' || fail "empty argv lost"
 printf '%s' "$argv_output" | grep -Fq 'equals=value' || fail "equals argv lost"
 
 python_bin="$(type -P python3 2>/dev/null || type -P python 2>/dev/null || true)"
 [ -n "$python_bin" ] || fail "Python unavailable for timeout transport"
 claude_runtime_check_launcher_dependency "$CLAUDE_LOCATOR_CANONICAL_TARGET" "$runtime_cwd" || fail "native Windows executable classification"
 [ "$CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_KIND" = "direct" ] || fail "native .exe transport kind"
-claude_runtime_build_command "$CLAUDE_LOCATOR_LAUNCH_PATH" /d /c "echo timeout-ok"
+claude_runtime_build_command \
+  "$CLAUDE_LOCATOR_LAUNCH_PATH" \
+  --noprofile \
+  --norc \
+  -c \
+  'printf "timeout-ok\n"'
 claude_runtime_prepare_python_argv "${CLAUDE_RUNTIME_COMMAND[@]}" || fail "production Python argv preparation"
 timeout_output="$({
   claude_runtime_scrub_environment
