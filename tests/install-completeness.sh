@@ -147,6 +147,38 @@ assert "installation is incomplete" not in data["summary"]
 PY
 pass "runner and doctor bootstrap both helpers from the tested checkout"
 
+# Establishing readlink trust must not execute a symlinked candidate to inspect
+# its own target. Both entry points reject the candidate before it can create the
+# marker outside the simulated fixed-FHS roots.
+readlink_anchor_root="$TEST_ROOT/readlink-anchor"
+readlink_anchor_usr="$readlink_anchor_root/usr/bin"
+readlink_anchor_bin="$readlink_anchor_root/bin"
+readlink_anchor_external="$readlink_anchor_root/external-readlink"
+readlink_anchor_marker="$readlink_anchor_root/executed"
+mkdir -p "$readlink_anchor_usr" "$readlink_anchor_bin"
+cat > "$readlink_anchor_external" <<SH
+#!/bin/bash
+printf executed > "$readlink_anchor_marker"
+exit 1
+SH
+chmod 755 "$readlink_anchor_external"
+ln -s "$readlink_anchor_external" "$readlink_anchor_usr/readlink"
+for bootstrap_script in "$ROOT/scripts/run-review.sh" "$ROOT/scripts/claude-doctor.sh"; do
+  if (
+    eval "$(sed -n '/^claude_bootstrap_fhs_symlink_safe() {$/,/^PATH=/p' "$bootstrap_script" | sed '$d')"
+    claude_build_trusted_bootstrap_path \
+      "" \
+      "$TEST_ROOT/missing-store" \
+      "$readlink_anchor_usr" \
+      "$readlink_anchor_bin" \
+      >/dev/null 2>&1
+  ); then
+    fail "$(basename "$bootstrap_script") accepted a symlinked initial readlink anchor"
+  fi
+  [ ! -e "$readlink_anchor_marker" ] || fail "$(basename "$bootstrap_script") executed an untrusted readlink anchor"
+done
+pass "runner and doctor establish readlink trust without candidate execution"
+
 # Validate the standard Debian/Ubuntu alternatives shape without admitting an
 # arbitrary symlink target: FHS entry -> /etc/alternatives entry -> FHS binary.
 alternatives_root="$TEST_ROOT/fhs-alternatives"

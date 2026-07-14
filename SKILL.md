@@ -256,7 +256,9 @@ caller's PATH as data, then builds its utility PATH only from fixed `/usr/bin` a
 `/bin`, fixed Git-for-Windows roots on Git Bash, plus physically resolved inherited
 directories inside `/nix/store`. A Nix profile symlink is accepted only when its
 final inode matches a regular executable target inside the immutable store. An FHS
-utility symlink is accepted only through a bounded `/usr/bin`, `/bin`, or
+`readlink` trust anchor must be a non-symlink executable or an inode-verified
+immutable-store target and is never executed to validate itself. Other FHS utility
+symlinks are accepted only through a bounded `/usr/bin`, `/bin`, or
 `/etc/alternatives` chain ending at a regular executable in `/usr/bin` or `/bin`.
 The validated Claude child still receives the original inherited PATH. Approving the prefix above grants
 unsandboxed execution to the installed skill script, so only approve the exact

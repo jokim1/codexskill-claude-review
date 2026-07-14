@@ -155,6 +155,46 @@ claude_bootstrap_utility_safe() {
   return 1
 }
 
+claude_bootstrap_readlink_safe() {
+  local candidate_path="$1"
+  local trusted_store_root="$2"
+  local fhs_usr_bin="$3"
+  local fhs_bin="$4"
+  local trusted_root=""
+  shift 4
+
+  case "$candidate_path" in
+    "$fhs_usr_bin"/*|"$fhs_bin"/*)
+      [ -f "$candidate_path" ] && [ -x "$candidate_path" ] && [ ! -L "$candidate_path" ]
+      return $?
+      ;;
+    "$trusted_store_root"/*)
+      # Store symlinks are proven by inode identity; no readlink executable is
+      # invoked while establishing this first trust anchor.
+      claude_bootstrap_utility_safe \
+        readlink \
+        "$candidate_path" \
+        "$trusted_store_root" \
+        "$fhs_usr_bin" \
+        "$fhs_bin" \
+        "/etc/alternatives" \
+        "" \
+        "$@"
+      return $?
+      ;;
+  esac
+
+  for trusted_root in "$@"; do
+    case "$candidate_path" in
+      "$trusted_root"/*)
+        [ -f "$candidate_path" ] && [ -x "$candidate_path" ] && [ ! -L "$candidate_path" ]
+        return $?
+        ;;
+    esac
+  done
+  return 1
+}
+
 claude_build_trusted_bootstrap_path() {
   local inherited_path="$1"
   local trusted_store_root="$2"
@@ -216,14 +256,11 @@ claude_build_trusted_bootstrap_path() {
   [ -n "$trusted_path" ] || return 1
   PATH="$trusted_path"
   trusted_readlink="$(type -P readlink 2>/dev/null || true)"
-  if ! claude_bootstrap_utility_safe \
-    readlink \
+  if ! claude_bootstrap_readlink_safe \
     "$trusted_readlink" \
     "$trusted_store_root" \
     "$fhs_usr_bin" \
     "$fhs_bin" \
-    "/etc/alternatives" \
-    "" \
     "${trusted_windows_roots[@]+"${trusted_windows_roots[@]}"}"; then
     printf 'Unsafe bootstrap utility entry: readlink\n' >&2
     return 1
@@ -268,6 +305,7 @@ PATH="$(claude_build_trusted_bootstrap_path "$CLAUDE_RUNTIME_INHERITED_PATH" "/n
 }
 export PATH
 unset -f claude_build_trusted_bootstrap_path
+unset -f claude_bootstrap_readlink_safe
 unset -f claude_bootstrap_utility_safe
 unset -f claude_bootstrap_fhs_symlink_safe
 unset BASH_ENV ENV

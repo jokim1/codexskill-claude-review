@@ -136,9 +136,11 @@ The bridge keeps a strict division of labor:
    PATH only from fixed FHS directories, fixed Git-for-Windows roots on Git Bash,
    and physically resolved immutable-store directories. Nix profile links are
    accepted only when their final inode matches a regular executable target in
-   the immutable store. FHS utility links may traverse only a bounded fixed-FHS
-   or `/etc/alternatives` chain whose final executable remains in `/usr/bin` or
-   `/bin`.
+   the immutable store. The first `readlink` trust anchor must be a non-symlink
+   fixed-FHS executable or an inode-verified immutable-store target; it is never
+   executed to validate itself. Other FHS utility links may traverse only a
+   bounded fixed-FHS or `/etc/alternatives` chain whose final executable remains
+   in `/usr/bin` or `/bin`.
 4. The runner selects Claude from inherited PATH, the official native-user
    launcher, or the documented platform-default Homebrew launcher and validates
    both its launch path and canonical target.
@@ -512,7 +514,9 @@ Trust validation prefers the fixed `/usr/bin` or `/bin` `stat` and `readlink`
 utilities. On NixOS it searches the captured inherited PATH and accepts a Nix
 profile symlink only after matching its final inode to a regular executable target
 inside the immutable `/nix/store` boundary. The bootstrap applies the same proof to
-all required utilities. Standard FHS alternatives are resolved with an already
+all required utilities. The initial `readlink` is accepted without executing it:
+it must be a non-symlink fixed-FHS executable or match a regular executable inode
+in the immutable store. Standard FHS alternatives are then resolved with that
 trusted `readlink`; every hop must stay under `/usr/bin`, `/bin`, or
 `/etc/alternatives`, and the final regular executable must be in `/usr/bin` or
 `/bin`. Git Bash additionally admits Git for Windows utilities only from its fixed
