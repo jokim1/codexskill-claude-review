@@ -107,6 +107,38 @@ chmod 555 "$portable_tools" "$portable_store/coreutils-test" "$portable_store"
 ) || fail "missing trust utility fails closed without false world-writable diagnosis"
 pass "trusted utility portability preserves fail-closed validation"
 
+gnu_stat="$(type -P gstat 2>/dev/null || true)"
+if [ -z "$gnu_stat" ] && stat --version 2>/dev/null | grep -q 'GNU coreutils'; then
+  gnu_stat="$(type -P stat)"
+fi
+if [ -n "$gnu_stat" ]; then
+  (
+    claude_locator_resolve_trusted_utility() {
+      case "${1:-}" in
+        stat) printf '%s' "$gnu_stat" ;;
+        readlink) printf '%s' "$real_readlink" ;;
+        *) return 1 ;;
+      esac
+    }
+    if claude_locator_parent_world_writable /usr/bin/env; then
+      exit 1
+    else
+      [ "$?" -eq 1 ] || exit 1
+    fi
+    if claude_locator_file_world_writable /usr/bin/env; then
+      exit 1
+    else
+      [ "$?" -eq 1 ] || exit 1
+    fi
+    cp "$TEST_ROOT/trusted/bin/claude" "$TEST_ROOT/trusted/bin/gnu-world-writable"
+    chmod 777 "$TEST_ROOT/trusted/bin/gnu-world-writable"
+    claude_locator_file_world_writable "$TEST_ROOT/trusted/bin/gnu-world-writable" || exit 1
+  ) || fail "GNU stat mode parsing"
+  pass "GNU stat fallback discards failed BSD-probe output"
+else
+  pass "GNU stat fallback test skipped when GNU stat is unavailable"
+fi
+
 (
   cd "$TEST_ROOT/work"
   PATH="../trusted/bin:/usr/bin:/bin"
