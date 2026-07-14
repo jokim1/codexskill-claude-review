@@ -7,21 +7,6 @@ PYTHON_BIN="$(command -v python3)"
 REAL_JQ="$(command -v jq 2>/dev/null || true)"
 
 make_fake_claude_root() {
-  local tmp_base="${TMPDIR:-}"
-  local tmp_real=""
-
-  if [ -n "$tmp_base" ] && [ -d "$tmp_base" ]; then
-    tmp_real="$(cd "$tmp_base" && pwd -P)"
-    case "$tmp_real" in
-      /tmp|/private/tmp|/tmp/*|/private/tmp/*)
-        ;;
-      *)
-        mktemp -d "${tmp_base%/}/claude-review-test-bin-XXXXXX"
-        return 0
-        ;;
-    esac
-  fi
-
   mkdir -p "$HOME/.codex"
   mktemp -d "$HOME/.codex/claude-test-bin-XXXXXX"
 }
@@ -192,7 +177,7 @@ if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
 fi
 
 if [ "${1:-}" = "-p" ]; then
-  prompt="${2:-}"
+  prompt="$(cat)"
   if [[ "$prompt" == *"Codex Claude skill preflight probe"* ]]; then
     if [ -n "${FAKE_CLAUDE_PROBE_OUTPUT:-}" ]; then
       printf '%s\n' "$FAKE_CLAUDE_PROBE_OUTPUT"
@@ -288,34 +273,12 @@ EOF
   chmod +x "$fake_root/bin/jq"
 }
 
-write_fake_python_stamp_failure() {
-  local fake_root="$1"
-
-  cat > "$fake_root/bin/python3" <<'EOF'
-#!/usr/bin/env bash
-
-set -euo pipefail
-
-if [ "${1:-}" = "-" ]; then
-  case "${3:-}" in
-    /tmp/claude-review-output-*)
-      exit 127
-      ;;
-  esac
-fi
-
-exec "$REAL_PYTHON_BIN" "$@"
-EOF
-  chmod +x "$fake_root/bin/python3"
-}
-
 run_mode_stamping_case() {
   local case_name="$1"
   local runner_mode="$2"
   local review_output="$3"
   local expected_mode="$4"
   local fail_jq_stamp="${5:-false}"
-  local fail_python_stamp="${6:-false}"
   local fake_root tmpdir output
 
   fake_root="$(make_fake_claude_root)"
@@ -326,10 +289,6 @@ run_mode_stamping_case() {
   if [ "$fail_jq_stamp" = "true" ] && [ -n "$REAL_JQ" ]; then
     write_fake_jq_stamp_failure "$fake_root"
   fi
-  if [ "$fail_python_stamp" = "true" ]; then
-    write_fake_python_stamp_failure "$fake_root"
-  fi
-
   cat > "$fake_root/bin/claude" <<'EOF'
 #!/usr/bin/env bash
 
@@ -346,7 +305,7 @@ if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
 fi
 
 if [ "${1:-}" = "-p" ]; then
-  prompt="${2:-}"
+  prompt="$(cat)"
   if [[ "$prompt" == *"Codex Claude skill preflight probe"* ]]; then
     printf '{"ok":true}\n'
     exit 0
@@ -397,8 +356,6 @@ run_mode_stamping_blocked_case() {
   if [ -n "$REAL_JQ" ]; then
     write_fake_jq_stamp_failure "$fake_root"
   fi
-  write_fake_python_stamp_failure "$fake_root"
-
   cat > "$fake_root/bin/claude" <<'EOF'
 #!/usr/bin/env bash
 
@@ -415,13 +372,13 @@ if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
 fi
 
 if [ "${1:-}" = "-p" ]; then
-  prompt="${2:-}"
+  prompt="$(cat)"
   if [[ "$prompt" == *"Codex Claude skill preflight probe"* ]]; then
     printf '{"ok":true}\n'
     exit 0
   fi
 
-  printf '{"status":"clean","mode":"code","summary":"ok","findings":[],"open_questions":[]}\n'
+  printf 'not-json\n'
   exit 0
 fi
 
@@ -448,7 +405,7 @@ EOF
     fail "mode stamping blocked fallback exited non-zero"
   }
 
-  if ! assert_blocked_result "mode stamping blocked fallback" "$output" "could not safely stamp" "Install jq or python3" ""; then
+  if ! assert_blocked_result "mode stamping blocked fallback" "$output" "could not safely stamp" "Install jq or a trusted python3" ""; then
     rm -rf "$fake_root" "$tmpdir"
     fail "mode stamping blocked fallback assertion failed"
   fi
@@ -593,15 +550,14 @@ if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
 fi
 
 if [ "${1:-}" = "-p" ]; then
-  prompt="${2:-}"
+  prompt="$(cat)"
   if [[ "$prompt" == *"Codex Claude skill preflight probe"* ]]; then
     printf '{"ok":true}\n'
     exit 0
   fi
 
-  stdin_payload="$(cat || true)"
-  if [ -n "$stdin_payload" ]; then
-    printf 'fake claude received unexpected stdin: %s bytes\n' "${#stdin_payload}" >&2
+  if [[ "$prompt" != *"review artifact"* ]]; then
+    printf 'fake claude did not receive the artifact on stdin\n' >&2
     exit 42
   fi
 
@@ -642,7 +598,7 @@ if data.get("status") != "clean" or data.get("summary") != "ok":
 PY
 
   rm -rf "$fake_root" "$tmpdir"
-  printf 'ok: timeout wrapper closes stdin\n'
+  printf 'ok: timeout wrapper streams prompt on stdin\n'
 }
 
 run_probe_timeout_case() {
@@ -669,7 +625,7 @@ if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
 fi
 
 if [ "${1:-}" = "-p" ]; then
-  prompt="${2:-}"
+  prompt="$(cat)"
   if [[ "$prompt" == *"Codex Claude skill preflight probe"* ]]; then
     sleep 5
     printf '{"ok":true}\n'
@@ -816,7 +772,7 @@ if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
 fi
 
 if [ "${1:-}" = "-p" ]; then
-  prompt="${2:-}"
+  prompt="$(cat)"
   has_safe_mode="false"
   for arg in "$@"; do
     if [ "$arg" = "--safe-mode" ]; then

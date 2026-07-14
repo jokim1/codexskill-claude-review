@@ -228,6 +228,9 @@ assert_line "$basic_output" "claude_version=2.test.0 (Claude Code fake)" "versio
 assert_line "$basic_output" "claude_auth_logged_in=True" "auth state"
 assert_line "$basic_output" "claude_auth_provider=firstParty" "auth provider"
 assert_line "$basic_output" "claude_auth_context=subscription_only_credentials_scrubbed" "auth context"
+assert_line "$basic_output" "python_runtime_status=safe" "trusted Python status"
+assert_line "$basic_output" "python_validation_scope=none" "trusted Python scope"
+assert_line "$basic_output" "python_validation_reason=none" "trusted Python reason"
 assert_line "$basic_output" "plain_print_probe_status=completed" "plain probe"
 assert_line "$basic_output" "safe_mode_print_probe_status=completed" "safe probe"
 assert_line "$basic_output" "runner_safe_mode=ok" "runner safe-mode contract"
@@ -254,6 +257,21 @@ grep -q '^ENV=absent$' "$path_log" || fail "doctor runtime scrubs ENV"
 grep -Eq '^cwd=/(private/)?tmp/claude-review-runtime-' "$path_log" || fail "doctor CWD uses isolated runtime directory"
 grep -q '^arg=\[\]$' "$path_log" || fail "doctor safe probe preserves empty --tools value"
 pass "doctor PATH discovery, runtime parity, env presence, argv, and redaction"
+
+unsafe_python_root="$TEST_ROOT/unsafe-python"
+unsafe_python_marker="$TEST_ROOT/unsafe-python-executed"
+mkdir -p "$unsafe_python_root/bin"
+cat > "$unsafe_python_root/bin/python3" <<SH
+#!/bin/bash
+printf executed > "$unsafe_python_marker"
+exit 99
+SH
+chmod 755 "$unsafe_python_root/bin/python3"
+unsafe_python_output="$(run_doctor "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$passwd_home" "$unsafe_python_root/bin:$path_value" "$TEST_ROOT/unsafe-python.log" --skip-probes)"
+assert_line "$unsafe_python_output" "python_runtime_status=launcher_unsupported" "script-shaped Python rejection"
+assert_line "$unsafe_python_output" "claude_runtime_status=unusable_runner" "untrusted Python blocks runtime probes"
+[ ! -e "$unsafe_python_marker" ] || fail "untrusted Python executed during doctor bootstrap"
+pass "doctor reports and never executes untrusted Python launchers"
 
 version_timeout_output="$({
   FAKE_CLAUDE_HANG_STAGE="version" \
@@ -324,6 +342,7 @@ for tool_name in dirname mktemp chmod rm grep; do
 done
 no_python_output="$(run_doctor "$no_python_skill" "$REPO_ROOT" "$REPO_ROOT" "$missing_home" "$no_python_tools" "$TEST_ROOT/no-python.log" --skip-probes 2>/dev/null)"
 assert_line "$no_python_output" "inherited_home_status=passwd_unavailable" "passwd parser unavailable status"
+assert_line "$no_python_output" "python_runtime_status=missing" "missing Python runtime status"
 pass "passwd parser unavailability is diagnostic and non-blocking"
 
 # Missing is explicitly inconclusive.

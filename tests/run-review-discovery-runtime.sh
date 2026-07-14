@@ -94,7 +94,9 @@ if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
   exit 0
 fi
 if [ "${1:-}" = "-p" ]; then
-  if [[ "${2:-}" == *"Codex Claude skill preflight probe"* ]]; then
+  prompt="$(cat)"
+  printf 'stdin_bytes=%s\n' "${#prompt}" >> "${FAKE_CLAUDE_LOG:?}"
+  if [[ "$prompt" == *"Codex Claude skill preflight probe"* ]]; then
     printf '{"ok":true}\n'
   else
     printf '{"status":"clean","mode":"code","summary":"ok","findings":[],"open_questions":[]}\n'
@@ -113,6 +115,7 @@ run_runner() {
   local home_value="$4"
   local path_value="$5"
   local fake_log="$6"
+  local artifact_file="${RUNNER_ARTIFACT_FILE:-$ARTIFACT_ROOT/claude-review-artifact.txt}"
   shift 6
 
   (
@@ -129,7 +132,7 @@ run_runner() {
     ENV="$TEST_ROOT/never-source-env" \
     /bin/bash "$skill_root/scripts/run-review.sh" \
       --mode code \
-      --artifact-file "$ARTIFACT_ROOT/claude-review-artifact.txt" \
+      --artifact-file "$artifact_file" \
       --base-prompt "$skill_root/prompts/code-review.base.md" \
       --schema-file "$skill_root/schemas/review-output.json" \
       --repo-root "$repo_root" \
@@ -232,6 +235,44 @@ grep -q '^preserved=runner-preserved$' "$native_log" || fail "runner dropped non
 grep -Eq '^cwd=/(private/)?tmp/claude-review-runtime-' "$native_log" || fail "runner did not use isolated runtime CWD"
 grep -q '^arg=\[\]$' "$native_log" || fail "runner lost empty --tools argv"
 pass "runner native fallback and direct-runtime call-site parity"
+
+near_limit_artifact="$ARTIFACT_ROOT/claude-review-near-argv-limit.txt"
+near_limit_log="$TEST_ROOT/near-limit.log"
+python3 -I - "$near_limit_artifact" <<'PY'
+from pathlib import Path
+import sys
+
+Path(sys.argv[1]).write_bytes(b"x" * 190000)
+PY
+near_limit_output="$(
+  RUNNER_ARTIFACT_FILE="$near_limit_artifact" \
+  run_runner "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$native_home" "$SYSTEM_PATH" "$near_limit_log"
+)"
+assert_json_status "$near_limit_output" clean ok
+near_limit_stdin_bytes="$(awk -F= '/^stdin_bytes=/{value=$2} END{print value+0}' "$near_limit_log")"
+[ "$near_limit_stdin_bytes" -gt 190000 ] || fail "near-limit artifact was not streamed in the final stdin prompt"
+if grep -Fq 'arg=[Review the provided artifact' "$near_limit_log"; then
+  fail "near-limit prompt leaked into a Claude argv element"
+fi
+pass "runner streams near-cap artifacts outside argv"
+
+python_startup_root="$TEST_ROOT/python-startup-injection"
+python_startup_marker="$TEST_ROOT/python-startup-executed"
+python_startup_log="$TEST_ROOT/python-startup.log"
+mkdir -p "$python_startup_root"
+cat > "$python_startup_root/sitecustomize.py" <<'PY'
+from pathlib import Path
+import os
+Path(os.environ["PYTHON_STARTUP_MARKER"]).write_text("executed")
+PY
+python_startup_output="$(
+  PYTHONPATH="$python_startup_root" \
+  PYTHON_STARTUP_MARKER="$python_startup_marker" \
+  run_runner "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$native_home" "$SYSTEM_PATH" "$python_startup_log"
+)"
+assert_json_status "$python_startup_output" clean ok
+[ ! -e "$python_startup_marker" ] || fail "runner loaded Python startup injection before Claude trust validation"
+pass "runner uses isolated Python despite inherited startup injection"
 
 # PATH remains authoritative over a healthy native fallback.
 path_root="$TEST_ROOT/path-root"

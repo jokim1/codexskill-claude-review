@@ -31,6 +31,7 @@ MODEL="$CLAUDE_CONFIG_DEFAULT_MODEL"
 MAX_BUDGET_USD="$CLAUDE_CONFIG_DEFAULT_MAX_BUDGET_USD"
 REVIEW_TIMEOUT_SECONDS="$CLAUDE_CONFIG_DEFAULT_REVIEW_TIMEOUT_SECONDS"
 CLAUDE_RUNTIME_CWD=""
+CLAUDE_PROCESS_DRIVER=""
 
 CLAUDE_BIN=""
 CLAUDE_TARGET=""
@@ -289,11 +290,16 @@ if ! load_required_claude_helper \
   "# claude-review-helper-complete: runtime_v1" \
   claude_runtime_check_launcher_dependency \
   claude_runtime_build_command \
+  claude_runtime_probe_with_timeout \
   claude_runtime_prepare_python_argv \
+  claude_runtime_python_transport_path \
+  claude_runtime_resolve_trusted_python \
   claude_runtime_resolve_path_dependency \
   claude_runtime_run_direct \
+  claude_runtime_run_with_timeout \
   claude_runtime_windows_executable_path \
-  claude_runtime_scrub_environment; then
+  claude_runtime_scrub_environment \
+  claude_runtime_write_python_driver; then
   emit_bridge_installation_incomplete "claude-runtime.sh"
   exit 0
 fi
@@ -311,6 +317,21 @@ fi
 CLAUDE_RUNTIME_CWD="$(mktemp -d /tmp/claude-review-runtime-XXXXXX)"
 chmod 700 "$CLAUDE_RUNTIME_CWD"
 trap 'rm -rf "$CLAUDE_RUNTIME_CWD"' EXIT
+CLAUDE_PROCESS_DRIVER="$CLAUDE_RUNTIME_CWD/process-driver.py"
+if claude_runtime_resolve_trusted_python "$REPO_ROOT" "$CLAUDE_INVOCATION_CWD" "$CLAUDE_RUNTIME_CWD"; then
+  if ! claude_runtime_write_python_driver "$CLAUDE_PROCESS_DRIVER" || \
+    ! "$CLAUDE_RUNTIME_PYTHON_BIN" -I - "$CLAUDE_PROCESS_DRIVER" <<'PY' >/dev/null 2>&1
+from pathlib import Path
+import sys
+
+driver = Path(sys.argv[1])
+compile(driver.read_text(encoding="utf-8"), str(driver), "exec")
+PY
+  then
+    emit_bridge_installation_incomplete "claude-runtime.sh"
+    exit 0
+  fi
+fi
 
 load_artifact_limits_or_emit_json() {
   local limits_error_file limits_error
@@ -344,7 +365,7 @@ canonical_path() {
   local cygpath_bin=""
   local python_path="$path"
 
-  if command -v python3 >/dev/null 2>&1; then
+  if [ -n "${CLAUDE_RUNTIME_PYTHON_BIN:-}" ]; then
     case "${OSTYPE:-}" in
       msys*|mingw*|cygwin*)
         if [ -x /usr/bin/cygpath ]; then
@@ -357,7 +378,7 @@ canonical_path() {
         python_path="$("$cygpath_bin" -aw "$path" 2>/dev/null)" || return 1
         ;;
     esac
-    MSYS2_ARG_CONV_EXCL='*' python3 - "$python_path" <<'PY'
+    MSYS2_ARG_CONV_EXCL='*' "$CLAUDE_RUNTIME_PYTHON_BIN" -I - "$python_path" <<'PY'
 from pathlib import Path
 import os
 import sys
@@ -548,88 +569,31 @@ build_claude_cmd() {
 
 run_built_claude_cmd_with_timeout() {
   local timeout_seconds="$1"
-  local msys_arg_conv_present="${MSYS2_ARG_CONV_EXCL+x}"
-  local msys_arg_conv_value="${MSYS2_ARG_CONV_EXCL-}"
-  shift
+  local input_path="$2"
+  shift 2
 
-  if [ -z "$timeout_seconds" ] || [ "${timeout_seconds:-0}" -le 0 ] || ! command -v python3 >/dev/null 2>&1; then
-    claude_runtime_run_direct "$CLAUDE_RUNTIME_CWD" "$@"
+  if [ -z "$timeout_seconds" ] || [ "${timeout_seconds:-0}" -le 0 ]; then
+    if [ "$input_path" = "-" ]; then
+      claude_runtime_run_direct "$CLAUDE_RUNTIME_CWD" "$@"
+    else
+      claude_runtime_build_command "$@"
+      (
+        claude_runtime_scrub_environment
+        CDPATH=
+        cd -P -- "$CLAUDE_RUNTIME_CWD" || exit 1
+        "${CLAUDE_RUNTIME_COMMAND[@]}" < "$input_path"
+      )
+    fi
     return
   fi
-
-  claude_runtime_prepare_python_argv "$@" || return 126
-
-  (
-    claude_runtime_scrub_environment
-    CDPATH=
-    cd -P -- "$CLAUDE_RUNTIME_CWD" || exit 1
-    MSYS2_ARG_CONV_EXCL='*' python3 - \
-      "$timeout_seconds" \
-      "$msys_arg_conv_present" \
-      "$msys_arg_conv_value" \
-      "${CLAUDE_RUNTIME_PYTHON_ARGV[@]}" <<'PY'
-import os
-import signal
-import subprocess
-import sys
-
-timeout = int(sys.argv[1])
-msys_arg_conv_present = sys.argv[2] == "x"
-msys_arg_conv_value = sys.argv[3]
-cmd = sys.argv[4:]
-child_env = os.environ.copy()
-if msys_arg_conv_present:
-    child_env["MSYS2_ARG_CONV_EXCL"] = msys_arg_conv_value
-else:
-    child_env.pop("MSYS2_ARG_CONV_EXCL", None)
-
-process_options = {}
-if os.name == "nt":
-    process_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-else:
-    process_options["start_new_session"] = True
-
-proc = subprocess.Popen(
-    cmd,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE,
-    text=True,
-    stdin=subprocess.DEVNULL,
-    cwd=os.getcwd(),
-    shell=False,
-    env=child_env,
-    **process_options,
-)
-try:
-    out, err = proc.communicate(timeout=timeout)
-except subprocess.TimeoutExpired:
-    try:
-        if os.name == "nt":
-            proc.terminate()
-        else:
-            os.killpg(proc.pid, signal.SIGTERM)
-    except OSError:
-        pass
-    try:
-        out, err = proc.communicate(timeout=3)
-    except subprocess.TimeoutExpired:
-        try:
-            if os.name == "nt":
-                proc.kill()
-            else:
-                os.killpg(proc.pid, signal.SIGKILL)
-        except OSError:
-            pass
-        out, err = proc.communicate()
-    sys.stdout.write(out or "")
-    sys.stderr.write(err or "")
-    sys.exit(124)
-
-sys.stdout.write(out)
-sys.stderr.write(err)
-sys.exit(proc.returncode)
-PY
-  )
+  [ -n "${CLAUDE_RUNTIME_PYTHON_BIN:-}" ] && [ -r "$CLAUDE_PROCESS_DRIVER" ] || return 125
+  claude_runtime_run_with_timeout \
+    "$CLAUDE_RUNTIME_PYTHON_BIN" \
+    "$CLAUDE_PROCESS_DRIVER" \
+    "$CLAUDE_RUNTIME_CWD" \
+    "$timeout_seconds" \
+    "$input_path" \
+    "$@"
 }
 
 run_candidate_claude_with_timeout() {
@@ -638,7 +602,17 @@ run_candidate_claude_with_timeout() {
   shift 2
 
   build_claude_cmd "$claude_bin" "$@"
-  run_built_claude_cmd_with_timeout "$timeout_seconds" "${SELECTED_CLAUDE_CMD[@]}"
+  run_built_claude_cmd_with_timeout "$timeout_seconds" - "${SELECTED_CLAUDE_CMD[@]}"
+}
+
+run_candidate_claude_with_timeout_input() {
+  local timeout_seconds="$1"
+  local input_path="$2"
+  local claude_bin="$3"
+  shift 3
+
+  build_claude_cmd "$claude_bin" "$@"
+  run_built_claude_cmd_with_timeout "$timeout_seconds" "$input_path" "${SELECTED_CLAUDE_CMD[@]}"
 }
 
 run_selected_claude_with_timeout() {
@@ -646,6 +620,14 @@ run_selected_claude_with_timeout() {
   shift
 
   run_candidate_claude_with_timeout "$timeout_seconds" "$CLAUDE_BIN" "$@"
+}
+
+run_selected_claude_with_timeout_input() {
+  local timeout_seconds="$1"
+  local input_path="$2"
+  shift 2
+
+  run_candidate_claude_with_timeout_input "$timeout_seconds" "$input_path" "$CLAUDE_BIN" "$@"
 }
 
 review_timeout_model_is_opus() {
@@ -846,10 +828,10 @@ stamp_review_output_mode() {
     fi
   fi
 
-  if command -v python3 >/dev/null 2>&1; then
+  if [ -n "${CLAUDE_RUNTIME_PYTHON_BIN:-}" ]; then
     tmp_output="$(mktemp /tmp/claude-review-output-XXXXXX)"
     printf '%s\n' "$output" > "$tmp_output"
-    if python3 - "$MODE" "$tmp_output" <<'PY'
+    if "$CLAUDE_RUNTIME_PYTHON_BIN" -I - "$MODE" "$tmp_output" <<'PY' 2>/dev/null
 import json
 from pathlib import Path
 import sys
@@ -972,6 +954,7 @@ probe_runner_usability() {
   local probe_timeout_seconds="$LIVE_PROBE_TIMEOUT_SECONDS"
   local probe_schema='{"type":"object","properties":{"ok":{"const":true}},"required":["ok"],"additionalProperties":false}'
   local probe_args=()
+  local probe_prompt_file="$CLAUDE_RUNTIME_CWD/preflight-prompt.txt"
   local dependency_path=""
 
   case "$probe_timeout_seconds" in
@@ -980,11 +963,11 @@ probe_runner_usability() {
       ;;
   esac
 
-  if ! command -v python3 >/dev/null 2>&1; then
+  if [ -z "${CLAUDE_RUNTIME_PYTHON_BIN:-}" ] || [ ! -r "$CLAUDE_PROCESS_DRIVER" ]; then
     record_failure \
       "unusable_runner" \
-      "Claude Code preflight requires python3 for bounded, discrete-argv execution." \
-      "Install python3 in Codex's inherited PATH, then retry."
+      "Claude Code preflight requires a trusted python3 for bounded, discrete-argv execution." \
+      "Install python3 in Codex's inherited PATH outside repository, invocation-CWD, temporary, world-writable file, and world-writable parent boundaries, then retry. Python status: ${CLAUDE_RUNTIME_PYTHON_STATUS:-missing}."
     return 1
   fi
 
@@ -1069,9 +1052,10 @@ probe_runner_usability() {
     return 1
   fi
 
+  printf '%s\n' 'Codex Claude skill preflight probe. Return {"ok": true} and nothing else.' > "$probe_prompt_file"
+  chmod 600 "$probe_prompt_file"
   probe_args=(
     -p \
-    'Codex Claude skill preflight probe. Return {"ok": true} and nothing else.' \
     --safe-mode
     --output-format
     json
@@ -1099,7 +1083,7 @@ probe_runner_usability() {
   fi
 
   set +e
-  probe_output="$(run_candidate_claude_with_timeout "$probe_timeout_seconds" "$claude_bin" "${probe_args[@]}" 2>&1)"
+  probe_output="$(run_candidate_claude_with_timeout_input "$probe_timeout_seconds" "$probe_prompt_file" "$claude_bin" "${probe_args[@]}" 2>&1)"
   probe_status=$?
   set -e
 
@@ -1351,43 +1335,40 @@ if ! resolve_claude_runner; then
   exit 0
 fi
 
-system_prompt="$(cat "$BASE_PROMPT")"
+system_prompt_file="$CLAUDE_RUNTIME_CWD/system-prompt.txt"
+cat "$BASE_PROMPT" > "$system_prompt_file"
 
 if [ "${#APPEND_PROMPTS[@]}" -gt 0 ]; then
   for append_prompt in "${APPEND_PROMPTS[@]}"; do
     if [ -n "$append_prompt" ] && [ -f "$append_prompt" ] && [ -s "$append_prompt" ]; then
-      system_prompt="${system_prompt}
-
-Additional review instructions from ${append_prompt}:
-
-$(cat "$append_prompt")"
+      {
+        printf '\n\nAdditional review instructions from %s:\n\n' "$append_prompt"
+        cat "$append_prompt"
+      } >> "$system_prompt_file"
     fi
   done
 fi
+chmod 600 "$system_prompt_file"
+system_prompt_transport="$(claude_runtime_python_transport_path "$system_prompt_file")"
 
-artifact_body="$(cat "$ARTIFACT_FILE")"
 schema_json="$(tr -d '\n' < "$SCHEMA_FILE")"
-
-prompt_sections=()
-prompt_sections+=("Review the provided artifact and return JSON matching the supplied schema.")
-prompt_sections+=("")
-prompt_sections+=("Mode: $MODE")
-[ -n "$REPO_ROOT" ] && prompt_sections+=("Repo root: $REPO_ROOT")
-[ -n "$BRANCH" ] && prompt_sections+=("Branch: $BRANCH")
-[ -n "$BASE_BRANCH" ] && prompt_sections+=("Base branch: $BASE_BRANCH")
-[ -n "$PR_NUMBER" ] && prompt_sections+=("PR number: $PR_NUMBER")
-[ -n "$REVIEW_INSTRUCTIONS" ] && prompt_sections+=("Extra review instructions: $REVIEW_INSTRUCTIONS")
-prompt_sections+=("")
-prompt_sections+=("Artifact:")
-prompt_sections+=('```text')
-prompt_sections+=("$artifact_body")
-prompt_sections+=('```')
-
-user_prompt="$(printf '%s\n' "${prompt_sections[@]}")"
+review_prompt_file="$CLAUDE_RUNTIME_CWD/review-prompt.txt"
+{
+  printf '%s\n\n' 'Review the provided artifact and return JSON matching the supplied schema.'
+  printf 'Mode: %s\n' "$MODE"
+  [ -n "$REPO_ROOT" ] && printf 'Repo root: %s\n' "$REPO_ROOT"
+  [ -n "$BRANCH" ] && printf 'Branch: %s\n' "$BRANCH"
+  [ -n "$BASE_BRANCH" ] && printf 'Base branch: %s\n' "$BASE_BRANCH"
+  [ -n "$PR_NUMBER" ] && printf 'PR number: %s\n' "$PR_NUMBER"
+  [ -n "$REVIEW_INSTRUCTIONS" ] && printf 'Extra review instructions: %s\n' "$REVIEW_INSTRUCTIONS"
+  printf '\nArtifact:\n```text\n'
+  cat "$ARTIFACT_FILE"
+  printf '\n```\n'
+} > "$review_prompt_file"
+chmod 600 "$review_prompt_file"
 
 cmd_args=(
   -p
-  "$user_prompt"
   --safe-mode
   --output-format
   json
@@ -1406,8 +1387,8 @@ cmd_args=(
   "$EFFORT"
   --max-budget-usd
   "$MAX_BUDGET_USD"
-  --append-system-prompt
-  "$system_prompt"
+  --append-system-prompt-file
+  "$system_prompt_transport"
 )
 
 if [ -n "$MODEL" ]; then
@@ -1421,7 +1402,7 @@ REVIEW_TIMEOUT_ATTEMPTS="1"
 REVIEW_TIMEOUT_ATTEMPT_SECONDS="${REVIEW_EFFECTIVE_TIMEOUT_SECONDS}s"
 
 set +e
-output="$(run_selected_claude_with_timeout "$REVIEW_EFFECTIVE_TIMEOUT_SECONDS" "${cmd_args[@]}" 2>&1)"
+output="$(run_selected_claude_with_timeout_input "$REVIEW_EFFECTIVE_TIMEOUT_SECONDS" "$review_prompt_file" "${cmd_args[@]}" 2>&1)"
 run_status=$?
 set -e
 
@@ -1430,7 +1411,7 @@ if [ "$run_status" -eq 124 ] && [ "$REVIEW_RETRY_TIMEOUT_SECONDS" -gt "$REVIEW_E
   REVIEW_TIMEOUT_ATTEMPT_SECONDS="${REVIEW_EFFECTIVE_TIMEOUT_SECONDS}s, ${REVIEW_RETRY_TIMEOUT_SECONDS}s"
 
   set +e
-  output="$(run_selected_claude_with_timeout "$REVIEW_RETRY_TIMEOUT_SECONDS" "${cmd_args[@]}" 2>&1)"
+  output="$(run_selected_claude_with_timeout_input "$REVIEW_RETRY_TIMEOUT_SECONDS" "$review_prompt_file" "${cmd_args[@]}" 2>&1)"
   run_status=$?
   set -e
 fi
@@ -1453,7 +1434,7 @@ if ! stamped_output="$(stamp_review_output_mode "$output")"; then
   emit_json \
     "blocked" \
     "Claude review returned output, but the runner could not safely stamp the requested mode." \
-    "Install jq or python3, or retry after ensuring Claude returns valid structured JSON."
+    "Install jq or a trusted python3, or retry after ensuring Claude returns valid structured JSON."
   exit 0
 fi
 

@@ -81,6 +81,395 @@ claude_runtime_windows_executable_path() {
   "$cygpath_bin" -m "$executable_path" 2>/dev/null
 }
 
+claude_runtime_resolve_trusted_python() {
+  local repo_root="${1:-}"
+  local invocation_cwd="${2:-${PWD:-/}}"
+  local execution_cwd="${3:-${PWD:-/}}"
+  local python_path=""
+  local dependency_path=""
+
+  CLAUDE_RUNTIME_PYTHON_BIN=""
+  CLAUDE_RUNTIME_PYTHON_CANONICAL_TARGET=""
+  CLAUDE_RUNTIME_PYTHON_STATUS="missing"
+  CLAUDE_RUNTIME_PYTHON_VALIDATION_SCOPE=""
+  CLAUDE_RUNTIME_PYTHON_VALIDATION_STATUS=""
+
+  declare -F claude_locator_validate_candidate >/dev/null 2>&1 || {
+    CLAUDE_RUNTIME_PYTHON_STATUS="validation_unavailable"
+    return 1
+  }
+  declare -F claude_locator_validate_launcher_dependency >/dev/null 2>&1 || {
+    CLAUDE_RUNTIME_PYTHON_STATUS="validation_unavailable"
+    return 1
+  }
+
+  python_path="$(type -P python3 2>/dev/null || true)"
+  [ -n "$python_path" ] || return 1
+  if ! claude_locator_validate_candidate "$python_path" "$repo_root" "$invocation_cwd"; then
+    CLAUDE_RUNTIME_PYTHON_STATUS="unsafe"
+    CLAUDE_RUNTIME_PYTHON_VALIDATION_SCOPE="$CLAUDE_LOCATOR_VALIDATION_SCOPE"
+    CLAUDE_RUNTIME_PYTHON_VALIDATION_STATUS="$CLAUDE_LOCATOR_VALIDATION_STATUS"
+    return 1
+  fi
+
+  CLAUDE_RUNTIME_PYTHON_BIN="$CLAUDE_LOCATOR_LAUNCH_PATH"
+  CLAUDE_RUNTIME_PYTHON_CANONICAL_TARGET="$CLAUDE_LOCATOR_CANONICAL_TARGET"
+  if ! claude_runtime_check_launcher_dependency "$CLAUDE_RUNTIME_PYTHON_CANONICAL_TARGET" "$execution_cwd"; then
+    CLAUDE_RUNTIME_PYTHON_STATUS="launcher_dependency_${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS}"
+    CLAUDE_RUNTIME_PYTHON_BIN=""
+    return 1
+  fi
+  # Isolated mode must be an interpreter option. A script-shaped python3
+  # launcher would receive -I as a script argument instead, so fail closed.
+  if [ "$CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_KIND" != "direct" ]; then
+    CLAUDE_RUNTIME_PYTHON_STATUS="launcher_unsupported"
+    CLAUDE_RUNTIME_PYTHON_BIN=""
+    return 1
+  fi
+  for dependency_path in "${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATHS[@]+"${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATHS[@]}"}"; do
+    if ! claude_locator_validate_launcher_dependency "$dependency_path" "$repo_root" "$invocation_cwd"; then
+      CLAUDE_RUNTIME_PYTHON_STATUS="launcher_dependency_unsafe"
+      CLAUDE_RUNTIME_PYTHON_VALIDATION_SCOPE="$CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_SCOPE"
+      CLAUDE_RUNTIME_PYTHON_VALIDATION_STATUS="$CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_STATUS"
+      CLAUDE_RUNTIME_PYTHON_BIN=""
+      return 1
+    fi
+  done
+
+  CLAUDE_RUNTIME_PYTHON_STATUS="safe"
+  return 0
+}
+
+claude_runtime_write_python_driver() {
+  local destination="$1"
+
+  (
+    umask 077
+    while IFS= read -r driver_line || [ -n "$driver_line" ]; do
+      printf '%s\n' "$driver_line"
+    done > "$destination" <<'PY'
+import ctypes
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+
+
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
+
+
+if os.name == "nt":
+    from ctypes import wintypes
+
+    class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_longlong),
+            ("PerJobUserTimeLimit", ctypes.c_longlong),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class IO_COUNTERS(ctypes.Structure):
+        _fields_ = [
+            ("ReadOperationCount", ctypes.c_ulonglong),
+            ("WriteOperationCount", ctypes.c_ulonglong),
+            ("OtherOperationCount", ctypes.c_ulonglong),
+            ("ReadTransferCount", ctypes.c_ulonglong),
+            ("WriteTransferCount", ctypes.c_ulonglong),
+            ("OtherTransferCount", ctypes.c_ulonglong),
+        ]
+
+    class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
+            ("IoInfo", IO_COUNTERS),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+    _kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    _kernel32.SetInformationJobObject.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+    ]
+    _kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    _kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    _kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    _kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    _kernel32.TerminateJobObject.restype = wintypes.BOOL
+    _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    _kernel32.CloseHandle.restype = wintypes.BOOL
+
+
+def _create_kill_on_close_job():
+    if os.name != "nt":
+        return None
+    job = _kernel32.CreateJobObjectW(None, None)
+    if not job:
+        raise ctypes.WinError(ctypes.get_last_error())
+    info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    if not _kernel32.SetInformationJobObject(
+        job,
+        JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
+        ctypes.byref(info),
+        ctypes.sizeof(info),
+    ):
+        error = ctypes.WinError(ctypes.get_last_error())
+        _kernel32.CloseHandle(job)
+        raise error
+    return job
+
+
+def _close_job(job):
+    if job is not None:
+        _kernel32.CloseHandle(job)
+
+
+def _stop_process_tree(proc, job, force):
+    try:
+        if os.name == "nt":
+            if job is not None:
+                _kernel32.TerminateJobObject(job, 1)
+            else:
+                proc.kill()
+        else:
+            os.killpg(proc.pid, signal.SIGKILL if force else signal.SIGTERM)
+    except OSError:
+        pass
+
+
+def _close_pipe(pipe):
+    if pipe is not None:
+        try:
+            pipe.close()
+        except OSError:
+            pass
+
+
+def _bounded_timeout_cleanup(proc, job):
+    _stop_process_tree(proc, job, False)
+    try:
+        return proc.communicate(timeout=3)
+    except subprocess.TimeoutExpired:
+        _stop_process_tree(proc, job, True)
+        try:
+            return proc.communicate(timeout=3)
+        except subprocess.TimeoutExpired as exc:
+            _close_pipe(proc.stdin)
+            _close_pipe(proc.stdout)
+            _close_pipe(proc.stderr)
+            try:
+                proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                pass
+            return exc.output or "", exc.stderr or ""
+
+
+def _child_environment(msys_present, msys_value):
+    child_env = os.environ.copy()
+    if msys_present:
+        child_env["MSYS2_ARG_CONV_EXCL"] = msys_value
+    else:
+        child_env.pop("MSYS2_ARG_CONV_EXCL", None)
+    return child_env
+
+
+def _run_process(timeout, msys_present, msys_value, input_path, cmd):
+    input_handle = None
+    input_payload = None
+    stdin_value = subprocess.DEVNULL
+    if input_path == "@probe":
+        stdin_value = subprocess.PIPE
+        input_payload = "Return OK only.\n"
+    elif input_path != "-":
+        input_handle = open(input_path, "r", encoding="utf-8", newline="")
+        stdin_value = input_handle
+
+    process_options = {}
+    job = _create_kill_on_close_job()
+    proc = None
+    if os.name == "nt":
+        process_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        process_options["start_new_session"] = True
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=os.getcwd(),
+            shell=False,
+            stdin=stdin_value,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=_child_environment(msys_present, msys_value),
+            **process_options,
+        )
+        if os.name == "nt" and not _kernel32.AssignProcessToJobObject(
+            job, wintypes.HANDLE(int(proc._handle))
+        ):
+            error = ctypes.WinError(ctypes.get_last_error())
+            proc.terminate()
+            try:
+                proc.communicate(timeout=1)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            raise error
+        try:
+            out, err = proc.communicate(input_payload, timeout=timeout)
+            timed_out = False
+        except subprocess.TimeoutExpired:
+            out, err = _bounded_timeout_cleanup(proc, job)
+            timed_out = True
+        return proc, out or "", err or "", timed_out
+    finally:
+        if input_handle is not None:
+            input_handle.close()
+        _close_job(job)
+
+
+def _classify(out, err, returncode):
+    combined = f"{out}\n{err}"
+    if re.search(r"oauth_refresh|\.claude", combined, re.I) and re.search(
+        r"EPERM|EACCES|permission denied|operation not permitted", combined, re.I
+    ):
+        return "claude_state_write_denied"
+    if re.search(r"not logged in|auth login|setup-token|authentication", combined, re.I):
+        return "authentication_unavailable"
+    if re.search(r"maximum budget|error_max_budget_usd", combined, re.I):
+        return "budget_exhausted"
+    return "ok" if returncode == 0 else "unexpected_failure"
+
+
+def main():
+    if len(sys.argv) < 8 or sys.argv[1] not in {"run", "probe"}:
+        raise SystemExit(2)
+    mode = sys.argv[1]
+    label = sys.argv[2]
+    timeout = int(sys.argv[3])
+    msys_present = sys.argv[4] == "x"
+    msys_value = sys.argv[5]
+    input_path = sys.argv[6]
+    cmd = sys.argv[7:]
+    started = time.monotonic()
+    try:
+        proc, out, err, timed_out = _run_process(
+            timeout, msys_present, msys_value, input_path, cmd
+        )
+    except (OSError, ValueError) as exc:
+        if mode == "probe":
+            print(f"{label}_status=spawn_failed")
+            print(f"{label}_error_type={type(exc).__name__}")
+            return 0
+        print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        return 126
+
+    returncode = proc.returncode if proc.returncode is not None else -1
+    if mode == "probe":
+        elapsed = time.monotonic() - started
+        print(f"{label}_status={'timeout' if timed_out else 'completed'}")
+        print(f"{label}_returncode={returncode}")
+        print(f"{label}_elapsed_seconds={elapsed:.2f}")
+        print(f"{label}_stdout_bytes={len(out)}")
+        print(f"{label}_stderr_bytes={len(err)}")
+        print(f"{label}_classification={_classify(out, err, returncode)}")
+        return 0
+
+    sys.stdout.write(out)
+    sys.stderr.write(err)
+    return 124 if timed_out else returncode
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+PY
+  )
+}
+
+claude_runtime_python_transport_path() {
+  local path="$1"
+  local cygpath_bin=""
+
+  case "${OSTYPE:-}" in
+    msys*|mingw*|cygwin*)
+      if [ -x /usr/bin/cygpath ]; then
+        cygpath_bin=/usr/bin/cygpath
+      elif [ -x /usr/bin/cygpath.exe ]; then
+        cygpath_bin=/usr/bin/cygpath.exe
+      else
+        return 1
+      fi
+      claude_runtime_windows_executable_path "$path" "$cygpath_bin"
+      ;;
+    *)
+      printf '%s' "$path"
+      ;;
+  esac
+}
+
+claude_runtime_invoke_python_driver() {
+  local mode="$1"
+  local label="$2"
+  local python_bin="$3"
+  local driver_path="$4"
+  local runtime_cwd="$5"
+  local timeout_seconds="$6"
+  local input_path="$7"
+  local msys_arg_conv_present="${MSYS2_ARG_CONV_EXCL+x}"
+  local msys_arg_conv_value="${MSYS2_ARG_CONV_EXCL-}"
+  local driver_transport=""
+  local input_transport="$input_path"
+  shift 7
+
+  claude_runtime_prepare_python_argv "$@" || return 126
+  driver_transport="$(claude_runtime_python_transport_path "$driver_path")" || return 126
+  case "$input_path" in
+    -|@probe)
+      ;;
+    *)
+      input_transport="$(claude_runtime_python_transport_path "$input_path")" || return 126
+      ;;
+  esac
+
+  (
+    claude_runtime_scrub_environment
+    CDPATH=
+    cd -P -- "$runtime_cwd" || exit 1
+    MSYS2_ARG_CONV_EXCL='*' "$python_bin" -I "$driver_transport" \
+      "$mode" \
+      "$label" \
+      "$timeout_seconds" \
+      "$msys_arg_conv_present" \
+      "$msys_arg_conv_value" \
+      "$input_transport" \
+      "${CLAUDE_RUNTIME_PYTHON_ARGV[@]}"
+  )
+}
+
+claude_runtime_run_with_timeout() {
+  claude_runtime_invoke_python_driver run - "$@"
+}
+
+claude_runtime_probe_with_timeout() {
+  local label="$1"
+  shift
+  claude_runtime_invoke_python_driver probe "$label" "$@"
+}
+
 claude_runtime_run_direct() {
   local runtime_cwd="$1"
   local launch_path="$2"

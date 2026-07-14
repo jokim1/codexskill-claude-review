@@ -4,7 +4,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_ROOT="$(mktemp -d /tmp/claude-install-completeness-XXXXXX)"
-trap 'rm -rf "$TEST_ROOT"' EXIT
+TRUSTED_PYTHON_TOOLS="$(mktemp -d "$HOME/.claude-review-bootstrap-python-XXXXXX")"
+trap 'rm -rf "$TEST_ROOT" "$TRUSTED_PYTHON_TOOLS"' EXIT
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -51,6 +52,14 @@ for helper in scripts/claude-locator.sh scripts/claude-runtime.sh; do
     git -C "$ROOT" check-ignore -q "$helper" && fail "$helper is ignored before commit"
   fi
 done
+for runtime_symbol in \
+  claude_runtime_resolve_trusted_python \
+  claude_runtime_write_python_driver \
+  claude_runtime_python_transport_path \
+  claude_runtime_run_with_timeout \
+  claude_runtime_probe_with_timeout; do
+  grep -Fq "${runtime_symbol}()" "$ROOT/scripts/claude-runtime.sh" || fail "runtime helper missing $runtime_symbol"
+done
 pass "new helpers are complete and CI-trackable with executable modes"
 
 git -C "$ROOT" check-ignore -q docs/local-plans/completeness-probe.md || fail "docs/local-plans is not ignored"
@@ -73,14 +82,17 @@ mkdir -p "$TEST_ROOT/home" "$bootstrap_skill/scripts" "$bootstrap_tools"
 cp "$ROOT"/scripts/*.sh "$bootstrap_skill/scripts/"
 chmod 755 "$bootstrap_skill"/scripts/*.sh
 disable_homebrew_paths "$bootstrap_skill/scripts/claude-locator.sh" "$TEST_ROOT/disabled-homebrew/claude"
-for tool_name in awk basename chmod cut dirname git grep head id mktemp python3 pwd readlink rm sed sort stat tail tr uname wc; do
+for tool_name in awk basename chmod cut dirname git grep head id mktemp pwd readlink rm sed sort stat tail tr uname wc; do
   tool_path="$(type -P "$tool_name" 2>/dev/null || true)"
   [ -n "$tool_path" ] || fail "bootstrap tool unavailable: $tool_name"
   ln -s "$tool_path" "$bootstrap_tools/$tool_name"
 done
+python_path="$(type -P python3 2>/dev/null || true)"
+[ -n "$python_path" ] || fail "bootstrap tool unavailable: python3"
+ln -s "$python_path" "$TRUSTED_PYTHON_TOOLS/python3"
 doctor_output="$({
   cd "$ROOT"
-  HOME="$TEST_ROOT/home" PATH="$bootstrap_tools" \
+  HOME="$TEST_ROOT/home" PATH="$TRUSTED_PYTHON_TOOLS:$bootstrap_tools" \
     /bin/bash "$bootstrap_skill/scripts/claude-doctor.sh" \
       --repo-root "$ROOT" \
       --skill-root "$bootstrap_skill" \
@@ -90,11 +102,12 @@ doctor_output="$({
 })"
 printf '%s\n' "$doctor_output" | grep -Fqx 'doctor_status=ok' || fail "doctor bootstrap from checkout"
 printf '%s\n' "$doctor_output" | grep -Fqx 'claude_runtime_contract=direct_inherited_path_v1' || fail "doctor runtime helper bootstrap"
+printf '%s\n' "$doctor_output" | grep -Fqx 'python_runtime_status=safe' || fail "doctor trusted Python bootstrap"
 
 printf 'artifact\n' > "$TEST_ROOT/claude-review-artifact.txt"
 runner_output="$({
   cd "$ROOT"
-  HOME="$TEST_ROOT/home" PATH="$bootstrap_tools" \
+  HOME="$TEST_ROOT/home" PATH="$TRUSTED_PYTHON_TOOLS:$bootstrap_tools" \
     /bin/bash "$bootstrap_skill/scripts/run-review.sh" \
       --mode code \
       --artifact-file "$TEST_ROOT/claude-review-artifact.txt" \

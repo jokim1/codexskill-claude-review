@@ -474,11 +474,32 @@ claude_locator_boundary_status() {
   local repo_root="$2"
   local invocation_cwd="$3"
   local writable_status=0
+  local temporary_root=""
+  local temporary_roots=("/tmp" "/private/tmp")
 
-  if claude_locator_path_within "$path" "/tmp" || claude_locator_path_within "$path" "/private/tmp"; then
-    CLAUDE_LOCATOR_BOUNDARY_STATUS="temporary_path"
-    return 1
-  fi
+  [ -n "${TMPDIR:-}" ] && temporary_roots+=("$TMPDIR")
+  [ -n "${TEMP:-}" ] && temporary_roots+=("$TEMP")
+  [ -n "${TMP:-}" ] && temporary_roots+=("$TMP")
+  case "${OSTYPE:-}" in
+    darwin*)
+      # macOS per-user temporary roots live below this namespace even when
+      # TMPDIR was stripped by a parent process.
+      temporary_roots+=("/var/folders" "/private/var/folders")
+      ;;
+  esac
+  for temporary_root in "${temporary_roots[@]}"; do
+    case "$temporary_root" in
+      /*)
+        ;;
+      *)
+        continue
+        ;;
+    esac
+    if claude_locator_path_within "$path" "$temporary_root"; then
+      CLAUDE_LOCATOR_BOUNDARY_STATUS="temporary_path"
+      return 1
+    fi
+  done
   if [ -n "$repo_root" ] && claude_locator_path_within "$path" "$repo_root"; then
     CLAUDE_LOCATOR_BOUNDARY_STATUS="repository_path"
     return 1

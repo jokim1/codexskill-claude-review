@@ -227,6 +227,14 @@ This bridge intentionally does not use Anthropic Console API billing. It scrubs
 `ANTHROPIC_API_KEY` and related Anthropic API credential env vars before invoking
 `claude`.
 
+The bridge resolves one exact `python3` from Codex's inherited PATH, applies the
+same launcher/symlink/temp/world-writable trust policy used for Claude, rejects
+script-shaped Python launchers, and invokes the validated native interpreter with
+isolated mode (`-I`). Python startup files, the current directory, `PYTHONPATH`,
+and other `PYTHON*` injection variables therefore cannot run bridge code before
+Claude's launcher is validated. Doctor reports `python_runtime_status` and the
+corresponding validation scope/reason without executing a rejected interpreter.
+
 ## First-Time Check
 
 Start with the bridge's own post-install check so discovery, trust, direct runtime,
@@ -486,9 +494,10 @@ not treated as dangling and remain authoritative fail-closed diagnoses.
 Every selected launcher is normalized to an absolute path by physically resolving
 its parent, while its final symlink name is preserved for execution. The canonical
 target is recorded separately. Launch entries and every symlink hop must stay
-outside repo/invocation/temp boundaries and world-writable parents; the canonical
-target must also be a regular, executable, non-world-writable file before Claude
-runs.
+outside repo/invocation/temp boundaries and world-writable parents; temp boundaries
+include `/tmp`, `/private/tmp`, inherited absolute `TMPDIR`/`TEMP`/`TMP` roots, and
+the macOS per-user `/var/folders` namespace. The canonical target must also be a
+regular, executable, non-world-writable file before Claude runs.
 
 Trust validation prefers the fixed `/usr/bin` or `/bin` `stat` and `readlink`
 utilities. On NixOS it may use PATH-resolved regular executables only when their
@@ -513,6 +522,16 @@ optional `env NAME` token, launcher, and unchanged remaining arguments as discre
 argv. The bridge disables automatic MSYS conversion only while entering native
 Python, then restores the inherited setting for Claude; it does not build a shell
 command string or depend on ambient MSYS argument-conversion settings.
+
+Review and preflight prompt bodies are written with mode `0600` inside the private
+runtime directory and streamed to Claude on stdin. The bounded artifact therefore
+never occupies one OS argv element, including near the 200000-byte review cap;
+control flags, schema, model, and other non-artifact values remain discrete argv.
+On Windows, the shared Python driver assigns Claude and its descendants to a
+kill-on-close Job Object. Timeout cleanup terminates that whole tree and uses only
+bounded output-drain waits, so a grandchild retaining inherited pipes cannot keep
+runner or doctor alive indefinitely. POSIX continues to use a private process
+group with the same bounded drain behavior.
 
 This direct-runtime hardening intentionally removes the former implicit login-
 profile fallback. A launcher whose shebang names an interpreter available only

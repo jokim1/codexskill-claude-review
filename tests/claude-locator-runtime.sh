@@ -7,7 +7,8 @@ LOCATOR="$ROOT/scripts/claude-locator.sh"
 RUNTIME="$ROOT/scripts/claude-runtime.sh"
 TEST_ROOT="$(mktemp -d "$HOME/.claude-review-helper-test-XXXXXX")"
 TEMP_BOUNDARY_ROOT="$(mktemp -d /tmp/claude-review-boundary-test-XXXXXX)"
-trap 'chmod -R u+w "$TEST_ROOT" "$TEMP_BOUNDARY_ROOT" 2>/dev/null || true; rm -rf "$TEST_ROOT" "$TEMP_BOUNDARY_ROOT"' EXIT
+PLATFORM_TEMP_BOUNDARY_ROOT=""
+trap 'chmod -R u+w "$TEST_ROOT" "$TEMP_BOUNDARY_ROOT" ${PLATFORM_TEMP_BOUNDARY_ROOT:+"$PLATFORM_TEMP_BOUNDARY_ROOT"} 2>/dev/null || true; rm -rf "$TEST_ROOT" "$TEMP_BOUNDARY_ROOT"; [ -z "$PLATFORM_TEMP_BOUNDARY_ROOT" ] || rm -rf "$PLATFORM_TEMP_BOUNDARY_ROOT"' EXIT
 
 fail() {
   echo "not ok: $1" >&2
@@ -74,6 +75,31 @@ fi
 assert_eq "launch" "$CLAUDE_LOCATOR_VALIDATION_SCOPE" "temporary candidate trust scope"
 assert_eq "temporary_path" "$CLAUDE_LOCATOR_VALIDATION_STATUS" "temporary candidate trust reason"
 pass "temporary path boundary is independently classified"
+
+configured_temp_root="$TEST_ROOT/configured-user-temp"
+mkdir -p "$configured_temp_root"
+printf '#!/bin/bash\nexit 0\n' > "$configured_temp_root/claude"
+chmod 755 "$configured_temp_root/claude"
+if TMPDIR="$configured_temp_root" claude_locator_validate_candidate "$configured_temp_root/claude" "$ROOT" "$TEST_ROOT/work"; then
+  fail "configured temporary candidate passed trust validation"
+fi
+assert_eq "temporary_path" "$CLAUDE_LOCATOR_VALIDATION_STATUS" "configured temporary root trust reason"
+pass "configured per-user temporary roots are rejected"
+
+case "${TMPDIR:-}" in
+  /*)
+    if [ -d "$TMPDIR" ]; then
+      PLATFORM_TEMP_BOUNDARY_ROOT="$(mktemp -d "${TMPDIR%/}/claude-review-platform-temp-XXXXXX")"
+      printf '#!/bin/bash\nexit 0\n' > "$PLATFORM_TEMP_BOUNDARY_ROOT/claude"
+      chmod 755 "$PLATFORM_TEMP_BOUNDARY_ROOT/claude"
+      if claude_locator_validate_candidate "$PLATFORM_TEMP_BOUNDARY_ROOT/claude" "$ROOT" "$TEST_ROOT/work"; then
+        fail "actual TMPDIR candidate passed trust validation"
+      fi
+      assert_eq "temporary_path" "$CLAUDE_LOCATOR_VALIDATION_STATUS" "actual TMPDIR trust reason"
+    fi
+    ;;
+esac
+pass "actual inherited TMPDIR is rejected when present"
 
 windows_identity_root="$TEST_ROOT/windows identity"
 mkdir -p "$windows_identity_root"
@@ -336,6 +362,49 @@ claude_runtime_prepare_python_argv "${CLAUDE_RUNTIME_COMMAND[@]}" || fail "Pytho
 assert_eq "$TEST_ROOT/trusted/bin/claude" "${CLAUDE_RUNTIME_PYTHON_ARGV[0]}" "non-Windows Python executable unchanged"
 assert_eq "auth" "${CLAUDE_RUNTIME_PYTHON_ARGV[1]}" "Python argv one preserved"
 pass "runtime builder is transport-only"
+
+python_injection_root="$TEST_ROOT/python-injection"
+python_driver="$TEST_ROOT/work/process-driver.py"
+python_injection_marker="$TEST_ROOT/python-injection-ran"
+mkdir -p "$python_injection_root"
+cat > "$TEST_ROOT/work/subprocess.py" <<'PY'
+from pathlib import Path
+import os
+Path(os.environ["PYTHON_INJECTION_MARKER"]).write_text("cwd")
+PY
+cp "$TEST_ROOT/work/subprocess.py" "$python_injection_root/subprocess.py"
+claude_runtime_resolve_trusted_python "$ROOT" "$TEST_ROOT/work" "$TEST_ROOT/work" || fail "trusted Python resolution"
+assert_eq "safe" "$CLAUDE_RUNTIME_PYTHON_STATUS" "trusted Python status"
+claude_runtime_write_python_driver "$python_driver"
+driver_output="$(
+  PYTHON_INJECTION_MARKER="$python_injection_marker" \
+  PYTHONPATH="$python_injection_root" \
+  claude_runtime_run_with_timeout \
+    "$CLAUDE_RUNTIME_PYTHON_BIN" \
+    "$python_driver" \
+    "$TEST_ROOT/work" \
+    5 \
+    - \
+    /bin/bash -c 'printf driver-ok'
+)"
+assert_eq "driver-ok" "$driver_output" "isolated Python driver output"
+[ ! -e "$python_injection_marker" ] || fail "isolated Python loaded startup code from CWD or PYTHONPATH"
+
+unsafe_python_root="$TEST_ROOT/unsafe-python-invocation"
+mkdir -p "$unsafe_python_root/bin"
+cat > "$unsafe_python_root/bin/python3" <<SH
+#!/bin/bash
+printf executed > "$TEST_ROOT/unsafe-python-executed"
+exit 99
+SH
+chmod 755 "$unsafe_python_root/bin/python3"
+if PATH="$unsafe_python_root/bin:$PATH" claude_runtime_resolve_trusted_python "$ROOT" "$unsafe_python_root" "$TEST_ROOT/work"; then
+  fail "invocation-CWD Python passed trust validation"
+fi
+assert_eq "unsafe" "$CLAUDE_RUNTIME_PYTHON_STATUS" "unsafe Python status"
+assert_eq "invocation_cwd_path" "$CLAUDE_RUNTIME_PYTHON_VALIDATION_STATUS" "unsafe Python trust reason"
+[ ! -e "$TEST_ROOT/unsafe-python-executed" ] || fail "untrusted Python executed during resolution"
+pass "trusted isolated Python bootstrap rejects startup injection"
 
 ENV_LOG="$TEST_ROOT/env.log"
 ARGV_LOG="$TEST_ROOT/argv.log"

@@ -82,6 +82,12 @@ that guardrail. Code and PR review splitting is capped at 12 parts by default
 (`CLAUDE_REVIEW_MAX_SPLIT_PARTS`) to avoid unbounded Claude-call fan-out on huge or
 generated diffs.
 
+`scripts/run-review.sh` assembles each bounded prompt in its private runtime
+directory with mode `0600` and streams it to `claude -p` on stdin. Never move the
+artifact body back into one argv element: the 200000-byte contract exceeds
+per-argument limits on supported Linux and Windows hosts. Keep control flags and
+other bounded values as discrete argv.
+
 If `CLAUDE_REVIEW_MAX_ARTIFACT_BYTES` is overridden for artifact building, export
 the same value for every corresponding `scripts/run-review.sh` call. The runner
 does not trust or raise its byte guardrail from artifact content, including split
@@ -208,6 +214,19 @@ explain that command routing returned malformed output, and do not invoke Claude
 Do not run raw `claude -p` health checks directly from the Codex rendering layer.
 Use `scripts/claude-doctor.sh` for diagnostics and `scripts/run-review.sh` for all
 review probes and review invocations. Both helpers own the hardened Claude flags.
+
+Runner and doctor must use only the exact `python3` accepted by
+`claude_runtime_resolve_trusted_python`, and every bridge Python invocation must
+retain isolated mode (`-I`). The resolver applies the Claude trust policy to the
+Python launch path and rejects script-shaped Python launchers so `-I` cannot be
+reinterpreted as a script argument. Do not fall back to a second PATH lookup.
+Temporary trust boundaries include inherited absolute `TMPDIR`, `TEMP`, and `TMP`
+roots plus the macOS `/var/folders` namespace.
+
+The shared runtime driver owns bounded child-process lifetime. On Windows it uses
+a kill-on-close Job Object for the complete descendant tree; on POSIX it uses a
+private process group. Do not replace either path with direct-process-only
+`terminate()`/`kill()` or an unbounded final output drain.
 
 ### Claude State Writes And Codex Sandbox Boundary
 

@@ -14,6 +14,7 @@ LOCATOR_HELPER="$SCRIPT_DIR/claude-locator.sh"
 RUNTIME_HELPER="$SCRIPT_DIR/claude-runtime.sh"
 CONFIG_HELPER="$SCRIPT_DIR/claude-config.sh"
 CLAUDE_RUNTIME_CWD=""
+CLAUDE_PROCESS_DRIVER=""
 
 usage() {
   cat <<'EOF'
@@ -166,11 +167,16 @@ if ! load_required_claude_helper \
   "# claude-review-helper-complete: runtime_v1" \
   claude_runtime_check_launcher_dependency \
   claude_runtime_build_command \
+  claude_runtime_probe_with_timeout \
   claude_runtime_prepare_python_argv \
+  claude_runtime_python_transport_path \
+  claude_runtime_resolve_trusted_python \
   claude_runtime_resolve_path_dependency \
   claude_runtime_run_direct \
+  claude_runtime_run_with_timeout \
   claude_runtime_windows_executable_path \
-  claude_runtime_scrub_environment; then
+  claude_runtime_scrub_environment \
+  claude_runtime_write_python_driver; then
   print_kv "doctor_status" "bridge_installation_incomplete"
   print_kv "bridge_component" "claude-runtime.sh"
   print_kv "bridge_guidance" "Reinstall or update the complete claude-review skill, then retry."
@@ -194,6 +200,23 @@ fi
 CLAUDE_RUNTIME_CWD="$(mktemp -d /tmp/claude-review-runtime-XXXXXX)"
 chmod 700 "$CLAUDE_RUNTIME_CWD"
 trap 'rm -rf "$CLAUDE_RUNTIME_CWD"' EXIT
+CLAUDE_PROCESS_DRIVER="$CLAUDE_RUNTIME_CWD/process-driver.py"
+if claude_runtime_resolve_trusted_python "$REPO_ROOT" "$INVOCATION_CWD" "$CLAUDE_RUNTIME_CWD"; then
+  if ! claude_runtime_write_python_driver "$CLAUDE_PROCESS_DRIVER" || \
+    ! "$CLAUDE_RUNTIME_PYTHON_BIN" -I - "$CLAUDE_PROCESS_DRIVER" <<'PY' >/dev/null 2>&1
+from pathlib import Path
+import sys
+
+driver = Path(sys.argv[1])
+compile(driver.read_text(encoding="utf-8"), str(driver), "exec")
+PY
+  then
+    print_kv "doctor_status" "bridge_installation_incomplete"
+    print_kv "bridge_component" "claude-runtime.sh"
+    print_kv "bridge_guidance" "Reinstall or update the complete claude-review skill, then retry."
+    exit 0
+  fi
+fi
 
 flag_state() {
   local file="$1"
@@ -226,11 +249,11 @@ inherited_home_status() {
       return 0
       ;;
   esac
-  if ! type -P python3 >/dev/null 2>&1; then
+  if [ -z "${CLAUDE_RUNTIME_PYTHON_BIN:-}" ]; then
     printf 'passwd_unavailable'
     return 0
   fi
-  python3 - "$inherited_home" <<'PY' 2>/dev/null || printf 'passwd_unavailable'
+  "$CLAUDE_RUNTIME_PYTHON_BIN" -I - "$inherited_home" <<'PY' 2>/dev/null || printf 'passwd_unavailable'
 import os
 import pwd
 import sys
@@ -247,197 +270,47 @@ PY
 run_doctor_claude_with_timeout() {
   local timeout_seconds="$1"
   local claude_bin="$2"
-  local msys_arg_conv_present="${MSYS2_ARG_CONV_EXCL+x}"
-  local msys_arg_conv_value="${MSYS2_ARG_CONV_EXCL-}"
   shift 2
 
-  if ! type -P python3 >/dev/null 2>&1; then
+  if [ -z "${CLAUDE_RUNTIME_PYTHON_BIN:-}" ] || [ ! -r "$CLAUDE_PROCESS_DRIVER" ]; then
     return 125
   fi
 
   claude_runtime_build_command "$claude_bin" "$@"
-  claude_runtime_prepare_python_argv "${CLAUDE_RUNTIME_COMMAND[@]}" || return 126
-  (
-    claude_runtime_scrub_environment
-    CDPATH=
-    cd -P -- "$CLAUDE_RUNTIME_CWD" || exit 1
-    MSYS2_ARG_CONV_EXCL='*' python3 - \
-      "$timeout_seconds" \
-      "$msys_arg_conv_present" \
-      "$msys_arg_conv_value" \
-      "${CLAUDE_RUNTIME_PYTHON_ARGV[@]}" <<'PY'
-import os
-import signal
-import subprocess
-import sys
-
-timeout = int(sys.argv[1])
-msys_arg_conv_present = sys.argv[2] == "x"
-msys_arg_conv_value = sys.argv[3]
-cmd = sys.argv[4:]
-child_env = os.environ.copy()
-if msys_arg_conv_present:
-    child_env["MSYS2_ARG_CONV_EXCL"] = msys_arg_conv_value
-else:
-    child_env.pop("MSYS2_ARG_CONV_EXCL", None)
-
-process_options = {}
-if os.name == "nt":
-    process_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-else:
-    process_options["start_new_session"] = True
-
-proc = subprocess.Popen(
-    cmd,
-    cwd=os.getcwd(),
-    shell=False,
-    stdin=subprocess.DEVNULL,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.PIPE,
-    text=True,
-    env=child_env,
-    **process_options,
-)
-try:
-    out, err = proc.communicate(timeout=timeout)
-except subprocess.TimeoutExpired:
-    try:
-        if os.name == "nt":
-            proc.terminate()
-        else:
-            os.killpg(proc.pid, signal.SIGTERM)
-    except OSError:
-        pass
-    try:
-        proc.communicate(timeout=3)
-    except subprocess.TimeoutExpired:
-        try:
-            if os.name == "nt":
-                proc.kill()
-            else:
-                os.killpg(proc.pid, signal.SIGKILL)
-        except OSError:
-            pass
-        proc.communicate()
-    sys.exit(124)
-
-sys.stdout.write(out)
-sys.stderr.write(err)
-sys.exit(proc.returncode)
-PY
-  )
+  claude_runtime_run_with_timeout \
+    "$CLAUDE_RUNTIME_PYTHON_BIN" \
+    "$CLAUDE_PROCESS_DRIVER" \
+    "$CLAUDE_RUNTIME_CWD" \
+    "$timeout_seconds" \
+    - \
+    "${CLAUDE_RUNTIME_COMMAND[@]}"
 }
 
 run_probe() {
   local label="$1"
   local claude_bin="$2"
-  local msys_arg_conv_present="${MSYS2_ARG_CONV_EXCL+x}"
-  local msys_arg_conv_value="${MSYS2_ARG_CONV_EXCL-}"
   shift 2
 
-  if ! type -P python3 >/dev/null 2>&1; then
-    print_kv "${label}_status" "skipped_no_python3"
+  if [ -z "${CLAUDE_RUNTIME_PYTHON_BIN:-}" ] || [ ! -r "$CLAUDE_PROCESS_DRIVER" ]; then
+    if [ "${CLAUDE_RUNTIME_PYTHON_STATUS:-missing}" = "missing" ]; then
+      print_kv "${label}_status" "skipped_no_python3"
+    else
+      print_kv "${label}_status" "skipped_untrusted_python3"
+    fi
     return 0
   fi
 
   claude_runtime_build_command "$claude_bin" "$@"
-  if ! claude_runtime_prepare_python_argv "${CLAUDE_RUNTIME_COMMAND[@]}"; then
+  if ! claude_runtime_probe_with_timeout \
+    "$label" \
+    "$CLAUDE_RUNTIME_PYTHON_BIN" \
+    "$CLAUDE_PROCESS_DRIVER" \
+    "$CLAUDE_RUNTIME_CWD" \
+    "$PROBE_TIMEOUT_SECONDS" \
+    @probe \
+    "${CLAUDE_RUNTIME_COMMAND[@]}"; then
     print_kv "${label}_status" "transport_unavailable"
-    return 0
   fi
-  (
-    claude_runtime_scrub_environment
-    CDPATH=
-    cd -P -- "$CLAUDE_RUNTIME_CWD" || exit 1
-    MSYS2_ARG_CONV_EXCL='*' python3 - \
-      "$label" \
-      "$PROBE_TIMEOUT_SECONDS" \
-      "$msys_arg_conv_present" \
-      "$msys_arg_conv_value" \
-      "${CLAUDE_RUNTIME_PYTHON_ARGV[@]}" <<'PY'
-import os
-import re
-import signal
-import subprocess
-import sys
-import time
-
-def stop_process(proc, force=False):
-    try:
-        if os.name == "nt":
-            proc.kill() if force else proc.terminate()
-        else:
-            os.killpg(proc.pid, signal.SIGKILL if force else signal.SIGTERM)
-    except OSError:
-        pass
-
-label = sys.argv[1]
-timeout = int(sys.argv[2])
-msys_arg_conv_present = sys.argv[3] == "x"
-msys_arg_conv_value = sys.argv[4]
-cmd = sys.argv[5:]
-child_env = os.environ.copy()
-if msys_arg_conv_present:
-    child_env["MSYS2_ARG_CONV_EXCL"] = msys_arg_conv_value
-else:
-    child_env.pop("MSYS2_ARG_CONV_EXCL", None)
-
-started = time.time()
-process_options = {}
-if os.name == "nt":
-    process_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-else:
-    process_options["start_new_session"] = True
-try:
-    proc = subprocess.Popen(
-        cmd,
-        cwd=os.getcwd(),
-        shell=False,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=child_env,
-        **process_options,
-    )
-except OSError as exc:
-    print(f"{label}_status=spawn_failed")
-    print(f"{label}_error_type={type(exc).__name__}")
-    sys.exit(0)
-
-try:
-    out, err = proc.communicate("OK\n", timeout=timeout)
-    status = "completed"
-except subprocess.TimeoutExpired:
-    stop_process(proc)
-    try:
-        out, err = proc.communicate(timeout=3)
-    except subprocess.TimeoutExpired:
-        stop_process(proc, force=True)
-        out, err = proc.communicate()
-    status = "timeout"
-
-combined = f"{out or ''}\n{err or ''}"
-if re.search(r"oauth_refresh|\.claude", combined, re.I) and re.search(r"EPERM|EACCES|permission denied|operation not permitted", combined, re.I):
-    classification = "claude_state_write_denied"
-elif re.search(r"not logged in|auth login|setup-token|authentication", combined, re.I):
-    classification = "authentication_unavailable"
-elif re.search(r"maximum budget|error_max_budget_usd", combined, re.I):
-    classification = "budget_exhausted"
-elif proc.returncode == 0:
-    classification = "ok"
-else:
-    classification = "unexpected_failure"
-
-elapsed = time.time() - started
-print(f"{label}_status={status}")
-print(f"{label}_returncode={proc.returncode}")
-print(f"{label}_elapsed_seconds={elapsed:.2f}")
-print(f"{label}_stdout_bytes={len(out or '')}")
-print(f"{label}_stderr_bytes={len(err or '')}")
-print(f"{label}_classification={classification}")
-PY
-  )
 }
 
 print_kv "doctor_status" "ok"
@@ -506,6 +379,9 @@ print_kv "login_profile_loaded" "false"
 print_kv "inherited_env_note" "absent means not inherited by Codex; doctor does not source profiles or inspect Claude settings.json"
 print_kv "inherited_env_guidance" "Put required config, proxy, CA, certificate-store, and mTLS values in Codex's launch environment or Claude settings.json; do not rely on profile sourcing."
 print_kv "claude_auth_context" "subscription_only_credentials_scrubbed"
+print_kv "python_runtime_status" "${CLAUDE_RUNTIME_PYTHON_STATUS:-missing}"
+print_kv "python_validation_scope" "${CLAUDE_RUNTIME_PYTHON_VALIDATION_SCOPE:-none}"
+print_kv "python_validation_reason" "${CLAUDE_RUNTIME_PYTHON_VALIDATION_STATUS:-none}"
 
 checked_native_path="unavailable"
 if claude_locator_native_supported "${OSTYPE:-}"; then
@@ -702,8 +578,8 @@ if [ "$auth_status_code" -eq 124 ]; then
   print_kv "claude_auth_status" "timeout"
   print_kv "claude_auth_guidance" "The auth status check timed out; inspect credential/keychain access and network reachability or increase --probe-timeout."
 elif [ -n "$auth_status" ]; then
-  if type -P python3 >/dev/null 2>&1; then
-    AUTH_STATUS="$auth_status" python3 - <<'PY' 2>/dev/null || print_kv "claude_auth_status" "present_unparsed"
+  if [ -n "${CLAUDE_RUNTIME_PYTHON_BIN:-}" ]; then
+    AUTH_STATUS="$auth_status" "$CLAUDE_RUNTIME_PYTHON_BIN" -I - <<'PY' 2>/dev/null || print_kv "claude_auth_status" "present_unparsed"
 import json
 import os
 
@@ -735,7 +611,6 @@ run_probe \
   "plain_print_probe" \
   "$claude_bin" \
   -p \
-  "Return OK only." \
   --output-format json \
   --disable-slash-commands
 
@@ -743,7 +618,6 @@ run_probe \
   "safe_mode_print_probe" \
   "$claude_bin" \
   -p \
-  "Return OK only." \
   --safe-mode \
   --output-format json \
   --tools "" \

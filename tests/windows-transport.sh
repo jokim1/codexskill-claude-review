@@ -10,21 +10,24 @@ fail() {
 }
 
 grep -Fq 'runs-on: windows-latest' "$ROOT/.github/workflows/ci.yml" || fail "Windows Git Bash CI job missing"
-python3 - "$ROOT/scripts/claude-doctor.sh" "$ROOT/scripts/run-review.sh" <<'PY'
+python3 - "$ROOT/scripts/claude-runtime.sh" <<'PY'
 from pathlib import Path
-import re
 import sys
 
-pattern = re.compile(
-    r'if os\.name == "nt":\n'
-    r'\s+process_options\["creationflags"\] = subprocess\.CREATE_NEW_PROCESS_GROUP\n'
-    r'else:\n'
-    r'\s+process_options\["start_new_session"\] = True'
-)
-for raw_path in sys.argv[1:]:
-    path = Path(raw_path)
-    if not pattern.search(path.read_text()):
-        raise SystemExit(f"{path.name} lacks conditional Windows/POSIX process-group creation")
+text = Path(sys.argv[1]).read_text()
+for token in (
+    "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE",
+    "AssignProcessToJobObject",
+    "TerminateJobObject",
+    "subprocess.CREATE_NEW_PROCESS_GROUP",
+    'process_options["start_new_session"] = True',
+    "proc.communicate(timeout=3)",
+    "proc.wait(timeout=1)",
+):
+    if token not in text:
+        raise SystemExit(f"shared runtime driver lacks {token}")
+if "proc.communicate()" in text:
+    raise SystemExit("shared runtime driver retains an unbounded final communicate")
 PY
 
 case "${OSTYPE:-}" in
@@ -111,7 +114,12 @@ printf '%s' "$argv_output" | grep -Fq 'equals=value' || fail "equals argv lost"
 
 python_bin="$(type -P python3 2>/dev/null || type -P python 2>/dev/null || true)"
 [ -n "$python_bin" ] || fail "Python unavailable for timeout transport"
-claude_runtime_check_launcher_dependency "$CLAUDE_LOCATOR_CANONICAL_TARGET" "$runtime_cwd" || fail "native Windows executable classification"
+windows_claude_target="$CLAUDE_LOCATOR_CANONICAL_TARGET"
+claude_runtime_resolve_trusted_python "$ROOT" "$PWD" "$runtime_cwd" || fail "trusted Windows Python resolution: ${CLAUDE_RUNTIME_PYTHON_STATUS:-missing}"
+[ "$CLAUDE_RUNTIME_PYTHON_STATUS" = "safe" ] || fail "trusted Windows Python status"
+process_driver="$runtime_cwd/process-driver.py"
+claude_runtime_write_python_driver "$process_driver"
+claude_runtime_check_launcher_dependency "$windows_claude_target" "$runtime_cwd" || fail "native Windows executable classification"
 [ "$CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_KIND" = "direct" ] || fail "native .exe transport kind"
 claude_runtime_build_command \
   "$CLAUDE_LOCATOR_LAUNCH_PATH" \
@@ -145,6 +153,43 @@ PY
 })"
 printf '%s' "$timeout_output" | grep -Fq 'timeout-ok' || fail "Python discrete-argv .exe transport"
 
+tree_script="$fixture_root/timeout-tree.sh"
+tree_pid_file="$fixture_root/timeout-tree.pid"
+cat > "$tree_script" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+(
+  trap '' TERM
+  while :; do sleep 1; done
+) &
+printf '%s\n' "$!" > "${WINDOWS_TREE_PID_FILE:?}"
+wait
+SH
+chmod 755 "$tree_script"
+set +e
+WINDOWS_TREE_PID_FILE="$tree_pid_file" \
+  claude_runtime_run_with_timeout \
+    "$CLAUDE_RUNTIME_PYTHON_BIN" \
+    "$process_driver" \
+    "$runtime_cwd" \
+    1 \
+    - \
+    "$windows_bash" --noprofile --norc "$tree_script" >/dev/null 2>&1
+tree_status=$?
+set -e
+[ "$tree_status" -eq 124 ] || fail "Windows tree timeout status: $tree_status"
+[ -s "$tree_pid_file" ] || fail "Windows timeout grandchild never started"
+tree_pid="$(cat "$tree_pid_file")"
+for _ in $(seq 1 30); do
+  if ! kill -0 "$tree_pid" 2>/dev/null; then
+    break
+  fi
+  sleep 0.1
+done
+if kill -0 "$tree_pid" 2>/dev/null; then
+  fail "Windows Job Object left the timeout grandchild alive"
+fi
+
 # Exercise the actual runner with an extensionless Git Bash/npm-style shim. This
 # covers canonical input boundaries, validated shebang transport, internal MSYS
 # argument-conversion control, preflight, and the final timeout call site without
@@ -177,7 +222,9 @@ if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
   exit 0
 fi
 if [ "${1:-}" = "-p" ]; then
-  if [[ "${2:-}" == *"Codex Claude skill preflight probe"* ]]; then
+  prompt="$(cat)"
+  printf 'stdin_bytes=%s\n' "${#prompt}" >> "${WINDOWS_SHIM_LOG:?}"
+  if [[ "$prompt" == *"Codex Claude skill preflight probe"* ]]; then
     printf '{"ok":true}\n'
   else
     printf '{"status":"clean","mode":"code","summary":"windows-runner-ok","findings":[],"open_questions":[]}\n'
@@ -219,6 +266,35 @@ if grep -Fq 'msys=*' "$shim_log"; then
 fi
 [ "$(grep '^cwd=' "$shim_log" | sort -u | wc -l | tr -d ' ')" = "1" ] || fail "production runner drifted across runtime CWDs"
 grep -Eq '^cwd=.*/claude-review-runtime-[^/]+$' "$shim_log" || fail "production runner skipped private runtime CWD"
+
+"$python_bin" -I - "$artifact_file" <<'PY'
+from pathlib import Path
+import sys
+
+Path(sys.argv[1]).write_bytes(b"x" * 190000)
+PY
+near_limit_output="$({
+  cd "$ROOT"
+  PATH="$shim_root:$PATH" \
+  WINDOWS_SHIM_LOG="$shim_log" \
+  /bin/bash scripts/run-review.sh \
+    --mode code \
+    --artifact-file "$artifact_file" \
+    --base-prompt "$ROOT/prompts/code-review.base.md" \
+    --schema-file "$ROOT/schemas/review-output.json" \
+    --repo-root "$ROOT" \
+    --branch windows-test \
+    --base-branch main
+})"
+RUNNER_OUTPUT="$near_limit_output" "$python_bin" -I - <<'PY'
+import json
+import os
+
+data = json.loads(os.environ["RUNNER_OUTPUT"])
+assert data["status"] == "clean", data
+PY
+near_limit_stdin_bytes="$(awk -F= '/^stdin_bytes=/{value=$2} END{print value+0}' "$shim_log")"
+[ "$near_limit_stdin_bytes" -gt 190000 ] || fail "Windows near-cap artifact was not streamed over stdin"
 
 doctor_output="$({
   cd "$ROOT"
