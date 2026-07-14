@@ -41,6 +41,53 @@ claude_locator_homebrew_paths() {
   esac
 }
 
+claude_locator_exact_entry_exists() {
+  local candidate="$1"
+  local parent="${candidate%/*}"
+  local basename_part="${candidate##*/}"
+  local entry=""
+
+  if [ "$parent" = "$candidate" ]; then
+    parent="."
+  elif [ -z "$parent" ]; then
+    parent="/"
+  fi
+  for entry in "$parent"/*; do
+    [ "${entry##*/}" = "$basename_part" ] || continue
+    if [ -e "$entry" ] || [ -L "$entry" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+claude_locator_materialize_windows_executable_path() {
+  local candidate="$1"
+  local os_type="${2:-${OSTYPE:-}}"
+
+  case "$os_type" in
+    msys*|mingw*|cygwin*)
+      ;;
+    *)
+      printf '%s' "$candidate"
+      return 0
+      ;;
+  esac
+  case "$candidate" in
+    *.[eE][xX][eE])
+      printf '%s' "$candidate"
+      return 0
+      ;;
+  esac
+  if claude_locator_exact_entry_exists "$candidate"; then
+    printf '%s' "$candidate"
+  elif claude_locator_exact_entry_exists "${candidate}.exe"; then
+    printf '%s.exe' "$candidate"
+  else
+    printf '%s' "$candidate"
+  fi
+}
+
 claude_locator_path_candidate() {
   local invocation_cwd="${1:-$PWD}"
   local resolved=""
@@ -53,6 +100,7 @@ claude_locator_path_candidate() {
 
   resolved="$(type -P claude 2>/dev/null || true)"
   if [ -n "$resolved" ]; then
+    resolved="$(claude_locator_materialize_windows_executable_path "$resolved")"
     CLAUDE_LOCATOR_CANDIDATE_PATH="$resolved"
     CLAUDE_LOCATOR_CANDIDATE_SOURCE="path"
     return 0
@@ -73,6 +121,7 @@ claude_locator_path_candidate() {
         candidate="$invocation_cwd/$entry/claude"
         ;;
     esac
+    candidate="$(claude_locator_materialize_windows_executable_path "$candidate")"
     if [ -e "$candidate" ] || [ -L "$candidate" ]; then
       CLAUDE_LOCATOR_CANDIDATE_PATH="$candidate"
       CLAUDE_LOCATOR_CANDIDATE_SOURCE="path"

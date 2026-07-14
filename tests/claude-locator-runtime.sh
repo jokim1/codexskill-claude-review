@@ -51,6 +51,26 @@ claude_locator_homebrew_paths linux-gnu aarch64-unknown-linux-gnu
 assert_eq "0" "${#CLAUDE_LOCATOR_HOMEBREW_PATHS[@]}" "linux arm excluded"
 pass "documented Homebrew mapping"
 
+windows_identity_root="$TEST_ROOT/windows identity"
+mkdir -p "$windows_identity_root"
+printf 'native exe\n' > "$windows_identity_root/claude.exe"
+chmod 755 "$windows_identity_root/claude.exe"
+assert_eq \
+  "$windows_identity_root/claude.exe" \
+  "$(claude_locator_materialize_windows_executable_path "$windows_identity_root/claude" msys)" \
+  "Git Bash materializes the actual exe entry"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$windows_identity_root/claude"
+chmod 755 "$windows_identity_root/claude"
+assert_eq \
+  "$windows_identity_root/claude" \
+  "$(claude_locator_materialize_windows_executable_path "$windows_identity_root/claude" msys)" \
+  "exact extensionless launcher wins over exe sibling"
+assert_eq \
+  "$windows_identity_root/claude" \
+  "$(claude_locator_materialize_windows_executable_path "$windows_identity_root/claude" darwin)" \
+  "non-Windows discovery preserves the resolved path"
+pass "Windows executable launch identity"
+
 mkdir -p "$TEST_ROOT/trusted/bin" "$TEST_ROOT/work"
 cat > "$TEST_ROOT/trusted/bin/claude" <<'SH'
 #!/usr/bin/env bash
