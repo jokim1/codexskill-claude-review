@@ -1,14 +1,86 @@
 #!/usr/bin/env bash
 
 if [ -n "${BASH_ENV-}" ] || [ -n "${ENV-}" ]; then
-  printf '%s\n' 'run-review.sh requires BASH_ENV and ENV to be empty before Bash starts; invoke it with: BASH_ENV= ENV= /bin/bash --noprofile --norc <installed-runner>' >&2
+  printf '%s\n' 'run-review.sh requires BASH_ENV and ENV to be empty before Bash starts; invoke it with: BASH_ENV= ENV= <trusted-bash> --noprofile --norc <installed-runner>' >&2
   exit 2
 fi
 
 CLAUDE_RUNTIME_INHERITED_PATH="${PATH-}"
 export CLAUDE_RUNTIME_INHERITED_PATH
-PATH="/usr/bin:/bin"
+
+claude_build_trusted_bootstrap_path() {
+  local inherited_path="$1"
+  local trusted_store_root="$2"
+  local fhs_usr_bin="$3"
+  local fhs_bin="$4"
+  local candidate_path=""
+  local physical_path=""
+  local remaining=""
+  local trusted_path=""
+  local required_utility=""
+  local optional_utility=""
+
+  if [ -d "$trusted_store_root" ]; then
+    trusted_store_root="$(CDPATH=; cd -P -- "$trusted_store_root" 2>/dev/null && pwd -P)" || return 1
+  fi
+  for candidate_path in "$fhs_usr_bin" "$fhs_bin"; do
+    [ -d "$candidate_path" ] || continue
+    case ":$trusted_path:" in
+      *":$candidate_path:"*) ;;
+      *) trusted_path="${trusted_path:+$trusted_path:}$candidate_path" ;;
+    esac
+  done
+
+  remaining="${inherited_path}:"
+  while [ -n "$remaining" ]; do
+    candidate_path="${remaining%%:*}"
+    remaining="${remaining#*:}"
+    [ -n "$candidate_path" ] || continue
+    physical_path="$(CDPATH=; cd -P -- "$candidate_path" 2>/dev/null && pwd -P)" || continue
+    case "$physical_path" in
+      "$trusted_store_root"/*)
+        case ":$trusted_path:" in
+          *":$physical_path:"*) ;;
+          *) trusted_path="${trusted_path:+$trusted_path:}$physical_path" ;;
+        esac
+        ;;
+    esac
+  done
+
+  [ -n "$trusted_path" ] || return 1
+  PATH="$trusted_path"
+  for required_utility in awk basename bash cat chmod cut dirname git grep mkdir mktemp readlink rm sed stat tr wc; do
+    candidate_path="$(type -P "$required_utility" 2>/dev/null || true)"
+    case "$candidate_path" in
+      "$fhs_usr_bin"/*|"$fhs_bin"/*|"$trusted_store_root"/*) ;;
+      *) printf 'Untrusted or missing bootstrap utility: %s\n' "$required_utility" >&2; return 1 ;;
+    esac
+    [ -f "$candidate_path" ] && [ -x "$candidate_path" ] && [ ! -L "$candidate_path" ] || {
+      printf 'Unsafe bootstrap utility entry: %s\n' "$required_utility" >&2
+      return 1
+    }
+  done
+  for optional_utility in jq; do
+    candidate_path="$(type -P "$optional_utility" 2>/dev/null || true)"
+    [ -n "$candidate_path" ] || continue
+    case "$candidate_path" in
+      "$fhs_usr_bin"/*|"$fhs_bin"/*|"$trusted_store_root"/*) ;;
+      *) printf 'Untrusted optional bootstrap utility: %s\n' "$optional_utility" >&2; return 1 ;;
+    esac
+    [ -f "$candidate_path" ] && [ -x "$candidate_path" ] && [ ! -L "$candidate_path" ] || {
+      printf 'Unsafe optional bootstrap utility entry: %s\n' "$optional_utility" >&2
+      return 1
+    }
+  done
+  printf '%s' "$trusted_path"
+}
+
+PATH="$(claude_build_trusted_bootstrap_path "$CLAUDE_RUNTIME_INHERITED_PATH" "/nix/store" "/usr/bin" "/bin")" || {
+  printf '%s\n' 'No trusted FHS or immutable Nix bootstrap utilities were available.' >&2
+  exit 2
+}
 export PATH
+unset -f claude_build_trusted_bootstrap_path
 unset BASH_ENV ENV
 
 set -euo pipefail
@@ -258,7 +330,7 @@ load_required_claude_helper() {
       ;;
   esac
   [ -f "$BASH" ] && [ -x "$BASH" ] || return 1
-  /usr/bin/env -u BASH_ENV -u ENV -- "$BASH" --noprofile --norc -n "$helper_file" >/dev/null 2>&1 || return 1
+  "$BASH" --noprofile --norc -n "$helper_file" >/dev/null 2>&1 || return 1
   helper_has_final_marker "$helper_file" "$expected_marker" || return 1
   # shellcheck source=/dev/null
   if source "$helper_file" >/dev/null 2>&1; then
@@ -462,6 +534,7 @@ append_prompt_allowed() {
 
 trusted_review_bridge_guidance() {
   local installed_run_review=""
+  local trusted_bash="${BASH:-<trusted-bash>}"
 
   case "${HOME:-}" in
     /*)
@@ -470,11 +543,11 @@ trusted_review_bridge_guidance() {
   esac
 
   if [ -n "$installed_run_review" ] && [ -e "$installed_run_review" ]; then
-    printf 'If this review bridge is running inside the Codex filesystem sandbox, run it outside that sandbox or approve this exact trusted installed-skill command prefix: ["bash", "%s"]. Do not approve repo-local worktree copies or broad prefixes such as ["bash"]. If it still fails outside the sandbox, check ownership and permissions for ~/.claude or CLAUDE_CONFIG_DIR.' "$installed_run_review"
+    printf 'If this review bridge is running inside the Codex filesystem sandbox, start it with BASH_ENV= and ENV= empty, run it outside that sandbox, or approve this exact trusted installed-skill command prefix: ["%s", "--noprofile", "--norc", "%s"]. Do not approve repo-local worktree copies or broad shell prefixes. If it still fails outside the sandbox, check ownership and permissions for ~/.claude or CLAUDE_CONFIG_DIR.' "$trusted_bash" "$installed_run_review"
     return 0
   fi
 
-  printf 'If this review bridge is running inside the Codex filesystem sandbox, run the fixed-shell command outside that sandbox or approve only ["/bin/bash", "--noprofile", "--norc", "<installed-skill>/scripts/run-review.sh"]. Start it with BASH_ENV and ENV empty. Do not approve repo-local worktree copies or broad shell prefixes. If it still fails outside the sandbox, check ownership and permissions for ~/.claude or CLAUDE_CONFIG_DIR.'
+  printf 'If this review bridge is running inside the Codex filesystem sandbox, run the fixed-shell command outside that sandbox or approve only ["%s", "--noprofile", "--norc", "<installed-skill>/scripts/run-review.sh"]. Start it with BASH_ENV and ENV empty. Do not approve repo-local worktree copies or broad shell prefixes. If it still fails outside the sandbox, check ownership and permissions for ~/.claude or CLAUDE_CONFIG_DIR.' "$trusted_bash"
 }
 
 validate_readable_inputs() {

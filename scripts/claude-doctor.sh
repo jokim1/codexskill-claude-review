@@ -1,14 +1,86 @@
 #!/usr/bin/env bash
 
 if [ -n "${BASH_ENV-}" ] || [ -n "${ENV-}" ]; then
-  printf '%s\n' 'claude-doctor.sh requires BASH_ENV and ENV to be empty before Bash starts; invoke it with: BASH_ENV= ENV= /bin/bash --noprofile --norc <installed-doctor>' >&2
+  printf '%s\n' 'claude-doctor.sh requires BASH_ENV and ENV to be empty before Bash starts; invoke it with: BASH_ENV= ENV= <trusted-bash> --noprofile --norc <installed-doctor>' >&2
   exit 2
 fi
 
 CLAUDE_RUNTIME_INHERITED_PATH="${PATH-}"
 export CLAUDE_RUNTIME_INHERITED_PATH
-PATH="/usr/bin:/bin"
+
+claude_build_trusted_bootstrap_path() {
+  local inherited_path="$1"
+  local trusted_store_root="$2"
+  local fhs_usr_bin="$3"
+  local fhs_bin="$4"
+  local candidate_path=""
+  local physical_path=""
+  local remaining=""
+  local trusted_path=""
+  local required_utility=""
+  local optional_utility=""
+
+  if [ -d "$trusted_store_root" ]; then
+    trusted_store_root="$(CDPATH=; cd -P -- "$trusted_store_root" 2>/dev/null && pwd -P)" || return 1
+  fi
+  for candidate_path in "$fhs_usr_bin" "$fhs_bin"; do
+    [ -d "$candidate_path" ] || continue
+    case ":$trusted_path:" in
+      *":$candidate_path:"*) ;;
+      *) trusted_path="${trusted_path:+$trusted_path:}$candidate_path" ;;
+    esac
+  done
+
+  remaining="${inherited_path}:"
+  while [ -n "$remaining" ]; do
+    candidate_path="${remaining%%:*}"
+    remaining="${remaining#*:}"
+    [ -n "$candidate_path" ] || continue
+    physical_path="$(CDPATH=; cd -P -- "$candidate_path" 2>/dev/null && pwd -P)" || continue
+    case "$physical_path" in
+      "$trusted_store_root"/*)
+        case ":$trusted_path:" in
+          *":$physical_path:"*) ;;
+          *) trusted_path="${trusted_path:+$trusted_path:}$physical_path" ;;
+        esac
+        ;;
+    esac
+  done
+
+  [ -n "$trusted_path" ] || return 1
+  PATH="$trusted_path"
+  for required_utility in awk basename bash cat chmod cut dirname git grep mkdir mktemp readlink rm sed stat tr wc; do
+    candidate_path="$(type -P "$required_utility" 2>/dev/null || true)"
+    case "$candidate_path" in
+      "$fhs_usr_bin"/*|"$fhs_bin"/*|"$trusted_store_root"/*) ;;
+      *) printf 'Untrusted or missing bootstrap utility: %s\n' "$required_utility" >&2; return 1 ;;
+    esac
+    [ -f "$candidate_path" ] && [ -x "$candidate_path" ] && [ ! -L "$candidate_path" ] || {
+      printf 'Unsafe bootstrap utility entry: %s\n' "$required_utility" >&2
+      return 1
+    }
+  done
+  for optional_utility in jq; do
+    candidate_path="$(type -P "$optional_utility" 2>/dev/null || true)"
+    [ -n "$candidate_path" ] || continue
+    case "$candidate_path" in
+      "$fhs_usr_bin"/*|"$fhs_bin"/*|"$trusted_store_root"/*) ;;
+      *) printf 'Untrusted optional bootstrap utility: %s\n' "$optional_utility" >&2; return 1 ;;
+    esac
+    [ -f "$candidate_path" ] && [ -x "$candidate_path" ] && [ ! -L "$candidate_path" ] || {
+      printf 'Unsafe optional bootstrap utility entry: %s\n' "$optional_utility" >&2
+      return 1
+    }
+  done
+  printf '%s' "$trusted_path"
+}
+
+PATH="$(claude_build_trusted_bootstrap_path "$CLAUDE_RUNTIME_INHERITED_PATH" "/nix/store" "/usr/bin" "/bin")" || {
+  printf '%s\n' 'No trusted FHS or immutable Nix bootstrap utilities were available.' >&2
+  exit 2
+}
 export PATH
+unset -f claude_build_trusted_bootstrap_path
 unset BASH_ENV ENV
 
 set -euo pipefail
@@ -20,7 +92,6 @@ REPO_ROOT="$INVOCATION_CWD"
 CONFIG_FILE=""
 PROBE_TIMEOUT_SECONDS="${CLAUDE_DOCTOR_PROBE_TIMEOUT_SECONDS:-12}"
 SKIP_PROBES="false"
-SKIP_UPDATE_CHECK="true"
 LOCATOR_HELPER="$SCRIPT_DIR/claude-locator.sh"
 RUNTIME_HELPER="$SCRIPT_DIR/claude-runtime.sh"
 CONFIG_HELPER="$SCRIPT_DIR/claude-config.sh"
@@ -77,7 +148,7 @@ while [ "$#" -gt 0 ]; do
       shift
       ;;
     --skip-update-check)
-      SKIP_UPDATE_CHECK="true"
+      # Compatibility no-op: doctor is always report-only and never updates.
       shift
       ;;
     -h|--help)
@@ -104,7 +175,6 @@ fi
 
 RUN_REVIEW="$SKILL_ROOT/scripts/run-review.sh"
 ROUTER="$SKILL_ROOT/scripts/claude-command-router.sh"
-UPDATE_CHECK="$SKILL_ROOT/scripts/claude-update-check.sh"
 
 print_kv() {
   printf '%s=%s\n' "$1" "$2"
@@ -137,7 +207,7 @@ load_required_claude_helper() {
       ;;
   esac
   [ -f "$BASH" ] && [ -x "$BASH" ] || return 1
-  /usr/bin/env -u BASH_ENV -u ENV -- "$BASH" --noprofile --norc -n "$helper_file" >/dev/null 2>&1 || return 1
+  "$BASH" --noprofile --norc -n "$helper_file" >/dev/null 2>&1 || return 1
   helper_has_final_marker "$helper_file" "$expected_marker" || return 1
   # shellcheck source=/dev/null
   if source "$helper_file" >/dev/null 2>&1; then

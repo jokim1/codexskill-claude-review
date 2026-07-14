@@ -125,6 +125,62 @@ assert "installation is incomplete" not in data["summary"]
 PY
 pass "runner and doctor bootstrap both helpers from the tested checkout"
 
+# Simulate a non-FHS Nix host end to end. The fixture rewires only the fixed
+# production trust roots in a copied doctor, then launches that doctor with no
+# FHS utility directories available. macOS may kill relocated system Bash
+# binaries, so the launcher stays exact /bin/bash while every bridge utility is
+# supplied only by the simulated immutable-store directory.
+non_fhs_skill="$TEST_ROOT/non-fhs-skill"
+non_fhs_store="$TEST_ROOT/simulated-nix-store"
+non_fhs_bin="$non_fhs_store/coreutils/bin"
+non_fhs_missing_usr="$TEST_ROOT/non-fhs-missing/usr/bin"
+non_fhs_missing_bin="$TEST_ROOT/non-fhs-missing/bin"
+mkdir -p "$non_fhs_skill/scripts" "$non_fhs_bin"
+cp "$ROOT"/scripts/*.sh "$non_fhs_skill/scripts/"
+chmod 755 "$non_fhs_skill"/scripts/*.sh
+for tool_name in awk basename bash cat chmod cut dirname git grep mkdir mktemp readlink rm sed stat tr wc; do
+  if [ "$tool_name" = "bash" ]; then
+    cat > "$non_fhs_bin/bash" <<'SH'
+#!/bin/bash
+exec /bin/bash "$@"
+SH
+    chmod 755 "$non_fhs_bin/bash"
+    continue
+  fi
+  tool_path="$(type -P "$tool_name" 2>/dev/null || true)"
+  [ -n "$tool_path" ] || fail "non-FHS bootstrap tool unavailable: $tool_name"
+  {
+    printf '#!/bin/bash\n'
+    printf 'exec %q "$@"\n' "$tool_path"
+  } > "$non_fhs_bin/$tool_name"
+  chmod 755 "$non_fhs_bin/$tool_name"
+done
+python3 - "$non_fhs_skill/scripts/claude-doctor.sh" "$non_fhs_store" "$non_fhs_missing_usr" "$non_fhs_missing_bin" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+old = 'claude_build_trusted_bootstrap_path "$CLAUDE_RUNTIME_INHERITED_PATH" "/nix/store" "/usr/bin" "/bin"'
+new = f'claude_build_trusted_bootstrap_path "$CLAUDE_RUNTIME_INHERITED_PATH" "{sys.argv[2]}" "{sys.argv[3]}" "{sys.argv[4]}"'
+if old not in text:
+    raise SystemExit("production bootstrap root call not found")
+path.write_text(text.replace(old, new, 1))
+PY
+disable_homebrew_paths "$non_fhs_skill/scripts/claude-locator.sh" "$TEST_ROOT/non-fhs-disabled-homebrew/claude"
+non_fhs_output="$({
+  cd "$ROOT"
+  HOME="$TEST_ROOT/home" PATH="$non_fhs_bin" \
+    BASH_ENV= ENV= /bin/bash --noprofile --norc "$non_fhs_skill/scripts/claude-doctor.sh" \
+      --repo-root "$ROOT" \
+      --skill-root "$non_fhs_skill" \
+      --config-file "$ROOT/.codex/claude/config.env" \
+      --skip-probes
+})"
+printf '%s\n' "$non_fhs_output" | grep -Fqx 'doctor_status=ok' || fail "non-FHS doctor bootstrap"
+printf '%s\n' "$non_fhs_output" | grep -Fqx 'update_check=skipped' || fail "non-FHS doctor report-only status"
+pass "doctor bootstraps end to end from an immutable-store-only toolchain"
+
 # Simulate the whole-tree Git fast-forward used by the updater: an installed
 # checkout at commit one receives both helpers from commit two without a manifest.
 source_repo="$TEST_ROOT/source-repo"

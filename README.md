@@ -129,9 +129,12 @@ The bridge keeps a strict division of labor:
    If `CLAUDE_REVIEW_MAX_ARTIFACT_BYTES` is overridden, use the same value for the
    build step and every review call; the runner never raises its cap from artifact
    headers.
-3. Codex starts `scripts/run-review.sh` with fixed `/bin/bash --noprofile --norc`
-   while setting `BASH_ENV=` and `ENV=` before Bash starts. The bridge captures the
-   caller's PATH as data and uses `/usr/bin:/bin` for bootstrap utilities.
+3. Codex starts `scripts/run-review.sh` with an exact trusted Bash and
+   `--noprofile --norc` while setting `BASH_ENV=` and `ENV=` before Bash starts.
+   Use `/bin/bash` on FHS systems or an absolute non-symlink `/nix/store` Bash on
+   NixOS. The bridge captures the caller's PATH as data and builds its bootstrap
+   PATH only from fixed FHS directories and physically resolved immutable-store
+   directories whose selected utilities are regular non-symlink executables.
 4. The runner selects Claude from inherited PATH, the official native-user
    launcher, or the documented platform-default Homebrew launcher and validates
    both its launch path and canonical target.
@@ -597,11 +600,12 @@ with paths like:
 If that happens, approve only the exact installed helper path:
 
 ```text
-["/bin/bash", "--noprofile", "--norc", "/Users/<you>/.codex/skills/claude-review/scripts/run-review.sh"]
+["<trusted-bash>", "--noprofile", "--norc", "/Users/<you>/.codex/skills/claude-review/scripts/run-review.sh"]
 ```
 
-Start that command with `BASH_ENV=` and `ENV=` so Bash cannot load startup code
-before the runner's trust bootstrap. Do not approve broad shell prefixes, and do not
+Replace `<trusted-bash>` with exact `/bin/bash`, or on NixOS an absolute non-symlink
+Bash physically inside `/nix/store`. Start that command with `BASH_ENV=` and `ENV=`
+so Bash cannot load startup code before the runner's trust bootstrap. Do not approve broad shell prefixes, and do not
 approve repo-local or unreviewed copies of the helper.
 
 Artifact builders, config helpers, and update checks do not need that approval.

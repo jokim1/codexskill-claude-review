@@ -5,6 +5,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SKILL_FILE="$REPO_ROOT/SKILL.md"
 RUNNER_FILE="$REPO_ROOT/scripts/run-review.sh"
+GUIDANCE_HOME="$(mktemp -d "$HOME/claude-review-guidance-test-XXXXXX")"
+trap 'rm -rf "$GUIDANCE_HOME"' EXIT
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
@@ -34,9 +36,24 @@ grep -Fq 'A later or' "$SKILL_FILE" || fail "SKILL.md stale affirmative guard mi
 grep -Fq 'diagnostic only: never modify PATH' "$SKILL_FILE" || fail "SKILL.md doctor mutation prohibition missing"
 grep -Fq 'Budget caps, review timeouts, artifacts, missing' "$SKILL_FILE" || fail "SKILL.md direct-remediation exclusions missing"
 grep -Fq 'state-write denial retain their direct remediation' "$SKILL_FILE" || fail "SKILL.md state-write exclusion missing"
-grep -Fq 'BASH_ENV= ENV= /bin/bash --noprofile --norc <skill-dir>/scripts/run-review.sh' "$SKILL_FILE" || fail "SKILL.md fixed-shell runner invocation missing"
-grep -Fq 'BASH_ENV= ENV= /bin/bash --noprofile --norc <skill-dir>/scripts/claude-doctor.sh' "$SKILL_FILE" || fail "SKILL.md fixed-shell doctor invocation missing"
-grep -Fq 'PATH="/usr/bin:/bin"' "$RUNNER_FILE" || fail "runner fixed bootstrap PATH missing"
+grep -Fq 'BASH_ENV= ENV= <trusted-bash> --noprofile --norc <skill-dir>/scripts/run-review.sh' "$SKILL_FILE" || fail "SKILL.md trusted-shell runner invocation missing"
+grep -Fq 'BASH_ENV= ENV= <trusted-bash> --noprofile --norc <skill-dir>/scripts/claude-doctor.sh' "$SKILL_FILE" || fail "SKILL.md trusted-shell doctor invocation missing"
+grep -Fq 'claude_build_trusted_bootstrap_path' "$RUNNER_FILE" || fail "runner trusted bootstrap PATH missing"
+
+mkdir -p "$GUIDANCE_HOME/.codex/skills/claude-review/scripts"
+touch "$GUIDANCE_HOME/.codex/skills/claude-review/scripts/run-review.sh"
+installed_guidance="$({
+  HOME="$GUIDANCE_HOME" RUNNER_FILE="$RUNNER_FILE" \
+    BASH_ENV= ENV= /bin/bash --noprofile --norc <<'BASH'
+eval "$(sed -n '/^trusted_review_bridge_guidance() {$/,/^}$/p' "$RUNNER_FILE")"
+trusted_review_bridge_guidance
+BASH
+})"
+printf '%s\n' "$installed_guidance" | grep -Fq '["/bin/bash", "--noprofile", "--norc",' || fail "installed-runner guidance lacks exact trusted Bash prefix"
+printf '%s\n' "$installed_guidance" | grep -Fq 'start it with BASH_ENV= and ENV= empty' || fail "installed-runner guidance lacks startup-environment safeguard"
+if printf '%s\n' "$installed_guidance" | grep -Fq '["bash",'; then
+  fail "installed-runner guidance retains bare Bash prefix"
+fi
 
 python3 - "$RUNNER_FILE" "$SKILL_FILE" <<'PY'
 from pathlib import Path
