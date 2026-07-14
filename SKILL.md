@@ -678,6 +678,9 @@ Treat `claude_path_status=launcher_dependency_unsafe` the same way: the recogniz
 shebang interpreter failed the launcher's trust boundary and must not be executed.
 Use the emitted `claude_launcher_dependency_path`, trust scope, and trust reason to
 explain which inherited-PATH or absolute interpreter needs repair.
+Treat `claude_path_status=launcher_dependency_unsupported` as fail-closed too; use
+an absolute interpreter or exact `#!/usr/bin/env NAME` launcher rather than trying
+to interpret or bypass unsupported `env -S` syntax in the rendering layer.
 Do not replace it with a hand-written `claude -p` probe.
 
 ### `/claude-review update`

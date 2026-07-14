@@ -3,7 +3,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TEST_ROOT="$(mktemp -d "$HOME/.codex/claude-runner-test-XXXXXX")"
+TEST_ROOT="$(mktemp -d "$HOME/claude-runner-test-XXXXXX")"
 ARTIFACT_ROOT="$(mktemp -d /tmp/claude-review-discovery-test-XXXXXX)"
 SYSTEM_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 trap 'rm -rf "$TEST_ROOT" "$ARTIFACT_ROOT"' EXIT
@@ -382,6 +382,19 @@ dependency_output="$(run_runner "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$depende
 assert_json_status "$dependency_output" blocked "launcher interpreter is unavailable" "definitely-missing-claude-interpreter"
 assert_doctor_offer "$dependency_output" true
 [ ! -e "$TEST_ROOT/dependency.log" ] || fail "missing-dependency launcher executed"
+
+unsupported_home="$TEST_ROOT/unsupported-dependency-home"
+unsupported_log="$TEST_ROOT/unsupported-dependency.log"
+mkdir -p "$unsupported_home/.local/bin"
+cat > "$unsupported_home/.local/bin/claude" <<'SH'
+#!/usr/bin/env -S fake-node --unsafe-flag
+exit 99
+SH
+chmod 755 "$unsupported_home/.local/bin/claude"
+unsupported_output="$(run_runner "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$unsupported_home" "$SYSTEM_PATH" "$unsupported_log")"
+assert_json_status "$unsupported_output" blocked "unsupported shebang interpreter syntax" "exact '#!/usr/bin/env NAME'"
+assert_doctor_offer "$unsupported_output" true
+[ ! -e "$unsupported_log" ] || fail "unsupported-shebang launcher executed"
 
 absolute_home="$TEST_ROOT/absolute-dependency-home"
 mkdir -p "$absolute_home/.local/bin"

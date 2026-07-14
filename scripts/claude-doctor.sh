@@ -439,8 +439,12 @@ if [ -n "$candidate_path" ]; then
     fi
     if ! claude_runtime_check_launcher_dependency "$claude_target"; then
       candidate_safe="false"
-      path_status="launcher_dependency_missing"
       launcher_dependency="$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY"
+      if [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" = "unsupported" ]; then
+        path_status="launcher_dependency_unsupported"
+      else
+        path_status="launcher_dependency_missing"
+      fi
     elif [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" = "available" ] && \
       [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" != "none" ] && \
       ! claude_locator_validate_launcher_dependency \
@@ -514,6 +518,9 @@ if [ "$candidate_safe" != "true" ]; then
       ;;
     launcher_dependency_unsafe)
       print_kv "claude_guidance" "Use a trusted launcher interpreter outside repository, invocation-CWD, temp, world-writable file, and world-writable parent boundaries."
+      ;;
+    launcher_dependency_unsupported)
+      print_kv "claude_guidance" "Use an absolute interpreter or exact '#!/usr/bin/env NAME' launcher shebang, or install native Claude with: curl -fsSL https://claude.ai/install.sh | bash"
       ;;
   esac
   exit 0

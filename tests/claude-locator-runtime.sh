@@ -305,8 +305,10 @@ cat > "$TEST_ROOT/trusted/bin/unsupported-env-s" <<'SH'
 #!/usr/bin/env -S missing --flag
 SH
 chmod 755 "$TEST_ROOT/trusted/bin/unsupported-env-s"
-claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/unsupported-env-s" || fail "env -S remains unknown"
-assert_eq "unknown" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "env -S not classified"
+if claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/unsupported-env-s"; then
+  fail "env -S shebang accepted without deterministic parsing"
+fi
+assert_eq "unsupported" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "env -S fails closed"
 claude_runtime_check_launcher_dependency /bin/echo || fail "native candidate remains unknown"
 assert_eq "unknown" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "native not classified from exit behavior"
 pass "launcher dependency classification is bounded to recognized shebangs"
@@ -316,15 +318,19 @@ cat > "$TEST_ROOT/trusted/bin/malformed-shebang" <<'SH'
 exit 127
 SH
 chmod 755 "$TEST_ROOT/trusted/bin/malformed-shebang"
-claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/malformed-shebang" || fail "malformed shebang remains unknown"
-assert_eq "unknown" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "malformed shebang classification"
+if claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/malformed-shebang"; then
+  fail "malformed shebang accepted"
+fi
+assert_eq "unsupported" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "malformed shebang fails closed"
 cat > "$TEST_ROOT/trusted/bin/env-extra" <<'SH'
 #!/usr/bin/env missing-name extra
 exit 127
 SH
 chmod 755 "$TEST_ROOT/trusted/bin/env-extra"
-claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/env-extra" || fail "env with extra args remains unknown"
-assert_eq "unknown" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "env extra classification"
+if claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/env-extra"; then
+  fail "env with extra args accepted"
+fi
+assert_eq "unsupported" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "env extra fails closed"
 cat > "$TEST_ROOT/trusted/bin/existing-interpreter-exit" <<'SH'
 #!/bin/bash
 exit 127
@@ -333,7 +339,7 @@ chmod 755 "$TEST_ROOT/trusted/bin/existing-interpreter-exit"
 claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/existing-interpreter-exit" || fail "existing interpreter available"
 assert_eq "available" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "exit code never drives dependency classification"
 assert_eq "/bin/bash" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" "absolute interpreter path retained for trust validation"
-pass "unsupported and exit-code-only dependency cases remain unclassified"
+pass "unsupported shebangs fail closed while exit-code-only cases remain unclassified"
 
 dependency_invocation="$TEST_ROOT/dependency-invocation"
 dependency_launcher="$TEST_ROOT/trusted/bin/path-interpreter"

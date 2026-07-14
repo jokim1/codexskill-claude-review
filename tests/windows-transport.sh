@@ -78,15 +78,19 @@ printf '%s' "$argv_output" | grep -Fq 'equals=value' || fail "equals argv lost"
 python_bin="$(type -P python3 2>/dev/null || type -P python 2>/dev/null || true)"
 [ -n "$python_bin" ] || fail "Python unavailable for timeout transport"
 claude_runtime_build_command "$CLAUDE_LOCATOR_LAUNCH_PATH" /d /c "echo timeout-ok"
+windows_runtime_command=("${CLAUDE_RUNTIME_COMMAND[@]}")
+windows_runtime_command[0]="$(cygpath -w "${windows_runtime_command[0]}")"
 timeout_output="$({
   claude_runtime_scrub_environment
   export MSYS2_ARG_CONV_EXCL='*'
   cd "$runtime_cwd"
-  "$python_bin" - 10 "${CLAUDE_RUNTIME_COMMAND[@]}" <<'PY'
+  "$python_bin" - 10 "${windows_runtime_command[@]}" <<'PY'
 import os
 import subprocess
 import sys
 
+if sys.argv[2].startswith("/"):
+    raise SystemExit(f"executable was not converted for native Python: {sys.argv[2]!r}")
 completed = subprocess.run(
     sys.argv[2:],
     cwd=os.getcwd(),

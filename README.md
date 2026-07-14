@@ -510,8 +510,10 @@ after profile loading reports `launcher_dependency_missing`. A recognized
 interpreter that resolves through inherited PATH, or an absolute shebang
 interpreter, must pass the same path, symlink-chain, file-mode, and parent trust
 validation as the Claude launcher; an unsafe interpreter reports
-`launcher_dependency_unsafe`. Expose a trusted interpreter to the environment that
-launches Codex, or migrate to native Claude:
+`launcher_dependency_unsafe`. Shebangs other than an absolute interpreter or exact
+`#!/usr/bin/env NAME` form fail closed as `launcher_dependency_unsupported` rather
+than being executed without deterministic dependency validation. Expose a trusted
+interpreter to the environment that launches Codex, or migrate to native Claude:
 
 ```bash
 curl -fsSL https://claude.ai/install.sh | bash
@@ -529,13 +531,14 @@ environment that launches Codex or in Claude `settings.json` as appropriate.
 
 Doctor's main discovery states are `available`, `installed_not_on_path`,
 `not_executable`, `not_regular`, `dangling_symlink`, `unsafe_candidate`,
-`launcher_dependency_missing`, `launcher_dependency_unsafe`, and `not_found`.
-`not_found` means only that PATH and the bounded official/default locations did not
-contain a candidate; it does not prove Claude is uninstalled. Doctor is report-only
-and will not edit PATH or shell files, install Claude, or create symlinks. Its auth
-diagnostics explicitly use the same `subscription_only_credentials_scrubbed`
-context as review, so an API-key-only ordinary Claude setup may work even when
-bridge subscription auth is unavailable.
+`launcher_dependency_missing`, `launcher_dependency_unsafe`,
+`launcher_dependency_unsupported`, and `not_found`. `not_found` means only that
+PATH and the bounded official/default locations did not contain a candidate; it
+does not prove Claude is uninstalled. Doctor is report-only and will not edit PATH
+or shell files, install Claude, or create symlinks. Its auth diagnostics explicitly
+use the same `subscription_only_credentials_scrubbed` context as review, so an
+API-key-only ordinary Claude setup may work even when bridge subscription auth is
+unavailable.
 
 ## Sandbox And Claude State
 
@@ -620,6 +623,13 @@ and reason without executing it. Remove the untrusted PATH entry or expose a
 trusted interpreter outside repository, invocation-CWD, temp, world-writable file,
 and world-writable parent boundaries. The bridge will not weaken launcher trust or
 rewrite PATH to select a different interpreter.
+
+### Doctor reports `launcher_dependency_unsupported`
+
+The selected launcher uses shebang syntax the bridge cannot parse without
+reimplementing shell or `env -S` tokenization. Use a launcher with an absolute
+interpreter or exact `#!/usr/bin/env NAME` shebang, or migrate to native Claude.
+The bridge fails closed instead of executing an unvalidated interpreter.
 
 ### Doctor reports `validation_unavailable`
 

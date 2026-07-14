@@ -68,14 +68,24 @@ claude_runtime_check_launcher_dependency() {
 
   payload="${first_line#\#!}"
   IFS=$' \t' read -r interpreter remainder <<< "$payload"
-  [ -n "$interpreter" ] || return 0
+  if [ -z "$interpreter" ]; then
+    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unsupported"
+    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="shebang"
+    return 1
+  fi
 
   if [ "$interpreter" = "/usr/bin/env" ]; then
     IFS=$' \t' read -r dependency extra <<< "$remainder"
-    [ -n "$dependency" ] && [ -z "$extra" ] || return 0
+    if [ -z "$dependency" ] || [ -n "$extra" ]; then
+      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unsupported"
+      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="env"
+      return 1
+    fi
     case "$dependency" in
       *[!A-Za-z0-9._+-]*)
-        return 0
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unsupported"
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="env"
+        return 1
         ;;
     esac
     CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="$dependency"
@@ -103,7 +113,9 @@ claude_runtime_check_launcher_dependency() {
       ;;
   esac
 
-  return 0
+  CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unsupported"
+  CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="shebang"
+  return 1
 }
 
 # claude-review-helper-complete: runtime_v1

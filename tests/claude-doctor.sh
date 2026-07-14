@@ -3,7 +3,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TEST_ROOT="$(mktemp -d "$HOME/.codex/claude-doctor-test-XXXXXX")"
+TEST_ROOT="$(mktemp -d "$HOME/claude-doctor-test-XXXXXX")"
 SYSTEM_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
@@ -387,6 +387,20 @@ assert_line "$dependency_output" "claude_launcher_dependency=definitely-missing-
 assert_line "$dependency_output" "claude_trust_scope=none" "dependency trust scope"
 assert_line "$dependency_output" "claude_trust_reason=none" "dependency trust reason"
 [ ! -e "$TEST_ROOT/dependency.log" ] || fail "missing dependency launcher executed"
+
+unsupported_home="$TEST_ROOT/unsupported-dependency-home"
+unsupported_log="$TEST_ROOT/unsupported-dependency.log"
+mkdir -p "$unsupported_home/.local/bin"
+cat > "$unsupported_home/.local/bin/claude" <<'SH'
+#!/usr/bin/env -S fake-node --unsafe-flag
+exit 99
+SH
+chmod 755 "$unsupported_home/.local/bin/claude"
+unsupported_output="$(run_doctor "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$unsupported_home" "$SYSTEM_PATH" "$unsupported_log" --skip-probes)"
+assert_line "$unsupported_output" "claude_path_status=launcher_dependency_unsupported" "unsupported dependency status"
+assert_line "$unsupported_output" "claude_launcher_dependency=env" "unsupported dependency classifier"
+assert_contains "$unsupported_output" "exact '#!/usr/bin/env NAME'" "unsupported dependency guidance"
+[ ! -e "$unsupported_log" ] || fail "unsupported dependency launcher executed"
 
 unsafe_dependency_home="$TEST_ROOT/unsafe-dependency-home"
 unsafe_dependency_invocation="$TEST_ROOT/unsafe-dependency-invocation"

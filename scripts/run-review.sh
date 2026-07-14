@@ -470,7 +470,7 @@ failure_priority() {
     missing_binary)
       printf '1'
       ;;
-    unusable_runner|launcher_dependency_missing|launcher_dependency_unsafe)
+    unusable_runner|launcher_dependency_missing|launcher_dependency_unsafe|launcher_dependency_unsupported)
       printf '2'
       ;;
     subscription_auth_unavailable)
@@ -520,7 +520,7 @@ record_failure() {
 
 failure_offers_doctor() {
   case "${1:-}" in
-    missing_binary|unusable_runner|launcher_dependency_missing|launcher_dependency_unsafe|subscription_auth_unavailable|ambiguous_auth|probe_timed_out|invocation_failed)
+    missing_binary|unusable_runner|launcher_dependency_missing|launcher_dependency_unsafe|launcher_dependency_unsupported|subscription_auth_unavailable|ambiguous_auth|probe_timed_out|invocation_failed)
       return 0
       ;;
     *)
@@ -956,10 +956,17 @@ probe_runner_usability() {
   esac
 
   if ! claude_runtime_check_launcher_dependency "$CLAUDE_TARGET"; then
-    record_failure \
-      "launcher_dependency_missing" \
-      "Claude Code was found, but its launcher interpreter is unavailable from Codex's inherited PATH." \
-      "Make the '${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY}' interpreter available in the environment that launches Codex, or install the recommended native Claude with curl -fsSL https://claude.ai/install.sh | bash. Then run /claude-review doctor."
+    if [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" = "unsupported" ]; then
+      record_failure \
+        "launcher_dependency_unsupported" \
+        "Claude Code was found, but its launcher uses unsupported shebang interpreter syntax." \
+        "Use a launcher with an absolute interpreter or exact '#!/usr/bin/env NAME' shebang, or install the recommended native Claude with curl -fsSL https://claude.ai/install.sh | bash. Then run /claude-review doctor."
+    else
+      record_failure \
+        "launcher_dependency_missing" \
+        "Claude Code was found, but its launcher interpreter is unavailable from Codex's inherited PATH." \
+        "Make the '${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY}' interpreter available in the environment that launches Codex, or install the recommended native Claude with curl -fsSL https://claude.ai/install.sh | bash. Then run /claude-review doctor."
+    fi
     return 1
   fi
   if [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" = "available" ] && \

@@ -60,6 +60,7 @@ eligible = {
     "unusable_runner",
     "launcher_dependency_missing",
     "launcher_dependency_unsafe",
+    "launcher_dependency_unsupported",
     "subscription_auth_unavailable",
     "ambiguous_auth",
     "probe_timed_out",
