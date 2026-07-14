@@ -363,15 +363,19 @@ if patch_homebrew_path "$brew_skill" "$brew_path"; then
   assert_json_status "$loop_output" blocked "unsafe path" "target:validation_unavailable"
   [ ! -e "$loop_log" ] || fail "symlink loop deferred to Homebrew"
 
-  inaccessible_home="$TEST_ROOT/inaccessible-native-home"
-  inaccessible_log="$TEST_ROOT/inaccessible-native.log"
-  mkdir -p "$inaccessible_home/.local/bin" "$inaccessible_home/blocked"
-  ln -s "$inaccessible_home/blocked/claude" "$inaccessible_home/.local/bin/claude"
-  chmod 000 "$inaccessible_home/blocked"
-  inaccessible_output="$(run_runner "$brew_skill" "$REPO_ROOT" "$REPO_ROOT" "$inaccessible_home" "$SYSTEM_PATH" "$inaccessible_log")"
-  chmod 700 "$inaccessible_home/blocked"
-  assert_json_status "$inaccessible_output" blocked "unsafe path" "target:validation_unavailable"
-  [ ! -e "$inaccessible_log" ] || fail "inaccessible symlink target deferred to Homebrew"
+  # Root bypasses these DAC mode bits, so this fixture is meaningful only for
+  # an identity whose filesystem access is actually constrained by them.
+  if [ "${EUID:-1}" -ne 0 ]; then
+    inaccessible_home="$TEST_ROOT/inaccessible-native-home"
+    inaccessible_log="$TEST_ROOT/inaccessible-native.log"
+    mkdir -p "$inaccessible_home/.local/bin" "$inaccessible_home/blocked"
+    ln -s "$inaccessible_home/blocked/claude" "$inaccessible_home/.local/bin/claude"
+    chmod 000 "$inaccessible_home/blocked"
+    inaccessible_output="$(run_runner "$brew_skill" "$REPO_ROOT" "$REPO_ROOT" "$inaccessible_home" "$SYSTEM_PATH" "$inaccessible_log")"
+    chmod 700 "$inaccessible_home/blocked"
+    assert_json_status "$inaccessible_output" blocked "unsafe path" "target:validation_unavailable"
+    [ ! -e "$inaccessible_log" ] || fail "inaccessible symlink target deferred to Homebrew"
+  fi
 
   invalid_home="$TEST_ROOT/invalid-native-home"
   write_success_claude "$invalid_home/.local/bin/claude"
@@ -550,14 +554,18 @@ nested_output="$(run_runner "$REPO_ROOT" "$REPO_ROOT" "$nested_invocation" "$nes
 assert_json_status "$nested_output" blocked "launcher interpreter resolves to an unsafe path" "fake-python"
 [ ! -e "$nested_log" ] || fail "nested unsafe interpreter executed"
 
-unreadable_home="$TEST_ROOT/unreadable-home"
-unreadable_log="$TEST_ROOT/unreadable.log"
-write_success_claude "$unreadable_home/.local/bin/claude"
-chmod 111 "$unreadable_home/.local/bin/claude"
-unreadable_output="$(run_runner "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$unreadable_home" "$SYSTEM_PATH" "$unreadable_log")"
-assert_json_status "$unreadable_output" blocked "cannot be read safely" "$unreadable_home/.local/bin/claude"
-assert_doctor_offer "$unreadable_output" true
-[ ! -e "$unreadable_log" ] || fail "unreadable launcher executed"
+# Root bypasses these DAC mode bits, so this fixture is meaningful only for an
+# identity whose read access is actually constrained by them.
+if [ "${EUID:-1}" -ne 0 ]; then
+  unreadable_home="$TEST_ROOT/unreadable-home"
+  unreadable_log="$TEST_ROOT/unreadable.log"
+  write_success_claude "$unreadable_home/.local/bin/claude"
+  chmod 111 "$unreadable_home/.local/bin/claude"
+  unreadable_output="$(run_runner "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$unreadable_home" "$SYSTEM_PATH" "$unreadable_log")"
+  assert_json_status "$unreadable_output" blocked "cannot be read safely" "$unreadable_home/.local/bin/claude"
+  assert_doctor_offer "$unreadable_output" true
+  [ ! -e "$unreadable_log" ] || fail "unreadable launcher executed"
+fi
 
 exit_home="$TEST_ROOT/exit-127-home"
 mkdir -p "$exit_home/.local/bin"

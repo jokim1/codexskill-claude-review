@@ -485,9 +485,10 @@ not treated as dangling and remain authoritative fail-closed diagnoses.
 
 Every selected launcher is normalized to an absolute path by physically resolving
 its parent, while its final symlink name is preserved for execution. The canonical
-target is recorded separately. Both launch and target chains must be regular,
-executable, outside repo/invocation/temp boundaries, and free of world-writable
-executable files and parents before Claude runs.
+target is recorded separately. Launch entries and every symlink hop must stay
+outside repo/invocation/temp boundaries and world-writable parents; the canonical
+target must also be a regular, executable, non-world-writable file before Claude
+runs.
 
 Trust validation prefers the fixed `/usr/bin` or `/bin` `stat` and `readlink`
 utilities. On NixOS it may use PATH-resolved regular executables only when their
@@ -661,7 +662,7 @@ opened for bounded inspection. Make the reported path readable to the Codex
 process or reinstall native Claude. The bridge does not assume an unreadable file
 is a native binary.
 
-### Doctor reports `validation_unavailable`
+### Doctor reports `unsafe_candidate` with `validation_unavailable`
 
 The bridge could not find trusted `stat` or `readlink` support for the selected
 launcher. Restore the platform coreutils under `/usr/bin` or `/bin`, or on NixOS

@@ -243,7 +243,10 @@ EOF
     fail "$case_name assertion failed"
   fi
   if [ -n "$expected_doctor_offer" ]; then
-    assert_doctor_offer_state "$case_name" "$output" "$expected_doctor_offer"
+    if ! assert_doctor_offer_state "$case_name" "$output" "$expected_doctor_offer"; then
+      rm -rf "$fake_root" "$tmpdir"
+      fail "$case_name doctor-offer assertion failed"
+    fi
   fi
 
   rm -rf "$fake_root" "$tmpdir"
@@ -479,7 +482,10 @@ run_artifact_boundary_case() {
     rm -rf "$tmpdir"
     fail "artifact boundary assertion failed"
   fi
-  assert_doctor_offer_state "artifact boundary" "$output" "false"
+  if ! assert_doctor_offer_state "artifact boundary" "$output" "false"; then
+    rm -rf "$tmpdir"
+    fail "artifact boundary doctor-offer assertion failed"
+  fi
 
   rm -rf "$tmpdir"
   printf 'ok: artifact boundary\n'
@@ -513,7 +519,10 @@ run_config_boundary_case() {
     rm -rf "$tmpdir"
     fail "config boundary assertion failed"
   fi
-  assert_doctor_offer_state "config boundary" "$output" "false"
+  if ! assert_doctor_offer_state "config boundary" "$output" "false"; then
+    rm -rf "$tmpdir"
+    fail "config boundary doctor-offer assertion failed"
+  fi
 
   rm -rf "$tmpdir"
   printf 'ok: config boundary\n'
@@ -697,7 +706,10 @@ EOF
     rm -rf "$fake_root" "$tmpdir"
     fail "probe timeout assertion failed"
   fi
-  assert_doctor_offer_state "probe timeout" "$output" "true"
+  if ! assert_doctor_offer_state "probe timeout" "$output" "true"; then
+    rm -rf "$fake_root" "$tmpdir"
+    fail "probe timeout doctor-offer assertion failed"
+  fi
 
   rm -rf "$fake_root" "$tmpdir"
   printf 'ok: probe timeout\n'

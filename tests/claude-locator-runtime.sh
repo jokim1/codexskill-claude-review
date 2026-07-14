@@ -294,19 +294,23 @@ if claude_locator_validate_candidate "$TEST_ROOT/trusted/bin/loop-a" "$ROOT" "$T
 fi
 assert_eq "validation_unavailable" "$CLAUDE_LOCATOR_VALIDATION_STATUS" "symlink loop fails closed"
 
-mkdir -p "$TEST_ROOT/inaccessible-target"
-ln -s "$TEST_ROOT/inaccessible-target/claude" "$TEST_ROOT/trusted/bin/inaccessible-link"
-chmod 000 "$TEST_ROOT/inaccessible-target"
-if claude_locator_is_dangling_symlink "$TEST_ROOT/trusted/bin/inaccessible-link"; then
+# Root bypasses these DAC mode bits, so this fixture is meaningful only for an
+# identity whose filesystem access is actually constrained by them.
+if [ "${EUID:-1}" -ne 0 ]; then
+  mkdir -p "$TEST_ROOT/inaccessible-target"
+  ln -s "$TEST_ROOT/inaccessible-target/claude" "$TEST_ROOT/trusted/bin/inaccessible-link"
+  chmod 000 "$TEST_ROOT/inaccessible-target"
+  if claude_locator_is_dangling_symlink "$TEST_ROOT/trusted/bin/inaccessible-link"; then
+    chmod 700 "$TEST_ROOT/inaccessible-target"
+    fail "inaccessible symlink target classified as dangling"
+  fi
+  if claude_locator_validate_candidate "$TEST_ROOT/trusted/bin/inaccessible-link" "$ROOT" "$TEST_ROOT/work"; then
+    chmod 700 "$TEST_ROOT/inaccessible-target"
+    fail "inaccessible symlink target accepted"
+  fi
   chmod 700 "$TEST_ROOT/inaccessible-target"
-  fail "inaccessible symlink target classified as dangling"
+  assert_eq "validation_unavailable" "$CLAUDE_LOCATOR_VALIDATION_STATUS" "inaccessible symlink target fails closed"
 fi
-if claude_locator_validate_candidate "$TEST_ROOT/trusted/bin/inaccessible-link" "$ROOT" "$TEST_ROOT/work"; then
-  chmod 700 "$TEST_ROOT/inaccessible-target"
-  fail "inaccessible symlink target accepted"
-fi
-chmod 700 "$TEST_ROOT/inaccessible-target"
-assert_eq "validation_unavailable" "$CLAUDE_LOCATOR_VALIDATION_STATUS" "inaccessible symlink target fails closed"
 pass "independent trust rejection statuses"
 
 mkdir -p "$TEST_ROOT/physical/inside/trusted/bin"
@@ -450,15 +454,19 @@ if claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/env-extra"; 
 fi
 assert_eq "unsupported" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "env extra fails closed"
 
-cat > "$TEST_ROOT/trusted/bin/unreadable-launcher" <<'SH'
+# Root bypasses these DAC mode bits, so this fixture is meaningful only for an
+# identity whose read access is actually constrained by them.
+if [ "${EUID:-1}" -ne 0 ]; then
+  cat > "$TEST_ROOT/trusted/bin/unreadable-launcher" <<'SH'
 #!/bin/bash
 exit 0
 SH
-chmod 111 "$TEST_ROOT/trusted/bin/unreadable-launcher"
-if claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/unreadable-launcher"; then
-  fail "unreadable launcher accepted as native"
+  chmod 111 "$TEST_ROOT/trusted/bin/unreadable-launcher"
+  if claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/unreadable-launcher"; then
+    fail "unreadable launcher accepted as native"
+  fi
+  assert_eq "unreadable" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "unreadable launcher fails closed"
 fi
-assert_eq "unreadable" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "unreadable launcher fails closed"
 
 cycle_a="$TEST_ROOT/trusted/bin/cycle-a"
 cycle_b="$TEST_ROOT/trusted/bin/cycle-b"

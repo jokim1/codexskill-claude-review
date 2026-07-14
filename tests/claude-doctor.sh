@@ -101,6 +101,8 @@ run_doctor() {
     ANTHROPIC_BEARER_TOKEN="bearer-secret" \
     ANTHROPIC_CONSOLE_API_KEY="console-secret" \
     ANTHROPIC_CONSOLE_AUTH_TOKEN="console-auth-secret" \
+    BASH_ENV="$TEST_ROOT/nonexistent-bash-env" \
+    ENV="$TEST_ROOT/nonexistent-env" \
     /bin/bash "$skill_root/scripts/claude-doctor.sh" \
       --repo-root "$repo_root" \
       --skill-root "$skill_root" \
@@ -362,16 +364,20 @@ if patch_homebrew_path "$brew_skill" "$brew_path"; then
   assert_line "$loop_output" "claude_trust_reason=validation_unavailable" "symlink loop is not dangling"
   assert_line "$loop_output" "stale_fallback_status=none" "symlink loop not deferred"
 
-  inaccessible_home="$TEST_ROOT/inaccessible-native-home"
-  mkdir -p "$inaccessible_home/.local/bin" "$inaccessible_home/blocked"
-  ln -s "$inaccessible_home/blocked/claude" "$inaccessible_home/.local/bin/claude"
-  chmod 000 "$inaccessible_home/blocked"
-  inaccessible_output="$(run_doctor "$brew_skill" "$REPO_ROOT" "$REPO_ROOT" "$inaccessible_home" "$SYSTEM_PATH" "$TEST_ROOT/inaccessible-native.log" --skip-probes)"
-  chmod 700 "$inaccessible_home/blocked"
-  assert_line "$inaccessible_output" "claude_discovery=native_user" "inaccessible native remains authoritative"
-  assert_line "$inaccessible_output" "claude_path_status=unsafe_candidate" "inaccessible target fails closed"
-  assert_line "$inaccessible_output" "claude_trust_reason=validation_unavailable" "inaccessible target is not dangling"
-  assert_line "$inaccessible_output" "stale_fallback_status=none" "inaccessible target not deferred"
+  # Root bypasses these DAC mode bits, so this fixture is meaningful only for
+  # an identity whose filesystem access is actually constrained by them.
+  if [ "${EUID:-1}" -ne 0 ]; then
+    inaccessible_home="$TEST_ROOT/inaccessible-native-home"
+    mkdir -p "$inaccessible_home/.local/bin" "$inaccessible_home/blocked"
+    ln -s "$inaccessible_home/blocked/claude" "$inaccessible_home/.local/bin/claude"
+    chmod 000 "$inaccessible_home/blocked"
+    inaccessible_output="$(run_doctor "$brew_skill" "$REPO_ROOT" "$REPO_ROOT" "$inaccessible_home" "$SYSTEM_PATH" "$TEST_ROOT/inaccessible-native.log" --skip-probes)"
+    chmod 700 "$inaccessible_home/blocked"
+    assert_line "$inaccessible_output" "claude_discovery=native_user" "inaccessible native remains authoritative"
+    assert_line "$inaccessible_output" "claude_path_status=unsafe_candidate" "inaccessible target fails closed"
+    assert_line "$inaccessible_output" "claude_trust_reason=validation_unavailable" "inaccessible target is not dangling"
+    assert_line "$inaccessible_output" "stale_fallback_status=none" "inaccessible target not deferred"
+  fi
 
   invalid_home="$TEST_ROOT/invalid-home"
   write_fake_claude "$invalid_home/.local/bin/claude"
@@ -402,9 +408,12 @@ assert_line "$nonexec_output" "claude_trust_scope=target" "not executable scope"
 assert_line "$nonexec_output" "claude_trust_reason=not_executable" "not executable reason"
 
 dangling_only_home="$TEST_ROOT/dangling-only-home"
+dangling_only_skill="$TEST_ROOT/dangling-only-skill"
+copy_fixture_skill "$dangling_only_skill"
+disable_homebrew_paths "$dangling_only_skill" "$TEST_ROOT/disabled-dangling-homebrew/claude"
 mkdir -p "$dangling_only_home/.local/bin"
 ln -s "$dangling_only_home/missing" "$dangling_only_home/.local/bin/claude"
-dangling_output="$(run_doctor "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$dangling_only_home" "$SYSTEM_PATH" "$TEST_ROOT/dangling.log" --skip-probes)"
+dangling_output="$(run_doctor "$dangling_only_skill" "$REPO_ROOT" "$REPO_ROOT" "$dangling_only_home" "$SYSTEM_PATH" "$TEST_ROOT/dangling.log" --skip-probes)"
 assert_line "$dangling_output" "claude_path_status=dangling_symlink" "dangling status"
 assert_line "$dangling_output" "claude_trust_scope=target" "dangling scope"
 assert_line "$dangling_output" "claude_trust_reason=dangling_symlink" "dangling reason"
@@ -574,14 +583,18 @@ assert_line "$nested_output" "claude_launcher_dependency=fake-python" "nested de
 assert_line "$nested_output" "claude_launcher_dependency_trust_reason=invocation_cwd_path" "nested dependency trust reason"
 [ ! -e "$nested_log" ] || fail "nested unsafe dependency executed"
 
-unreadable_home="$TEST_ROOT/unreadable-home"
-unreadable_log="$TEST_ROOT/unreadable.log"
-write_fake_claude "$unreadable_home/.local/bin/claude"
-chmod 111 "$unreadable_home/.local/bin/claude"
-unreadable_output="$(run_doctor "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$unreadable_home" "$SYSTEM_PATH" "$unreadable_log" --skip-probes)"
-assert_line "$unreadable_output" "claude_path_status=launcher_dependency_unreadable" "unreadable dependency status"
-assert_line "$unreadable_output" "claude_launcher_dependency_path=$unreadable_home/.local/bin/claude" "unreadable dependency path"
-[ ! -e "$unreadable_log" ] || fail "unreadable launcher executed"
+# Root bypasses these DAC mode bits, so this fixture is meaningful only for an
+# identity whose read access is actually constrained by them.
+if [ "${EUID:-1}" -ne 0 ]; then
+  unreadable_home="$TEST_ROOT/unreadable-home"
+  unreadable_log="$TEST_ROOT/unreadable.log"
+  write_fake_claude "$unreadable_home/.local/bin/claude"
+  chmod 111 "$unreadable_home/.local/bin/claude"
+  unreadable_output="$(run_doctor "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$unreadable_home" "$SYSTEM_PATH" "$unreadable_log" --skip-probes)"
+  assert_line "$unreadable_output" "claude_path_status=launcher_dependency_unreadable" "unreadable dependency status"
+  assert_line "$unreadable_output" "claude_launcher_dependency_path=$unreadable_home/.local/bin/claude" "unreadable dependency path"
+  [ ! -e "$unreadable_log" ] || fail "unreadable launcher executed"
+fi
 pass "doctor launcher-dependency classification"
 
 # Profile-only values are not imported; directly inherited values are presence-only.
