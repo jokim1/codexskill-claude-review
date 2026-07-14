@@ -503,6 +503,10 @@ a login shell, source profiles, or retry through an interactive shell. They unse
 only `BASH_ENV`, `ENV`, and the five Anthropic API credential variables used to
 enforce subscription-only review. `scripts/claude-subscription-env.sh` remains as a
 compatible legacy entry point, but runner and doctor share `claude-runtime.sh`.
+For Git Bash timeout/probe calls through native Python, that shared runtime converts
+only the validated executable path with the fixed `/usr/bin/cygpath` utility before
+passing the command as discrete argv; it does not build a shell command string or
+depend on ambient MSYS argument-conversion settings.
 
 This direct-runtime hardening intentionally removes the former implicit login-
 profile fallback. A launcher whose shebang names an interpreter available only

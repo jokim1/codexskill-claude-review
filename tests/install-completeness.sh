@@ -34,7 +34,9 @@ done
 pass "new helpers are complete and CI-trackable with executable modes"
 
 git -C "$ROOT" check-ignore -q docs/local-plans/completeness-probe.md || fail "docs/local-plans is not ignored"
-[ ! -e "$ROOT/docs/local-plans/CLAUDE_DISCOVERY_AND_DOCTOR_RECOVERY_PLAN.md" ] || fail "local plan was copied into the task worktree"
+if git -C "$ROOT" ls-files --error-unmatch docs/local-plans/CLAUDE_DISCOVERY_AND_DOCTOR_RECOVERY_PLAN.md >/dev/null 2>&1; then
+  fail "local plan is tracked"
+fi
 pass "local implementation plans remain ignored and unpackaged"
 
 if rg -n 'claude-subscription-env' "$ROOT/scripts/run-review.sh" "$ROOT/scripts/claude-doctor.sh" >/dev/null; then

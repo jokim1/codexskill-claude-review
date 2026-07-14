@@ -28,6 +28,30 @@ claude_runtime_build_command() {
   done
 }
 
+claude_runtime_prepare_python_argv() {
+  local cygpath_bin=""
+  local converted_path=""
+
+  CLAUDE_RUNTIME_PYTHON_ARGV=("$@")
+  [ "${#CLAUDE_RUNTIME_PYTHON_ARGV[@]}" -gt 0 ] || return 1
+
+  case "${OSTYPE:-}" in
+    msys*|mingw*|cygwin*)
+      if [ -x /usr/bin/cygpath ]; then
+        cygpath_bin=/usr/bin/cygpath
+      elif [ -x /usr/bin/cygpath.exe ]; then
+        cygpath_bin=/usr/bin/cygpath.exe
+      else
+        return 1
+      fi
+      converted_path="$("$cygpath_bin" -w "${CLAUDE_RUNTIME_PYTHON_ARGV[0]}" 2>/dev/null)" || return 1
+      [ -n "$converted_path" ] || return 1
+      CLAUDE_RUNTIME_PYTHON_ARGV[0]="$converted_path"
+      ;;
+  esac
+  return 0
+}
+
 claude_runtime_run_direct() {
   local runtime_cwd="$1"
   local launch_path="$2"
@@ -55,6 +79,7 @@ claude_runtime_check_launcher_dependency() {
   CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unknown"
   CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="none"
   CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="none"
+  CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH="none"
 
   [ -f "$canonical_target" ] || return 0
   IFS= read -r -n 4096 first_line < "$canonical_target" || true
@@ -74,35 +99,44 @@ claude_runtime_check_launcher_dependency() {
     return 1
   fi
 
-  if [ "$interpreter" = "/usr/bin/env" ]; then
-    IFS=$' \t' read -r dependency extra <<< "$remainder"
-    if [ -z "$dependency" ] || [ -n "$extra" ]; then
-      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unsupported"
-      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="env"
-      return 1
-    fi
-    case "$dependency" in
-      *[!A-Za-z0-9._+-]*)
+  case "$interpreter" in
+    /*/env|/env)
+      CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH="$interpreter"
+      if [ ! -x "$interpreter" ]; then
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="missing"
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="env"
+        return 1
+      fi
+      IFS=$' \t' read -r dependency extra <<< "$remainder"
+      if [ -z "$dependency" ] || [ -n "$extra" ]; then
         CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unsupported"
         CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="env"
         return 1
-        ;;
-    esac
-    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="$dependency"
-    dependency_path="$(type -P "$dependency" 2>/dev/null || true)"
-    if [ -n "$dependency_path" ]; then
-      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="available"
-      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="$dependency_path"
-      return 0
-    fi
-    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="missing"
-    return 1
-  fi
+      fi
+      case "$dependency" in
+        *[!A-Za-z0-9._+-]*)
+          CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unsupported"
+          CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="env"
+          return 1
+          ;;
+      esac
+      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="$dependency"
+      dependency_path="$(type -P "$dependency" 2>/dev/null || true)"
+      if [ -n "$dependency_path" ]; then
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="available"
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="$dependency_path"
+        return 0
+      fi
+      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="missing"
+      return 1
+      ;;
+  esac
 
   case "$interpreter" in
     /*)
       dependency="${interpreter##*/}"
       CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="$dependency"
+      CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH="$interpreter"
       if [ -x "$interpreter" ]; then
         CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="available"
         CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="$interpreter"

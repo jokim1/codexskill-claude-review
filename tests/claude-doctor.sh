@@ -405,14 +405,16 @@ assert_contains "$unsupported_output" "exact '#!/usr/bin/env NAME'" "unsupported
 unsafe_dependency_home="$TEST_ROOT/unsafe-dependency-home"
 unsafe_dependency_invocation="$TEST_ROOT/unsafe-dependency-invocation"
 unsafe_dependency_log="$TEST_ROOT/unsafe-dependency.log"
-mkdir -p "$unsafe_dependency_invocation/bin"
+alternate_env_root="$TEST_ROOT/alternate-env"
+mkdir -p "$unsafe_dependency_invocation/bin" "$alternate_env_root"
+ln -s /usr/bin/env "$alternate_env_root/env"
 write_fake_claude "$unsafe_dependency_home/.local/bin/claude"
-python3 - "$unsafe_dependency_home/.local/bin/claude" <<'PY'
+python3 - "$unsafe_dependency_home/.local/bin/claude" "$alternate_env_root/env" <<'PY'
 from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
-path.write_text(path.read_text().replace("#!/bin/bash", "#!/usr/bin/env fake-node", 1))
+path.write_text(path.read_text().replace("#!/bin/bash", f"#!{sys.argv[2]} fake-node", 1))
 PY
 ln -s /bin/bash "$unsafe_dependency_invocation/bin/fake-node"
 unsafe_dependency_output="$(run_doctor "$REPO_ROOT" "$REPO_ROOT" "$unsafe_dependency_invocation" "$unsafe_dependency_home" "$unsafe_dependency_invocation/bin:$SYSTEM_PATH" "$unsafe_dependency_log" --skip-probes)"

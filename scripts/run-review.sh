@@ -34,7 +34,6 @@ CLAUDE_RUNTIME_CWD=""
 
 CLAUDE_BIN=""
 CLAUDE_TARGET=""
-CLAUDE_DISCOVERY_SOURCE="missing"
 CLAUDE_RUNNER_DESC=""
 CLAUDE_PRECHECK_MODE=""
 
@@ -283,8 +282,15 @@ if ! load_required_claude_helper \
   "# claude-review-helper-complete: runtime_v1" \
   claude_runtime_check_launcher_dependency \
   claude_runtime_build_command \
+  claude_runtime_prepare_python_argv \
+  claude_runtime_run_direct \
   claude_runtime_scrub_environment; then
   emit_bridge_installation_incomplete "claude-runtime.sh"
+  exit 0
+fi
+
+if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v1" ]; then
+  emit_bridge_installation_incomplete "claude-locator.sh"
   exit 0
 fi
 
@@ -547,13 +553,7 @@ run_candidate_claude() {
   local claude_bin="$1"
   shift
 
-  build_claude_cmd "$claude_bin" "$@"
-  (
-    claude_runtime_scrub_environment
-    CDPATH=
-    cd -P -- "$CLAUDE_RUNTIME_CWD" || exit 1
-    "${SELECTED_CLAUDE_CMD[@]}"
-  )
+  claude_runtime_run_direct "$CLAUDE_RUNTIME_CWD" "$claude_bin" "$@"
 }
 
 run_selected_claude() {
@@ -565,20 +565,17 @@ run_built_claude_cmd_with_timeout() {
   shift
 
   if [ -z "$timeout_seconds" ] || [ "${timeout_seconds:-0}" -le 0 ] || ! command -v python3 >/dev/null 2>&1; then
-    (
-      claude_runtime_scrub_environment
-      CDPATH=
-      cd -P -- "$CLAUDE_RUNTIME_CWD" || exit 1
-      "$@"
-    )
+    claude_runtime_run_direct "$CLAUDE_RUNTIME_CWD" "$@"
     return
   fi
+
+  claude_runtime_prepare_python_argv "$@" || return 126
 
   (
     claude_runtime_scrub_environment
     CDPATH=
     cd -P -- "$CLAUDE_RUNTIME_CWD" || exit 1
-    python3 - "$timeout_seconds" "$@" <<'PY'
+    python3 - "$timeout_seconds" "${CLAUDE_RUNTIME_PYTHON_ARGV[@]}" <<'PY'
 import os
 import subprocess
 import sys
@@ -970,6 +967,19 @@ probe_runner_usability() {
     return 1
   fi
   if [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" = "available" ] && \
+    [ "$CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH" != "none" ] && \
+    [ "$CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH" != "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" ] && \
+    ! claude_locator_validate_launcher_dependency \
+      "$CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH" \
+      "$REPO_ROOT" \
+      "$CLAUDE_INVOCATION_CWD"; then
+    record_failure \
+      "launcher_dependency_unsafe" \
+      "Claude Code was found, but its launcher interpreter resolves to an unsafe path." \
+      "Use a trusted shebang interpreter outside repository, invocation-CWD, temp, world-writable file, and world-writable parent boundaries. Rejected interpreter: ${CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_SCOPE}:${CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_STATUS}."
+    return 1
+  fi
+  if [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" = "available" ] && \
     [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" != "none" ] && \
     ! claude_locator_validate_launcher_dependency \
       "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" \
@@ -1153,7 +1163,6 @@ try_selected_candidate() {
   local description=""
 
   CLAUDE_FOUND_ANY="true"
-  CLAUDE_DISCOVERY_SOURCE="$source"
   if ! claude_locator_validate_candidate "$raw_path" "$REPO_ROOT" "$CLAUDE_INVOCATION_CWD"; then
     record_invalid_claude_candidate \
       "$source" \

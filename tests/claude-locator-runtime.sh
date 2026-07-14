@@ -228,6 +228,9 @@ esac
 claude_runtime_build_command "$TEST_ROOT/trusted/bin/claude" auth status
 assert_eq "auth" "${CLAUDE_RUNTIME_COMMAND[1]}" "runtime auth argv one"
 assert_eq "status" "${CLAUDE_RUNTIME_COMMAND[2]}" "runtime auth argv two"
+claude_runtime_prepare_python_argv "${CLAUDE_RUNTIME_COMMAND[@]}" || fail "Python argv preparation"
+assert_eq "$TEST_ROOT/trusted/bin/claude" "${CLAUDE_RUNTIME_PYTHON_ARGV[0]}" "non-Windows Python executable unchanged"
+assert_eq "auth" "${CLAUDE_RUNTIME_PYTHON_ARGV[1]}" "Python argv one preserved"
 pass "runtime builder is transport-only"
 
 ENV_LOG="$TEST_ROOT/env.log"
@@ -343,10 +346,12 @@ pass "unsupported shebangs fail closed while exit-code-only cases remain unclass
 
 dependency_invocation="$TEST_ROOT/dependency-invocation"
 dependency_launcher="$TEST_ROOT/trusted/bin/path-interpreter"
+alternate_env="$TEST_ROOT/trusted/bin/env"
 mkdir -p "$dependency_invocation/bin"
 ln -s /bin/bash "$dependency_invocation/bin/fake-node"
-cat > "$dependency_launcher" <<'SH'
-#!/usr/bin/env fake-node
+ln -s /usr/bin/env "$alternate_env"
+cat > "$dependency_launcher" <<SH
+#!$alternate_env fake-node
 exit 0
 SH
 chmod 755 "$dependency_launcher"
@@ -354,10 +359,12 @@ saved_path="$PATH"
 PATH="$dependency_invocation/bin:$PATH"
 export PATH
 claude_runtime_check_launcher_dependency "$dependency_launcher" || fail "PATH interpreter resolved"
+assert_eq "$alternate_env" "$CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH" "alternate absolute env retained"
 assert_eq "$dependency_invocation/bin/fake-node" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" "PATH interpreter path retained"
 claude_locator_validate_candidate "$dependency_launcher" "$ROOT" "$TEST_ROOT/work" || fail "launcher remains trusted"
 selected_launch="$CLAUDE_LOCATOR_LAUNCH_PATH"
 selected_target="$CLAUDE_LOCATOR_CANONICAL_TARGET"
+claude_locator_validate_launcher_dependency "$CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH" "$ROOT" "$dependency_invocation" || fail "alternate env interpreter remains trusted"
 if claude_locator_validate_launcher_dependency "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" "$ROOT" "$dependency_invocation"; then
   fail "interpreter inside invocation CWD rejected"
 fi
@@ -367,7 +374,7 @@ assert_eq "$selected_launch" "$CLAUDE_LOCATOR_LAUNCH_PATH" "launcher diagnostic 
 assert_eq "$selected_target" "$CLAUDE_LOCATOR_CANONICAL_TARGET" "launcher diagnostic target preserved"
 PATH="$saved_path"
 export PATH
-pass "launcher interpreters reuse trust validation without clobbering launcher diagnostics"
+pass "alternate env and resolved interpreters reuse trust validation without clobbering launcher diagnostics"
 
 # A BASH_ENV/ENV set in an already-running shell must not reach or initialize the
 # candidate interpreter.

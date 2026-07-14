@@ -165,9 +165,18 @@ if ! load_required_claude_helper \
   "# claude-review-helper-complete: runtime_v1" \
   claude_runtime_check_launcher_dependency \
   claude_runtime_build_command \
+  claude_runtime_prepare_python_argv \
+  claude_runtime_run_direct \
   claude_runtime_scrub_environment; then
   print_kv "doctor_status" "bridge_installation_incomplete"
   print_kv "bridge_component" "claude-runtime.sh"
+  print_kv "bridge_guidance" "Reinstall or update the complete claude-review skill, then retry."
+  exit 0
+fi
+
+if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v1" ]; then
+  print_kv "doctor_status" "bridge_installation_incomplete"
+  print_kv "bridge_component" "claude-locator.sh"
   print_kv "bridge_guidance" "Reinstall or update the complete claude-review skill, then retry."
   exit 0
 fi
@@ -236,13 +245,7 @@ run_doctor_claude() {
   local claude_bin="$1"
   shift
 
-  claude_runtime_build_command "$claude_bin" "$@"
-  (
-    claude_runtime_scrub_environment
-    CDPATH=
-    cd -P -- "$CLAUDE_RUNTIME_CWD" || exit 1
-    "${CLAUDE_RUNTIME_COMMAND[@]}"
-  )
+  claude_runtime_run_direct "$CLAUDE_RUNTIME_CWD" "$claude_bin" "$@"
 }
 
 run_probe() {
@@ -256,11 +259,15 @@ run_probe() {
   fi
 
   claude_runtime_build_command "$claude_bin" "$@"
+  if ! claude_runtime_prepare_python_argv "${CLAUDE_RUNTIME_COMMAND[@]}"; then
+    print_kv "${label}_status" "transport_unavailable"
+    return 0
+  fi
   (
     claude_runtime_scrub_environment
     CDPATH=
     cd -P -- "$CLAUDE_RUNTIME_CWD" || exit 1
-    python3 - "$label" "$PROBE_TIMEOUT_SECONDS" "${CLAUDE_RUNTIME_COMMAND[@]}" <<'PY'
+    python3 - "$label" "$PROBE_TIMEOUT_SECONDS" "${CLAUDE_RUNTIME_PYTHON_ARGV[@]}" <<'PY'
 import os
 import re
 import signal
@@ -271,6 +278,7 @@ import time
 label = sys.argv[1]
 timeout = int(sys.argv[2])
 cmd = sys.argv[3:]
+
 started = time.time()
 try:
     proc = subprocess.Popen(
@@ -336,7 +344,9 @@ print_kv "router" "$ROUTER"
 if git -C "$SKILL_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   print_kv "skill_git_head" "$(git -C "$SKILL_ROOT" rev-parse --short=12 HEAD)"
   skill_git_branch="$(git -C "$SKILL_ROOT" branch --show-current 2>/dev/null || true)"
-  [ -n "$skill_git_branch" ] || skill_git_branch="detached"
+  if [ -z "$skill_git_branch" ]; then
+    skill_git_branch="detached"
+  fi
   print_kv "skill_git_branch" "$skill_git_branch"
   if [ -n "$(git -C "$SKILL_ROOT" status --porcelain --untracked-files=no 2>/dev/null || true)" ]; then
     print_kv "skill_git_tracked_changes" "yes"
@@ -347,13 +357,22 @@ else
   print_kv "skill_git_head" "not_git_checkout"
 fi
 
-print_kv "run_review_executable" "$([ -x "$RUN_REVIEW" ] && printf yes || printf no)"
-print_kv "router_executable" "$([ -x "$ROUTER" ] && printf yes || printf no)"
+if [ -x "$RUN_REVIEW" ]; then
+  print_kv "run_review_executable" "yes"
+else
+  print_kv "run_review_executable" "no"
+fi
+if [ -x "$ROUTER" ]; then
+  print_kv "router_executable" "yes"
+else
+  print_kv "router_executable" "no"
+fi
+
 print_kv "runner_safe_mode" "$(flag_state "$RUN_REVIEW" "--safe-mode")"
 print_kv "runner_tools_empty" "$(flag_state "$RUN_REVIEW" "--tools")"
 print_kv "runner_strict_mcp_config" "$(flag_state "$RUN_REVIEW" "--strict-mcp-config")"
 print_kv "runner_disable_slash_commands" "$(flag_state "$RUN_REVIEW" "--disable-slash-commands")"
-print_kv "router_present" "$([ -f "$ROUTER" ] && printf ok || printf missing)"
+print_kv "router_present" "$([ -f "$ROUTER" ] && printf 'ok' || printf 'missing')"
 
 if [ "$SKIP_UPDATE_CHECK" = "true" ]; then
   print_kv "update_check" "skipped"
@@ -445,6 +464,19 @@ if [ -n "$candidate_path" ]; then
       else
         path_status="launcher_dependency_missing"
       fi
+    elif [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" = "available" ] && \
+      [ "$CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH" != "none" ] && \
+      [ "$CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH" != "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" ] && \
+      ! claude_locator_validate_launcher_dependency \
+        "$CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH" \
+        "$REPO_ROOT" \
+        "$INVOCATION_CWD"; then
+      candidate_safe="false"
+      path_status="launcher_dependency_unsafe"
+      launcher_dependency="${CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH##*/}"
+      launcher_dependency_path="${CLAUDE_LOCATOR_DEPENDENCY_LAUNCH_PATH:-$CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH}"
+      launcher_dependency_trust_scope="${CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_SCOPE:-launch}"
+      launcher_dependency_trust_reason="${CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_STATUS:-missing}"
     elif [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" = "available" ] && \
       [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" != "none" ] && \
       ! claude_locator_validate_launcher_dependency \
@@ -566,6 +598,7 @@ if [ "$SKIP_PROBES" = "true" ]; then
 fi
 
 print_kv "probe_timeout_seconds" "$PROBE_TIMEOUT_SECONDS"
+
 run_probe \
   "plain_print_probe" \
   "$claude_bin" \
