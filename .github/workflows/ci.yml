@@ -50,5 +50,13 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Set up native Python transport
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Verify native Python is available to Git Bash
+        run: python3 --version
+
       - name: Windows Git Bash transport
         run: bash tests/windows-transport.sh

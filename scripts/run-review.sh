@@ -292,6 +292,7 @@ if ! load_required_claude_helper \
   claude_runtime_prepare_python_argv \
   claude_runtime_resolve_path_dependency \
   claude_runtime_run_direct \
+  claude_runtime_windows_executable_path \
   claude_runtime_scrub_environment; then
   emit_bridge_installation_incomplete "claude-runtime.sh"
   exit 0
@@ -340,13 +341,31 @@ artifact_is_split_part() {
 
 canonical_path() {
   local path="$1"
+  local cygpath_bin=""
+  local python_path="$path"
 
   if command -v python3 >/dev/null 2>&1; then
-    python3 - "$path" <<'PY'
+    case "${OSTYPE:-}" in
+      msys*|mingw*|cygwin*)
+        if [ -x /usr/bin/cygpath ]; then
+          cygpath_bin=/usr/bin/cygpath
+        elif [ -x /usr/bin/cygpath.exe ]; then
+          cygpath_bin=/usr/bin/cygpath.exe
+        else
+          return 1
+        fi
+        python_path="$("$cygpath_bin" -aw "$path" 2>/dev/null)" || return 1
+        ;;
+    esac
+    MSYS2_ARG_CONV_EXCL='*' python3 - "$python_path" <<'PY'
 from pathlib import Path
+import os
 import sys
 
-print(Path(sys.argv[1]).expanduser().resolve(strict=False))
+resolved = str(Path(sys.argv[1]).expanduser().resolve(strict=False))
+if os.name == "nt":
+    resolved = os.path.normcase(resolved)
+print(resolved.replace("\\", "/"))
 PY
     return 0
   fi
@@ -580,6 +599,8 @@ run_selected_claude() {
 
 run_built_claude_cmd_with_timeout() {
   local timeout_seconds="$1"
+  local msys_arg_conv_present="${MSYS2_ARG_CONV_EXCL+x}"
+  local msys_arg_conv_value="${MSYS2_ARG_CONV_EXCL-}"
   shift
 
   if [ -z "$timeout_seconds" ] || [ "${timeout_seconds:-0}" -le 0 ] || ! command -v python3 >/dev/null 2>&1; then
@@ -593,13 +614,24 @@ run_built_claude_cmd_with_timeout() {
     claude_runtime_scrub_environment
     CDPATH=
     cd -P -- "$CLAUDE_RUNTIME_CWD" || exit 1
-    python3 - "$timeout_seconds" "${CLAUDE_RUNTIME_PYTHON_ARGV[@]}" <<'PY'
+    MSYS2_ARG_CONV_EXCL='*' python3 - \
+      "$timeout_seconds" \
+      "$msys_arg_conv_present" \
+      "$msys_arg_conv_value" \
+      "${CLAUDE_RUNTIME_PYTHON_ARGV[@]}" <<'PY'
 import os
 import subprocess
 import sys
 
 timeout = int(sys.argv[1])
-cmd = sys.argv[2:]
+msys_arg_conv_present = sys.argv[2] == "x"
+msys_arg_conv_value = sys.argv[3]
+cmd = sys.argv[4:]
+child_env = os.environ.copy()
+if msys_arg_conv_present:
+    child_env["MSYS2_ARG_CONV_EXCL"] = msys_arg_conv_value
+else:
+    child_env.pop("MSYS2_ARG_CONV_EXCL", None)
 
 try:
     completed = subprocess.run(
@@ -610,6 +642,7 @@ try:
         stdin=subprocess.DEVNULL,
         cwd=os.getcwd(),
         shell=False,
+        env=child_env,
     )
 except subprocess.TimeoutExpired as exc:
     if exc.stdout:
@@ -977,7 +1010,7 @@ probe_runner_usability() {
         record_failure \
           "launcher_dependency_unsupported" \
           "Claude Code was found, but its launcher uses unsupported shebang interpreter syntax." \
-          "Use a launcher with an absolute interpreter or exact '#!/usr/bin/env NAME' shebang, or install the recommended native Claude with curl -fsSL https://claude.ai/install.sh | bash. Then run /claude-review doctor."
+          "Use a launcher with an argument-free absolute interpreter or exact '#!/usr/bin/env NAME' shebang, or install the recommended native Claude with curl -fsSL https://claude.ai/install.sh | bash. Then run /claude-review doctor."
         ;;
       unreadable)
         record_failure \
@@ -986,10 +1019,17 @@ probe_runner_usability() {
           "Make '${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH}' readable to the Codex process, or reinstall native Claude. Then run /claude-review doctor."
         ;;
       *)
-        record_failure \
-          "launcher_dependency_missing" \
-          "Claude Code was found, but its launcher interpreter is unavailable from Codex's inherited PATH." \
-          "Make the '${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY}' interpreter available in the environment that launches Codex, or install the recommended native Claude with curl -fsSL https://claude.ai/install.sh | bash. Then run /claude-review doctor."
+        if [ "${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_RESOLUTION:-path}" = "absolute" ]; then
+          record_failure \
+            "launcher_dependency_missing" \
+            "Claude Code was found, but its launcher names an absolute interpreter that is unavailable." \
+            "Repair or reinstall the launcher so the exact interpreter '${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH}' exists and is executable, or install the recommended native Claude. Then run /claude-review doctor."
+        else
+          record_failure \
+            "launcher_dependency_missing" \
+            "Claude Code was found, but its launcher interpreter is unavailable from Codex's inherited PATH." \
+            "Make the '${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY}' interpreter available in the environment that launches Codex, or install the recommended native Claude with curl -fsSL https://claude.ai/install.sh | bash. Then run /claude-review doctor."
+        fi
         ;;
     esac
     return 1

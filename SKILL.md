@@ -678,9 +678,14 @@ Treat `claude_path_status=launcher_dependency_unsafe` the same way: the recogniz
 shebang interpreter failed the launcher's trust boundary and must not be executed.
 Use the emitted `claude_launcher_dependency_path`, trust scope, and trust reason to
 explain which inherited-PATH or absolute interpreter needs repair.
+For `claude_path_status=launcher_dependency_missing`, use
+`claude_launcher_dependency_resolution`: recommend an inherited-PATH change only
+for `path`; for `absolute`, tell the user to repair or reinstall the exact reported
+shebang path because PATH cannot fix it.
 Treat `claude_path_status=launcher_dependency_unsupported` as fail-closed too; use
-an absolute interpreter or exact `#!/usr/bin/env NAME` launcher rather than trying
-to interpret or bypass unsupported `env -S` syntax in the rendering layer.
+an argument-free absolute interpreter or exact `#!/usr/bin/env NAME` launcher
+rather than trying to interpret or bypass unsupported `env -S` syntax in the
+rendering layer.
 Treat `claude_path_status=launcher_dependency_unreadable` as fail-closed; repair
 read access to the reported launcher/interpreter chain or reinstall native Claude.
 Treat symlink loops and inaccessible targets as fail-closed

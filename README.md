@@ -506,27 +506,30 @@ only `BASH_ENV`, `ENV`, and the five Anthropic API credential variables used to
 enforce subscription-only review. `scripts/claude-subscription-env.sh` remains as a
 compatible legacy entry point, but runner and doctor share `claude-runtime.sh`.
 For Git Bash timeout/probe calls through native Python, that shared runtime converts
-only the validated executable path with the fixed `/usr/bin/cygpath` utility before
-passing the command as discrete argv; it does not build a shell command string or
-depend on ambient MSYS argument-conversion settings.
+the validated launcher and validated executable paths in its shebang execution
+chain with the fixed `/usr/bin/cygpath` utility. It passes the interpreter chain,
+optional `env NAME` token, launcher, and unchanged remaining arguments as discrete
+argv. The bridge disables automatic MSYS conversion only while entering native
+Python, then restores the inherited setting for Claude; it does not build a shell
+command string or depend on ambient MSYS argument-conversion settings.
 
 This direct-runtime hardening intentionally removes the former implicit login-
 profile fallback. A launcher whose shebang names an interpreter available only
 after profile loading reports `launcher_dependency_missing`. A recognized
-interpreter that resolves through inherited PATH, or an absolute shebang
-interpreter, must pass the same path, symlink-chain, file-mode, and parent trust
+interpreter that resolves through inherited PATH, or an argument-free absolute
+shebang interpreter, must pass the same path, symlink-chain, file-mode, and parent trust
 validation as the Claude launcher. The bridge recursively inspects script
 interpreters with an eight-hop depth bound and cycle detection, and trust-validates
 every executable in the resulting chain. An unsafe interpreter reports
 `launcher_dependency_unsafe`; an unreadable launcher or interpreter reports
-`launcher_dependency_unreadable`. Shebangs other than an absolute interpreter or
-exact `#!/usr/bin/env NAME` form fail closed as
+`launcher_dependency_unreadable`. Shebangs other than an argument-free absolute
+interpreter or exact `#!/usr/bin/env NAME` form fail closed as
 `launcher_dependency_unsupported` rather than being executed without deterministic
 dependency validation. For `env NAME`, PATH lookup is evaluated from the same
 private runtime directory used for execution, so a relative PATH entry cannot be
 validated against the invocation directory and then select a different executable
-after the runtime changes directory. Expose a trusted interpreter to the environment that
-launches Codex, or migrate to native Claude:
+after the runtime changes directory. Expose a trusted interpreter to the environment
+that launches Codex, or migrate to native Claude:
 
 ```bash
 curl -fsSL https://claude.ai/install.sh | bash
@@ -624,9 +627,12 @@ from Codex.
 ### Doctor reports `launcher_dependency_missing`
 
 The selected launcher is a script whose deterministic shebang interpreter is not
-available in Codex's inherited PATH. Add the named interpreter to the environment
-that launches Codex or migrate to the native Claude distribution. The bridge will
-not source login profiles as a compatibility fallback.
+available. Doctor reports `claude_launcher_dependency_resolution=path` for an
+`env NAME` lookup; add that name to the environment that launches Codex or migrate
+to native Claude. It reports `absolute` plus the exact path for a missing absolute
+shebang; repair or reinstall that launcher because changing PATH cannot satisfy an
+absolute shebang. The bridge will not source login profiles as a compatibility
+fallback.
 
 ### Doctor reports `launcher_dependency_unsafe`
 
@@ -640,8 +646,9 @@ rewrite PATH to select a different interpreter.
 ### Doctor reports `launcher_dependency_unsupported`
 
 The selected launcher uses shebang syntax the bridge cannot parse without
-reimplementing shell or `env -S` tokenization. Use a launcher with an absolute
-interpreter or exact `#!/usr/bin/env NAME` shebang, or migrate to native Claude.
+reimplementing platform-specific shebang argument or `env -S` tokenization. Use a
+launcher with an argument-free absolute interpreter or exact
+`#!/usr/bin/env NAME` shebang, or migrate to native Claude.
 The bridge fails closed instead of executing an unvalidated interpreter.
 
 ### Doctor reports `launcher_dependency_unreadable`

@@ -350,6 +350,9 @@ if claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/missing-env-
 fi
 assert_eq "missing" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "missing env status"
 assert_eq "definitely-missing-claude-interpreter" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY" "safe env dependency"
+assert_eq "path" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_RESOLUTION" "env dependency resolution"
+assert_eq "env" "$CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_KIND" "env transport kind"
+assert_eq "definitely-missing-claude-interpreter" "$CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_ARGUMENT" "env transport argument"
 
 cat > "$TEST_ROOT/trusted/bin/missing-absolute-interpreter" <<'SH'
 #!/definitely/missing/claude-interpreter
@@ -359,6 +362,9 @@ if claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/missing-abso
   fail "missing absolute interpreter classified"
 fi
 assert_eq "claude-interpreter" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY" "safe absolute dependency basename"
+assert_eq "absolute" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_RESOLUTION" "absolute dependency resolution"
+assert_eq "absolute" "$CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_KIND" "absolute transport kind"
+assert_eq "/definitely/missing/claude-interpreter" "$CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_INTERPRETER_PATH" "absolute transport interpreter"
 
 cat > "$TEST_ROOT/trusted/bin/unsupported-env-s" <<'SH'
 #!/usr/bin/env -S missing --flag
@@ -368,8 +374,17 @@ if claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/unsupported-
   fail "env -S shebang accepted without deterministic parsing"
 fi
 assert_eq "unsupported" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "env -S fails closed"
+cat > "$TEST_ROOT/trusted/bin/unsupported-absolute-arg" <<'SH'
+#!/bin/bash -e
+SH
+chmod 755 "$TEST_ROOT/trusted/bin/unsupported-absolute-arg"
+if claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/unsupported-absolute-arg"; then
+  fail "absolute shebang argument accepted without cross-platform transport semantics"
+fi
+assert_eq "unsupported" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "absolute shebang argument fails closed"
 claude_runtime_check_launcher_dependency /bin/echo || fail "native candidate remains unknown"
 assert_eq "unknown" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "native not classified from exit behavior"
+assert_eq "direct" "$CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_KIND" "native direct transport kind"
 pass "launcher dependency classification is bounded to recognized shebangs"
 
 cat > "$TEST_ROOT/trusted/bin/malformed-shebang" <<'SH'
@@ -420,6 +435,9 @@ chmod 755 "$TEST_ROOT/trusted/bin/existing-interpreter-exit"
 claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/existing-interpreter-exit" || fail "existing interpreter available"
 assert_eq "available" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "exit code never drives dependency classification"
 assert_eq "/bin/bash" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" "absolute interpreter path retained for trust validation"
+assert_eq "2" "${#CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[@]}" "absolute transport argv count"
+assert_eq "/bin/bash" "${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[0]}" "absolute transport executable"
+assert_eq "$TEST_ROOT/trusted/bin/existing-interpreter-exit" "${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[1]}" "absolute transport launcher"
 pass "unsupported shebangs fail closed while exit-code-only cases remain unclassified"
 
 dependency_invocation="$TEST_ROOT/dependency-invocation"
@@ -439,6 +457,10 @@ export PATH
 claude_runtime_check_launcher_dependency "$dependency_launcher" || fail "PATH interpreter resolved"
 assert_eq "$alternate_env" "$CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH" "alternate absolute env retained"
 assert_eq "$dependency_invocation/bin/fake-node" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" "PATH interpreter path retained"
+assert_eq "3" "${#CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[@]}" "env transport argv count"
+assert_eq "$alternate_env" "${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[0]}" "env transport executable"
+assert_eq "fake-node" "${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[1]}" "env transport dependency token"
+assert_eq "$dependency_launcher" "${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[2]}" "env transport launcher"
 claude_locator_validate_candidate "$dependency_launcher" "$ROOT" "$TEST_ROOT/work" || fail "launcher remains trusted"
 selected_launch="$CLAUDE_LOCATOR_LAUNCH_PATH"
 selected_target="$CLAUDE_LOCATOR_CANONICAL_TARGET"

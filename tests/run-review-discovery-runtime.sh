@@ -503,7 +503,8 @@ cat > "$absolute_home/.local/bin/claude" <<'SH'
 SH
 chmod 755 "$absolute_home/.local/bin/claude"
 absolute_output="$(run_runner "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$absolute_home" "$SYSTEM_PATH" "$TEST_ROOT/absolute.log")"
-assert_json_status "$absolute_output" blocked "launcher interpreter is unavailable" "claude-interpreter"
+assert_json_status "$absolute_output" blocked "names an absolute interpreter that is unavailable" "/definitely/missing/claude-interpreter"
+if [[ "$absolute_output" == *"inherited PATH"* ]]; then fail "absolute interpreter guidance incorrectly recommends PATH"; fi
 
 unsafe_dependency_home="$TEST_ROOT/unsafe-dependency-home"
 unsafe_dependency_invocation="$TEST_ROOT/unsafe-dependency-invocation"

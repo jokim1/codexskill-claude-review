@@ -470,6 +470,19 @@ assert_line "$dependency_output" "claude_trust_scope=none" "dependency trust sco
 assert_line "$dependency_output" "claude_trust_reason=none" "dependency trust reason"
 [ ! -e "$TEST_ROOT/dependency.log" ] || fail "missing dependency launcher executed"
 
+absolute_home="$TEST_ROOT/absolute-dependency-home"
+mkdir -p "$absolute_home/.local/bin"
+cat > "$absolute_home/.local/bin/claude" <<'SH'
+#!/definitely/missing/claude-interpreter
+SH
+chmod 755 "$absolute_home/.local/bin/claude"
+absolute_output="$(run_doctor "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$absolute_home" "$SYSTEM_PATH" "$TEST_ROOT/absolute.log" --skip-probes)"
+assert_line "$absolute_output" "claude_path_status=launcher_dependency_missing" "absolute dependency status"
+assert_line "$absolute_output" "claude_launcher_dependency_path=/definitely/missing/claude-interpreter" "absolute dependency path"
+assert_line "$absolute_output" "claude_launcher_dependency_resolution=absolute" "absolute dependency resolution"
+assert_contains "$absolute_output" "PATH changes cannot repair an absolute shebang" "absolute dependency guidance"
+[ ! -e "$TEST_ROOT/absolute.log" ] || fail "absolute missing dependency launcher executed"
+
 unsupported_home="$TEST_ROOT/unsupported-dependency-home"
 unsupported_log="$TEST_ROOT/unsupported-dependency.log"
 mkdir -p "$unsupported_home/.local/bin"

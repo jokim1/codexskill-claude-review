@@ -169,6 +169,7 @@ if ! load_required_claude_helper \
   claude_runtime_prepare_python_argv \
   claude_runtime_resolve_path_dependency \
   claude_runtime_run_direct \
+  claude_runtime_windows_executable_path \
   claude_runtime_scrub_environment; then
   print_kv "doctor_status" "bridge_installation_incomplete"
   print_kv "bridge_component" "claude-runtime.sh"
@@ -253,6 +254,8 @@ run_doctor_claude() {
 run_probe() {
   local label="$1"
   local claude_bin="$2"
+  local msys_arg_conv_present="${MSYS2_ARG_CONV_EXCL+x}"
+  local msys_arg_conv_value="${MSYS2_ARG_CONV_EXCL-}"
   shift 2
 
   if ! type -P python3 >/dev/null 2>&1; then
@@ -269,7 +272,12 @@ run_probe() {
     claude_runtime_scrub_environment
     CDPATH=
     cd -P -- "$CLAUDE_RUNTIME_CWD" || exit 1
-    python3 - "$label" "$PROBE_TIMEOUT_SECONDS" "${CLAUDE_RUNTIME_PYTHON_ARGV[@]}" <<'PY'
+    MSYS2_ARG_CONV_EXCL='*' python3 - \
+      "$label" \
+      "$PROBE_TIMEOUT_SECONDS" \
+      "$msys_arg_conv_present" \
+      "$msys_arg_conv_value" \
+      "${CLAUDE_RUNTIME_PYTHON_ARGV[@]}" <<'PY'
 import os
 import re
 import signal
@@ -288,7 +296,14 @@ def stop_process(proc, force=False):
 
 label = sys.argv[1]
 timeout = int(sys.argv[2])
-cmd = sys.argv[3:]
+msys_arg_conv_present = sys.argv[3] == "x"
+msys_arg_conv_value = sys.argv[4]
+cmd = sys.argv[5:]
+child_env = os.environ.copy()
+if msys_arg_conv_present:
+    child_env["MSYS2_ARG_CONV_EXCL"] = msys_arg_conv_value
+else:
+    child_env.pop("MSYS2_ARG_CONV_EXCL", None)
 
 started = time.time()
 process_options = {}
@@ -305,6 +320,7 @@ try:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        env=child_env,
         **process_options,
     )
 except OSError as exc:
@@ -452,6 +468,7 @@ trust_scope="none"
 trust_reason="none"
 launcher_dependency="none"
 launcher_dependency_path="none"
+launcher_dependency_resolution="none"
 launcher_dependency_trust_scope="none"
 launcher_dependency_trust_reason="none"
 dependency_path=""
@@ -470,6 +487,7 @@ if [ -n "$candidate_path" ]; then
     if ! claude_runtime_check_launcher_dependency "$claude_target" "$CLAUDE_RUNTIME_CWD"; then
       candidate_safe="false"
       launcher_dependency="$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY"
+      launcher_dependency_resolution="${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_RESOLUTION:-none}"
       case "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" in
         unsupported)
           path_status="launcher_dependency_unsupported"
@@ -480,6 +498,7 @@ if [ -n "$candidate_path" ]; then
           ;;
         *)
           path_status="launcher_dependency_missing"
+          launcher_dependency_path="$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH"
           ;;
       esac
     else
@@ -531,6 +550,7 @@ print_kv "claude_trust_scope" "$trust_scope"
 print_kv "claude_trust_reason" "$trust_reason"
 print_kv "claude_launcher_dependency" "$launcher_dependency"
 print_kv "claude_launcher_dependency_path" "$launcher_dependency_path"
+print_kv "claude_launcher_dependency_resolution" "$launcher_dependency_resolution"
 print_kv "claude_launcher_dependency_trust_scope" "$launcher_dependency_trust_scope"
 print_kv "claude_launcher_dependency_trust_reason" "$launcher_dependency_trust_reason"
 print_kv "claude_runtime_contract" "$CLAUDE_RUNTIME_CONTRACT"
@@ -554,13 +574,17 @@ if [ "$candidate_safe" != "true" ]; then
       print_kv "claude_guidance" "Use a trusted regular executable outside repository, invocation-CWD, temp, and world-writable boundaries."
       ;;
     launcher_dependency_missing)
-      print_kv "claude_guidance" "Expose the named interpreter to Codex's inherited PATH or install native Claude with: curl -fsSL https://claude.ai/install.sh | bash"
+      if [ "$launcher_dependency_resolution" = "absolute" ]; then
+        print_kv "claude_guidance" "Repair or reinstall the launcher so the exact absolute interpreter exists and is executable; PATH changes cannot repair an absolute shebang."
+      else
+        print_kv "claude_guidance" "Expose the named interpreter to Codex's inherited PATH or install native Claude with: curl -fsSL https://claude.ai/install.sh | bash"
+      fi
       ;;
     launcher_dependency_unsafe)
       print_kv "claude_guidance" "Use a trusted launcher interpreter outside repository, invocation-CWD, temp, world-writable file, and world-writable parent boundaries."
       ;;
     launcher_dependency_unsupported)
-      print_kv "claude_guidance" "Use an absolute interpreter or exact '#!/usr/bin/env NAME' launcher shebang, or install native Claude with: curl -fsSL https://claude.ai/install.sh | bash"
+      print_kv "claude_guidance" "Use an argument-free absolute interpreter or exact '#!/usr/bin/env NAME' launcher shebang, or install native Claude with: curl -fsSL https://claude.ai/install.sh | bash"
       ;;
     launcher_dependency_unreadable)
       print_kv "claude_guidance" "Make the selected launcher and every shebang interpreter readable to Codex, or reinstall native Claude."
