@@ -133,8 +133,10 @@ The bridge keeps a strict division of labor:
    `--noprofile --norc` while setting `BASH_ENV=` and `ENV=` before Bash starts.
    Use `/bin/bash` on FHS systems or an absolute non-symlink `/nix/store` Bash on
    NixOS. The bridge captures the caller's PATH as data and builds its bootstrap
-   PATH only from fixed FHS directories and physically resolved immutable-store
-   directories whose selected utilities are regular non-symlink executables.
+   PATH only from fixed FHS directories, fixed Git-for-Windows roots on Git Bash,
+   and physically resolved immutable-store directories. Nix profile links are
+   accepted only when their final inode matches a regular executable target in
+   the immutable store.
 4. The runner selects Claude from inherited PATH, the official native-user
    launcher, or the documented platform-default Homebrew launcher and validates
    both its launch path and canonical target.
@@ -505,9 +507,11 @@ the macOS per-user `/var/folders` namespace. The canonical target must also be a
 regular, executable, non-world-writable file before Claude runs.
 
 Trust validation prefers the fixed `/usr/bin` or `/bin` `stat` and `readlink`
-utilities. On NixOS it searches the captured inherited PATH, but accepts a resolved
-regular executable only when its physical path is inside the immutable `/nix/store`
-boundary. Every intermediate
+utilities. On NixOS it searches the captured inherited PATH and accepts a Nix
+profile symlink only after matching its final inode to a regular executable target
+inside the immutable `/nix/store` boundary. The bootstrap applies the same proof to
+all required utilities. Git Bash additionally admits Git for Windows utilities only
+from its fixed `/mingw64/bin` or `/mingw32/bin` installation roots. Every intermediate
 launcher symlink hop receives the same boundary validation as the launch and final
 target. If no trusted validation utility is available, the bridge fails closed with
 `claude_path_status=unsafe_candidate` and

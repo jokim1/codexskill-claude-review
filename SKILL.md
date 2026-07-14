@@ -252,8 +252,9 @@ an exact trusted Bash with `--noprofile --norc`. Use `/bin/bash` when present; o
 NixOS use an absolute, non-symlink Bash whose physical path is inside `/nix/store`.
 Never use a bare `bash` or a mutable custom PATH result. The bridge captures the
 caller's PATH as data, then builds its utility PATH only from fixed `/usr/bin` and
-`/bin` plus physically resolved inherited directories inside `/nix/store`; every
-selected utility must be a regular non-symlink executable. The validated Claude
+`/bin`, fixed Git-for-Windows roots on Git Bash, plus physically resolved inherited
+directories inside `/nix/store`. A Nix profile symlink is accepted only when its
+final inode matches a regular executable target inside the immutable store. The validated Claude
 child still receives the original inherited PATH. Approving the prefix above grants
 unsandboxed execution to the installed skill script, so only approve the exact
 installed skill path you trust. Do not approve broad shell prefixes, and do not

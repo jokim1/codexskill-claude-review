@@ -8,6 +8,66 @@ fi
 CLAUDE_RUNTIME_INHERITED_PATH="${PATH-}"
 export CLAUDE_RUNTIME_INHERITED_PATH
 
+claude_bootstrap_utility_safe() {
+  local utility="$1"
+  local candidate_path="$2"
+  local trusted_store_root="$3"
+  local fhs_usr_bin="$4"
+  local fhs_bin="$5"
+  local trusted_root=""
+  local store_entry=""
+  local store_target=""
+  shift 5
+
+  case "$candidate_path" in
+    "$fhs_usr_bin"/*|"$fhs_bin"/*|"$trusted_store_root"/*)
+      ;;
+    *)
+      for trusted_root in "$@"; do
+        case "$candidate_path" in
+          "$trusted_root"/*)
+            break
+            ;;
+        esac
+      done
+      [ -n "$trusted_root" ] || return 1
+      case "$candidate_path" in
+        "$trusted_root"/*) ;;
+        *) return 1 ;;
+      esac
+      ;;
+  esac
+
+  if [ -f "$candidate_path" ] && [ -x "$candidate_path" ] && [ ! -L "$candidate_path" ]; then
+    return 0
+  fi
+
+  # Nix profiles expose immutable store executables through per-command
+  # symlinks. Match the resolved inode to a regular executable target in the
+  # store without executing an unvalidated readlink helper.
+  case "$candidate_path" in
+    "$trusted_store_root"/*)
+      [ -L "$candidate_path" ] || return 1
+      for store_entry in \
+        "$trusted_store_root"/*/bin/"$utility" \
+        "$trusted_store_root"/*/sbin/"$utility"; do
+        [ -e "$store_entry" ] || continue
+        [ "$candidate_path" -ef "$store_entry" ] || continue
+        if [ -f "$store_entry" ] && [ -x "$store_entry" ] && [ ! -L "$store_entry" ]; then
+          return 0
+        fi
+        for store_target in "${store_entry%/*}"/*; do
+          [ -f "$store_target" ] && [ -x "$store_target" ] && [ ! -L "$store_target" ] || continue
+          if [ "$candidate_path" -ef "$store_target" ]; then
+            return 0
+          fi
+        done
+      done
+      ;;
+  esac
+  return 1
+}
+
 claude_build_trusted_bootstrap_path() {
   local inherited_path="$1"
   local trusted_store_root="$2"
@@ -19,6 +79,7 @@ claude_build_trusted_bootstrap_path() {
   local trusted_path=""
   local required_utility=""
   local optional_utility=""
+  local trusted_windows_roots=()
 
   if [ -d "$trusted_store_root" ]; then
     trusted_store_root="$(CDPATH=; cd -P -- "$trusted_store_root" 2>/dev/null && pwd -P)" || return 1
@@ -30,6 +91,23 @@ claude_build_trusted_bootstrap_path() {
       *) trusted_path="${trusted_path:+$trusted_path:}$candidate_path" ;;
     esac
   done
+
+  # Git for Windows installs the native git.exe outside Git Bash's /usr/bin.
+  # Admit only the fixed installation roots supplied by Git for Windows, and
+  # only on its POSIX compatibility hosts.
+  case "${OSTYPE:-}" in
+    msys*|mingw*|cygwin*)
+      for candidate_path in "/mingw64/bin" "/mingw32/bin"; do
+        [ -d "$candidate_path" ] || continue
+        physical_path="$(CDPATH=; cd -P -- "$candidate_path" 2>/dev/null && pwd -P)" || continue
+        trusted_windows_roots+=("$physical_path")
+        case ":$trusted_path:" in
+          *":$physical_path:"*) ;;
+          *) trusted_path="${trusted_path:+$trusted_path:}$physical_path" ;;
+        esac
+      done
+      ;;
+  esac
 
   remaining="${inherited_path}:"
   while [ -n "$remaining" ]; do
@@ -51,26 +129,30 @@ claude_build_trusted_bootstrap_path() {
   PATH="$trusted_path"
   for required_utility in awk basename bash cat chmod cut dirname git grep mkdir mktemp readlink rm sed stat tr wc; do
     candidate_path="$(type -P "$required_utility" 2>/dev/null || true)"
-    case "$candidate_path" in
-      "$fhs_usr_bin"/*|"$fhs_bin"/*|"$trusted_store_root"/*) ;;
-      *) printf 'Untrusted or missing bootstrap utility: %s\n' "$required_utility" >&2; return 1 ;;
-    esac
-    [ -f "$candidate_path" ] && [ -x "$candidate_path" ] && [ ! -L "$candidate_path" ] || {
+    if ! claude_bootstrap_utility_safe \
+      "$required_utility" \
+      "$candidate_path" \
+      "$trusted_store_root" \
+      "$fhs_usr_bin" \
+      "$fhs_bin" \
+      "${trusted_windows_roots[@]+"${trusted_windows_roots[@]}"}"; then
       printf 'Unsafe bootstrap utility entry: %s\n' "$required_utility" >&2
       return 1
-    }
+    fi
   done
   for optional_utility in jq; do
     candidate_path="$(type -P "$optional_utility" 2>/dev/null || true)"
     [ -n "$candidate_path" ] || continue
-    case "$candidate_path" in
-      "$fhs_usr_bin"/*|"$fhs_bin"/*|"$trusted_store_root"/*) ;;
-      *) printf 'Untrusted optional bootstrap utility: %s\n' "$optional_utility" >&2; return 1 ;;
-    esac
-    [ -f "$candidate_path" ] && [ -x "$candidate_path" ] && [ ! -L "$candidate_path" ] || {
+    if ! claude_bootstrap_utility_safe \
+      "$optional_utility" \
+      "$candidate_path" \
+      "$trusted_store_root" \
+      "$fhs_usr_bin" \
+      "$fhs_bin" \
+      "${trusted_windows_roots[@]+"${trusted_windows_roots[@]}"}"; then
       printf 'Unsafe optional bootstrap utility entry: %s\n' "$optional_utility" >&2
       return 1
-    }
+    fi
   done
   printf '%s' "$trusted_path"
 }
@@ -81,6 +163,7 @@ PATH="$(claude_build_trusted_bootstrap_path "$CLAUDE_RUNTIME_INHERITED_PATH" "/n
 }
 export PATH
 unset -f claude_build_trusted_bootstrap_path
+unset -f claude_bootstrap_utility_safe
 unset BASH_ENV ENV
 
 set -euo pipefail

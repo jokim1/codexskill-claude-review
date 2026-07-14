@@ -87,7 +87,13 @@ claude_runtime_resolve_trusted_python() {
   local execution_cwd="${3:-${PWD:-/}}"
   local python_path=""
   local dependency_path=""
-  local inherited_path="${CLAUDE_RUNTIME_INHERITED_PATH:-${PATH-}}"
+  local inherited_path=""
+
+  if [ "${CLAUDE_RUNTIME_INHERITED_PATH+x}" = "x" ]; then
+    inherited_path="$CLAUDE_RUNTIME_INHERITED_PATH"
+  else
+    inherited_path="${PATH-}"
+  fi
 
   CLAUDE_RUNTIME_PYTHON_BIN=""
   CLAUDE_RUNTIME_PYTHON_CANONICAL_TARGET=""
@@ -458,7 +464,14 @@ claude_runtime_invoke_python_driver() {
   local msys_arg_conv_value="${MSYS2_ARG_CONV_EXCL-}"
   local driver_transport=""
   local input_transport="$input_path"
+  local inherited_path=""
   shift 7
+
+  if [ "${CLAUDE_RUNTIME_INHERITED_PATH+x}" = "x" ]; then
+    inherited_path="$CLAUDE_RUNTIME_INHERITED_PATH"
+  else
+    inherited_path="${PATH-}"
+  fi
 
   claude_runtime_prepare_python_argv "$@" || return 126
   driver_transport="$(claude_runtime_python_transport_path "$driver_path")" || return 126
@@ -472,7 +485,7 @@ claude_runtime_invoke_python_driver() {
 
   (
     claude_runtime_scrub_environment
-    PATH="${CLAUDE_RUNTIME_INHERITED_PATH:-${PATH-}}"
+    PATH="$inherited_path"
     export PATH
     unset CLAUDE_RUNTIME_INHERITED_PATH
     CDPATH=
@@ -501,12 +514,19 @@ claude_runtime_probe_with_timeout() {
 claude_runtime_run_direct() {
   local runtime_cwd="$1"
   local launch_path="$2"
+  local inherited_path=""
   shift 2
+
+  if [ "${CLAUDE_RUNTIME_INHERITED_PATH+x}" = "x" ]; then
+    inherited_path="$CLAUDE_RUNTIME_INHERITED_PATH"
+  else
+    inherited_path="${PATH-}"
+  fi
 
   claude_runtime_build_command "$launch_path" "$@"
   (
     claude_runtime_scrub_environment
-    PATH="${CLAUDE_RUNTIME_INHERITED_PATH:-${PATH-}}"
+    PATH="$inherited_path"
     export PATH
     unset CLAUDE_RUNTIME_INHERITED_PATH
     CDPATH=
@@ -532,11 +552,18 @@ claude_runtime_resolve_path_dependency() {
   local dependency="$1"
   local execution_cwd="$2"
   local resolved_dependency=""
+  local inherited_path=""
+
+  if [ "${CLAUDE_RUNTIME_INHERITED_PATH+x}" = "x" ]; then
+    inherited_path="$CLAUDE_RUNTIME_INHERITED_PATH"
+  else
+    inherited_path="${PATH-}"
+  fi
 
   (
     CDPATH=
     cd -P -- "$execution_cwd" 2>/dev/null || exit 1
-    resolved_dependency="$(PATH="${CLAUDE_RUNTIME_INHERITED_PATH:-${PATH-}}" type -P "$dependency" 2>/dev/null || true)"
+    resolved_dependency="$(PATH="$inherited_path" type -P "$dependency" 2>/dev/null || true)"
     [ -n "$resolved_dependency" ] || exit 0
     case "$resolved_dependency" in
       /*)

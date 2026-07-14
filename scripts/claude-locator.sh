@@ -88,11 +88,19 @@ claude_locator_materialize_windows_executable_path() {
 
 claude_locator_path_candidate() {
   local invocation_cwd="${1:-$PWD}"
-  local inherited_path="${2:-${CLAUDE_RUNTIME_INHERITED_PATH:-${PATH-}}}"
+  local inherited_path=""
   local resolved=""
   local remaining=""
   local entry=""
   local candidate=""
+
+  if [ "$#" -ge 2 ]; then
+    inherited_path="$2"
+  elif [ "${CLAUDE_RUNTIME_INHERITED_PATH+x}" = "x" ]; then
+    inherited_path="$CLAUDE_RUNTIME_INHERITED_PATH"
+  else
+    inherited_path="${PATH-}"
+  fi
 
   CLAUDE_LOCATOR_CANDIDATE_PATH=""
   CLAUDE_LOCATOR_CANDIDATE_SOURCE="missing"
@@ -235,6 +243,42 @@ claude_locator_physical_launch_path() {
   fi
 }
 
+claude_locator_trusted_store_utility_target() {
+  local utility="$1"
+  local candidate_path="$2"
+  local trusted_store_root="$3"
+  local store_entry=""
+  local store_target=""
+
+  case "$candidate_path" in
+    "$trusted_store_root"/*)
+      [ -L "$candidate_path" ] || return 1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  for store_entry in \
+    "$trusted_store_root"/*/bin/"$utility" \
+    "$trusted_store_root"/*/sbin/"$utility"; do
+    [ -e "$store_entry" ] || continue
+    [ "$candidate_path" -ef "$store_entry" ] || continue
+    if [ -f "$store_entry" ] && [ -x "$store_entry" ] && [ ! -L "$store_entry" ]; then
+      printf '%s' "$store_entry"
+      return 0
+    fi
+    for store_target in "${store_entry%/*}"/*; do
+      [ -f "$store_target" ] && [ -x "$store_target" ] && [ ! -L "$store_target" ] || continue
+      if [ "$candidate_path" -ef "$store_target" ]; then
+        printf '%s' "$store_target"
+        return 0
+      fi
+    done
+  done
+  return 1
+}
+
 claude_locator_resolve_trusted_utility() {
   local utility="${1:-}"
   local trusted_store_root="$CLAUDE_LOCATOR_TRUSTED_STORE_ROOT"
@@ -242,6 +286,8 @@ claude_locator_resolve_trusted_utility() {
   local physical_candidate=""
   local physical_store_root=""
   local store_parent=""
+  local inherited_path=""
+  local trusted_target=""
 
   [ -n "$utility" ] || return 1
   shift
@@ -261,11 +307,15 @@ claude_locator_resolve_trusted_utility() {
     fi
   done
 
-  candidate="$(PATH="${CLAUDE_RUNTIME_INHERITED_PATH:-${PATH-}}" type -P "$utility" 2>/dev/null || true)"
+  if [ "${CLAUDE_RUNTIME_INHERITED_PATH+x}" = "x" ]; then
+    inherited_path="$CLAUDE_RUNTIME_INHERITED_PATH"
+  else
+    inherited_path="${PATH-}"
+  fi
+  candidate="$(PATH="$inherited_path" type -P "$utility" 2>/dev/null || true)"
   [ -n "$candidate" ] || return 1
   physical_candidate="$(claude_locator_physical_launch_path "$candidate" "${PWD:-/}" 2>/dev/null || true)"
   [ -n "$physical_candidate" ] || return 1
-  [ -f "$physical_candidate" ] && [ -x "$physical_candidate" ] && [ ! -L "$physical_candidate" ] || return 1
 
   physical_store_root="$(claude_locator_physical_launch_path "$trusted_store_root/.claude-review-store-root" "/" 2>/dev/null || true)"
   physical_store_root="${physical_store_root%/.claude-review-store-root}"
@@ -277,12 +327,28 @@ claude_locator_resolve_trusted_utility() {
       return 1
       ;;
   esac
+  if [ -f "$physical_candidate" ] && [ -x "$physical_candidate" ] && [ ! -L "$physical_candidate" ]; then
+    trusted_target="$physical_candidate"
+  else
+    trusted_target="$(
+      claude_locator_trusted_store_utility_target \
+        "$utility" \
+        "$physical_candidate" \
+        "$physical_store_root" \
+        2>/dev/null
+    )" || return 1
+  fi
+  [ -f "$trusted_target" ] && [ -x "$trusted_target" ] && [ ! -L "$trusted_target" ] || return 1
+  case "$trusted_target" in
+    "$physical_store_root"/*) ;;
+    *) return 1 ;;
+  esac
   # Effective-access tests always report writable for root. Physical store
   # containment remains mandatory; apply the writability proof when it is
   # meaningful for the invoking identity.
   if [ "${EUID:-1}" -ne 0 ]; then
-    [ ! -w "$physical_candidate" ] || return 1
-    store_parent="${physical_candidate%/*}"
+    [ ! -w "$trusted_target" ] || return 1
+    store_parent="${trusted_target%/*}"
     while :; do
       [ ! -w "$store_parent" ] || return 1
       [ "$store_parent" = "$physical_store_root" ] && break
@@ -297,7 +363,7 @@ claude_locator_resolve_trusted_utility() {
       [ -n "$store_parent" ] || return 1
     done
   fi
-  printf '%s' "$physical_candidate"
+  printf '%s' "$trusted_target"
   return 0
 }
 

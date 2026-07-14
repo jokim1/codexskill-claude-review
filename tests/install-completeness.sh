@@ -133,9 +133,10 @@ pass "runner and doctor bootstrap both helpers from the tested checkout"
 non_fhs_skill="$TEST_ROOT/non-fhs-skill"
 non_fhs_store="$TEST_ROOT/simulated-nix-store"
 non_fhs_bin="$non_fhs_store/coreutils/bin"
+non_fhs_profile_bin="$non_fhs_store/profile/bin"
 non_fhs_missing_usr="$TEST_ROOT/non-fhs-missing/usr/bin"
 non_fhs_missing_bin="$TEST_ROOT/non-fhs-missing/bin"
-mkdir -p "$non_fhs_skill/scripts" "$non_fhs_bin"
+mkdir -p "$non_fhs_skill/scripts" "$non_fhs_bin" "$non_fhs_profile_bin"
 cp "$ROOT"/scripts/*.sh "$non_fhs_skill/scripts/"
 chmod 755 "$non_fhs_skill"/scripts/*.sh
 for tool_name in awk basename bash cat chmod cut dirname git grep mkdir mktemp readlink rm sed stat tr wc; do
@@ -155,6 +156,12 @@ SH
   } > "$non_fhs_bin/$tool_name"
   chmod 755 "$non_fhs_bin/$tool_name"
 done
+# Model the common Nix `profile/bin/awk -> package/bin/awk -> gawk` chain.
+mv "$non_fhs_bin/awk" "$non_fhs_bin/gawk"
+ln -s gawk "$non_fhs_bin/awk"
+for tool_name in awk basename bash cat chmod cut dirname git grep mkdir mktemp readlink rm sed stat tr wc; do
+  ln -s "$non_fhs_bin/$tool_name" "$non_fhs_profile_bin/$tool_name"
+done
 python3 - "$non_fhs_skill/scripts/claude-doctor.sh" "$non_fhs_store" "$non_fhs_missing_usr" "$non_fhs_missing_bin" <<'PY'
 from pathlib import Path
 import sys
@@ -168,9 +175,25 @@ if old not in text:
 path.write_text(text.replace(old, new, 1))
 PY
 disable_homebrew_paths "$non_fhs_skill/scripts/claude-locator.sh" "$TEST_ROOT/non-fhs-disabled-homebrew/claude"
+untrusted_nix_git="$TEST_ROOT/untrusted-nix-git"
+cp "$non_fhs_bin/git" "$untrusted_nix_git"
+rm "$non_fhs_profile_bin/git"
+ln -s "$untrusted_nix_git" "$non_fhs_profile_bin/git"
+set +e
+HOME="$TEST_ROOT/home" PATH="$non_fhs_profile_bin" \
+  BASH_ENV= ENV= /bin/bash --noprofile --norc "$non_fhs_skill/scripts/claude-doctor.sh" \
+    --repo-root "$ROOT" \
+    --skill-root "$non_fhs_skill" \
+    --config-file "$ROOT/.codex/claude/config.env" \
+    --skip-probes >/dev/null 2>&1
+untrusted_nix_status=$?
+set -e
+[ "$untrusted_nix_status" -ne 0 ] || fail "non-FHS bootstrap accepted a store symlink with an external target"
+rm "$non_fhs_profile_bin/git"
+ln -s "$non_fhs_bin/git" "$non_fhs_profile_bin/git"
 non_fhs_output="$({
   cd "$ROOT"
-  HOME="$TEST_ROOT/home" PATH="$non_fhs_bin" \
+  HOME="$TEST_ROOT/home" PATH="$non_fhs_profile_bin" \
     BASH_ENV= ENV= /bin/bash --noprofile --norc "$non_fhs_skill/scripts/claude-doctor.sh" \
       --repo-root "$ROOT" \
       --skill-root "$non_fhs_skill" \
@@ -179,7 +202,56 @@ non_fhs_output="$({
 })"
 printf '%s\n' "$non_fhs_output" | grep -Fqx 'doctor_status=ok' || fail "non-FHS doctor bootstrap"
 printf '%s\n' "$non_fhs_output" | grep -Fqx 'update_check=skipped' || fail "non-FHS doctor report-only status"
-pass "doctor bootstraps end to end from an immutable-store-only toolchain"
+pass "doctor bootstraps through Nix profile symlinks and rejects external targets"
+
+# Exercise the fixed Git-for-Windows root without depending on a Windows host.
+# The copied runner rewires only fixed production roots and the platform case;
+# the actual Windows CI job below still executes the unmodified production path.
+windows_bootstrap_skill="$TEST_ROOT/windows-bootstrap-skill"
+windows_bootstrap_usr="$TEST_ROOT/windows-bootstrap/usr/bin"
+windows_bootstrap_bin="$TEST_ROOT/windows-bootstrap/bin"
+windows_git_bin="$TEST_ROOT/windows-bootstrap/mingw64/bin"
+mkdir -p "$windows_bootstrap_skill/scripts" "$windows_bootstrap_usr" "$windows_bootstrap_bin" "$windows_git_bin"
+cp "$ROOT"/scripts/*.sh "$windows_bootstrap_skill/scripts/"
+chmod 755 "$windows_bootstrap_skill"/scripts/*.sh
+for tool_name in awk basename bash cat chmod cut dirname grep mkdir mktemp readlink rm sed stat tr wc; do
+  tool_path="$(type -P "$tool_name" 2>/dev/null || true)"
+  [ -n "$tool_path" ] || fail "Windows bootstrap tool unavailable: $tool_name"
+  {
+    printf '#!/bin/bash\n'
+    printf 'exec %q "$@"\n' "$tool_path"
+  } > "$windows_bootstrap_usr/$tool_name"
+  chmod 755 "$windows_bootstrap_usr/$tool_name"
+done
+tool_path="$(type -P git 2>/dev/null || true)"
+[ -n "$tool_path" ] || fail "Windows bootstrap git unavailable"
+{
+  printf '#!/bin/bash\n'
+  printf 'exec %q "$@"\n' "$tool_path"
+} > "$windows_git_bin/git"
+chmod 755 "$windows_git_bin/git"
+python3 - \
+  "$windows_bootstrap_skill/scripts/run-review.sh" \
+  "$windows_bootstrap_usr" \
+  "$windows_bootstrap_bin" \
+  "$windows_git_bin" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+text = text.replace('case "${OSTYPE:-}" in', 'case "msys-test" in', 1)
+text = text.replace('"/mingw64/bin"', f'"{sys.argv[4]}"', 1)
+old = 'claude_build_trusted_bootstrap_path "$CLAUDE_RUNTIME_INHERITED_PATH" "/nix/store" "/usr/bin" "/bin"'
+new = f'claude_build_trusted_bootstrap_path "$CLAUDE_RUNTIME_INHERITED_PATH" "/nix/store" "{sys.argv[2]}" "{sys.argv[3]}"'
+if old not in text:
+    raise SystemExit("production bootstrap root call not found")
+path.write_text(text.replace(old, new, 1))
+PY
+HOME="$TEST_ROOT/home" PATH="$windows_bootstrap_usr:$windows_git_bin" \
+  BASH_ENV= ENV= /bin/bash --noprofile --norc \
+  "$windows_bootstrap_skill/scripts/run-review.sh" --help >/dev/null
+pass "runner admits git only from the fixed Git-for-Windows root"
 
 # Simulate the whole-tree Git fast-forward used by the updater: an installed
 # checkout at commit one receives both helpers from commit two without a manifest.

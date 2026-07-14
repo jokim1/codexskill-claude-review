@@ -39,6 +39,12 @@ grep -Fq 'state-write denial retain their direct remediation' "$SKILL_FILE" || f
 grep -Fq 'BASH_ENV= ENV= <trusted-bash> --noprofile --norc <skill-dir>/scripts/run-review.sh' "$SKILL_FILE" || fail "SKILL.md trusted-shell runner invocation missing"
 grep -Fq 'BASH_ENV= ENV= <trusted-bash> --noprofile --norc <skill-dir>/scripts/claude-doctor.sh' "$SKILL_FILE" || fail "SKILL.md trusted-shell doctor invocation missing"
 grep -Fq 'claude_build_trusted_bootstrap_path' "$RUNNER_FILE" || fail "runner trusted bootstrap PATH missing"
+grep -Fq '"/mingw64/bin" "/mingw32/bin"' "$RUNNER_FILE" || fail "runner fixed Git-for-Windows roots missing"
+grep -Fq '"$candidate_path" -ef "$store_entry"' "$RUNNER_FILE" || fail "runner Nix profile entry validation missing"
+grep -Fq '"$candidate_path" -ef "$store_target"' "$RUNNER_FILE" || fail "runner Nix profile final-target validation missing"
+if grep -Fq 'CLAUDE_RUNTIME_INHERITED_PATH:-' "$REPO_ROOT/scripts/claude-locator.sh" "$REPO_ROOT/scripts/claude-runtime.sh"; then
+  fail "runtime helpers still collapse empty inherited PATH into bootstrap PATH"
+fi
 
 mkdir -p "$GUIDANCE_HOME/.codex/skills/claude-review/scripts"
 touch "$GUIDANCE_HOME/.codex/skills/claude-review/scripts/run-review.sh"

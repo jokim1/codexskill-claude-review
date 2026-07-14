@@ -130,7 +130,8 @@ chmod 755 "$TEST_ROOT/trusted/bin/claude"
 
 portable_store="$TEST_ROOT/nix-store"
 portable_tools="$portable_store/coreutils-test/bin"
-mkdir -p "$portable_tools"
+portable_profile_tools="$portable_store/profile/bin"
+mkdir -p "$portable_tools" "$portable_profile_tools"
 real_stat="$(type -P stat)"
 real_readlink="$(type -P readlink)"
 {
@@ -142,16 +143,41 @@ real_readlink="$(type -P readlink)"
   printf 'exec %q "$@"\n' "$real_readlink"
 } > "$portable_tools/readlink"
 chmod 555 "$portable_tools/stat" "$portable_tools/readlink"
-chmod 555 "$portable_tools" "$portable_store/coreutils-test" "$portable_store"
+ln -s "$portable_tools/stat" "$portable_profile_tools/stat"
+ln -s "$portable_tools/readlink" "$portable_profile_tools/readlink"
+chmod 555 \
+  "$portable_tools" \
+  "$portable_profile_tools" \
+  "$portable_store/coreutils-test" \
+  "$portable_store/profile" \
+  "$portable_store"
 (
   PATH="/usr/bin:/bin"
-  CLAUDE_RUNTIME_INHERITED_PATH="$portable_tools"
+  CLAUDE_RUNTIME_INHERITED_PATH="$portable_profile_tools"
   export PATH CLAUDE_RUNTIME_INHERITED_PATH
   resolved_stat="$(claude_locator_resolve_trusted_utility stat "$portable_store" "$TEST_ROOT/missing/stat")"
   resolved_readlink="$(claude_locator_resolve_trusted_utility readlink "$portable_store" "$TEST_ROOT/missing/readlink")"
   [ "$resolved_stat" = "$portable_tools/stat" ] || exit 1
   [ "$resolved_readlink" = "$portable_tools/readlink" ] || exit 1
 ) || fail "trusted immutable-store utility fallback through captured inherited PATH"
+chmod 755 "$portable_profile_tools" "$portable_store/profile" "$portable_store"
+portable_external_stat="$TEST_ROOT/portable-external-stat"
+cp "$portable_tools/stat" "$portable_external_stat"
+rm "$portable_profile_tools/stat"
+ln -s "$portable_external_stat" "$portable_profile_tools/stat"
+chmod 555 "$portable_profile_tools" "$portable_store/profile" "$portable_store"
+(
+  PATH="/usr/bin:/bin"
+  CLAUDE_RUNTIME_INHERITED_PATH="$portable_profile_tools"
+  export PATH CLAUDE_RUNTIME_INHERITED_PATH
+  if claude_locator_resolve_trusted_utility stat "$portable_store" "$TEST_ROOT/missing/stat"; then
+    exit 1
+  fi
+) || fail "trusted utility resolver must reject a store link to an external target"
+chmod 755 "$portable_profile_tools" "$portable_store/profile" "$portable_store"
+rm "$portable_profile_tools/stat"
+ln -s "$portable_tools/stat" "$portable_profile_tools/stat"
+chmod 555 "$portable_profile_tools" "$portable_store/profile" "$portable_store"
 (
   claude_locator_resolve_trusted_utility() {
     case "${1:-}" in
@@ -220,6 +246,24 @@ fi
   [ "$CLAUDE_LOCATOR_LAUNCH_PATH" = "$TEST_ROOT/trusted/bin/claude" ] || exit 1
 ) || fail "relative PATH candidate normalization"
 pass "relative PATH candidate physically normalizes before runtime CWD changes"
+
+bootstrap_only_path="$TEST_ROOT/bootstrap-only-path"
+mkdir -p "$bootstrap_only_path"
+cp "$TEST_ROOT/trusted/bin/claude" "$bootstrap_only_path/claude"
+(
+  cd "$TEST_ROOT/work"
+  PATH="$bootstrap_only_path"
+  CLAUDE_RUNTIME_INHERITED_PATH=""
+  export PATH CLAUDE_RUNTIME_INHERITED_PATH
+  if claude_locator_path_candidate "$PWD"; then
+    exit 1
+  fi
+  [ "$CLAUDE_LOCATOR_CANDIDATE_SOURCE" = "missing" ] || exit 1
+  if claude_locator_resolve_trusted_utility stat "$portable_store" "$TEST_ROOT/missing/stat"; then
+    exit 1
+  fi
+) || fail "empty captured PATH must not fall back to bootstrap utilities"
+pass "empty captured PATH remains distinct from an unset capture"
 
 mkdir -p "$TEST_ROOT/path-first" "$TEST_ROOT/path-later"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$TEST_ROOT/path-first/claude"
@@ -377,6 +421,15 @@ cp "$TEST_ROOT/work/subprocess.py" "$python_injection_root/subprocess.py"
 claude_runtime_resolve_trusted_python "$ROOT" "$TEST_ROOT/work" "$TEST_ROOT/work" || fail "trusted Python resolution"
 assert_eq "safe" "$CLAUDE_RUNTIME_PYTHON_STATUS" "trusted Python status"
 claude_runtime_write_python_driver "$python_driver"
+(
+  PATH="${CLAUDE_RUNTIME_PYTHON_BIN%/*}"
+  CLAUDE_RUNTIME_INHERITED_PATH=""
+  export PATH CLAUDE_RUNTIME_INHERITED_PATH
+  if claude_runtime_resolve_trusted_python "$ROOT" "$TEST_ROOT/work" "$TEST_ROOT/work"; then
+    exit 1
+  fi
+  [ "$CLAUDE_RUNTIME_PYTHON_STATUS" = "missing" ] || exit 1
+) || fail "empty captured PATH must not discover bootstrap Python"
 driver_output="$(
   PYTHON_INJECTION_MARKER="$python_injection_marker" \
   PYTHONPATH="$python_injection_root" \
@@ -390,6 +443,18 @@ driver_output="$(
 )"
 assert_eq "driver-ok" "$driver_output" "isolated Python driver output"
 [ ! -e "$python_injection_marker" ] || fail "isolated Python loaded startup code from CWD or PYTHONPATH"
+empty_driver_path="$(
+  PATH="${CLAUDE_RUNTIME_PYTHON_BIN%/*}" \
+  CLAUDE_RUNTIME_INHERITED_PATH="" \
+  claude_runtime_run_with_timeout \
+    "$CLAUDE_RUNTIME_PYTHON_BIN" \
+    "$python_driver" \
+    "$TEST_ROOT/work" \
+    5 \
+    - \
+    /bin/bash -c 'printf %s "$PATH"'
+)"
+assert_eq "" "$empty_driver_path" "Python transport preserves empty inherited PATH"
 
 unsafe_python_root="$TEST_ROOT/unsafe-python-invocation"
 mkdir -p "$unsafe_python_root/bin"
@@ -777,6 +842,23 @@ set -e
 [ ! -e "$TEST_ROOT/descendant-ran" ] || fail "profile-only descendant helper marker exists"
 [ ! -e "$TEST_ROOT/descendant-profile-loaded" ] || fail "runtime loaded descendant profile"
 pass "descendant tools obey unchanged inherited PATH without profile retry"
+
+EMPTY_PATH_LOG="$TEST_ROOT/empty-path.log"
+export EMPTY_PATH_LOG
+cat > "$TEST_ROOT/trusted/bin/empty-path-claude" <<'SH'
+#!/bin/bash
+printf '%s' "$PATH" > "$EMPTY_PATH_LOG"
+SH
+chmod 755 "$TEST_ROOT/trusted/bin/empty-path-claude"
+(
+  PATH="/usr/bin:/bin"
+  CLAUDE_RUNTIME_INHERITED_PATH=""
+  export PATH CLAUDE_RUNTIME_INHERITED_PATH
+  claude_runtime_run_direct "$TEST_ROOT/work" "$TEST_ROOT/trusted/bin/empty-path-claude"
+  [ -z "$(claude_runtime_resolve_path_dependency env "$TEST_ROOT/work")" ] || exit 1
+) || fail "direct runtime must preserve an empty inherited PATH"
+[ ! -s "$EMPTY_PATH_LOG" ] || fail "direct runtime replaced an empty inherited PATH"
+pass "direct and dependency runtimes preserve empty inherited PATH byte-for-byte"
 
 # Bounded source-purity checks: no output, hang, CWD/env mutation, or writes.
 python3 - "$LOCATOR" "$RUNTIME" "$TEST_ROOT/source-purity" <<'PY'
