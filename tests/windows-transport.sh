@@ -18,7 +18,9 @@ import sys
 text = Path(sys.argv[1]).read_text()
 for token in (
     "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE",
+    "CREATE_SUSPENDED",
     "AssignProcessToJobObject",
+    "NtResumeProcess",
     "TerminateJobObject",
     "subprocess.CREATE_NEW_PROCESS_GROUP",
     'process_options["start_new_session"] = True',
@@ -29,6 +31,11 @@ for token in (
         raise SystemExit(f"shared runtime driver lacks {token}")
 if "proc.communicate()" in text:
     raise SystemExit("shared runtime driver retains an unbounded final communicate")
+run_block = text[text.index("def _run_process"):text.index("def _classify")]
+if "subprocess.CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED" not in run_block:
+    raise SystemExit("Windows child is not created suspended")
+if run_block.index("AssignProcessToJobObject") > run_block.index("_resume_suspended_process(proc)"):
+    raise SystemExit("Windows child resumes before Job Object assignment")
 PY
 
 case "${OSTYPE:-}" in
@@ -163,31 +170,50 @@ PY
 })"
 printf '%s' "$timeout_output" | grep -Fq 'timeout-ok' || fail "Python discrete-argv .exe transport"
 
-tree_script="$fixture_root/timeout-tree.sh"
+tree_script="$fixture_root/timeout-tree.py"
 tree_pid_file="$fixture_root/timeout-tree.pid"
-cat > "$tree_script" <<'SH'
-#!/usr/bin/env bash
-set -euo pipefail
-(
-  trap '' TERM
-  while :; do sleep 1; done
-) &
-printf '%s\n' "$!" > "${WINDOWS_TREE_PID_FILE:?}"
-wait
-SH
-chmod 755 "$tree_script"
+tree_job_file="$fixture_root/timeout-tree.job"
+cat > "$tree_script" <<'PY'
+import ctypes
+from ctypes import wintypes
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+in_job = wintypes.BOOL()
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+kernel32.IsProcessInJob.argtypes = [wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]
+kernel32.IsProcessInJob.restype = wintypes.BOOL
+if not kernel32.IsProcessInJob(kernel32.GetCurrentProcess(), None, ctypes.byref(in_job)):
+    raise ctypes.WinError(ctypes.get_last_error())
+Path(sys.argv[1]).write_text("1" if in_job.value else "0", encoding="ascii")
+if not in_job.value:
+    raise SystemExit(93)
+child = subprocess.Popen(
+    [sys.executable, "-c", "import time; time.sleep(60)"],
+    stdout=sys.stdout,
+    stderr=sys.stderr,
+)
+Path(sys.argv[2]).write_text(str(child.pid), encoding="ascii")
+time.sleep(60)
+PY
+tree_script_windows="$("$cygpath_bin" -aw "$tree_script")"
+tree_job_file_windows="$("$cygpath_bin" -aw "$tree_job_file")"
+tree_pid_file_windows="$("$cygpath_bin" -aw "$tree_pid_file")"
 set +e
-WINDOWS_TREE_PID_FILE="$tree_pid_file" \
-  claude_runtime_run_with_timeout \
-    "$CLAUDE_RUNTIME_PYTHON_BIN" \
-    "$process_driver" \
-    "$runtime_cwd" \
-    1 \
-    - \
-    "$windows_bash" --noprofile --norc "$tree_script" >/dev/null 2>&1
+claude_runtime_run_with_timeout \
+  "$CLAUDE_RUNTIME_PYTHON_BIN" \
+  "$process_driver" \
+  "$runtime_cwd" \
+  1 \
+  - \
+  "$CLAUDE_RUNTIME_PYTHON_BIN" "$tree_script_windows" "$tree_job_file_windows" "$tree_pid_file_windows" >/dev/null 2>&1
 tree_status=$?
 set -e
 [ "$tree_status" -eq 124 ] || fail "Windows tree timeout status: $tree_status"
+[ "$(cat "$tree_job_file")" = "1" ] || fail "Windows child ran before Job Object assignment"
 [ -s "$tree_pid_file" ] || fail "Windows timeout grandchild never started"
 tree_pid="$(cat "$tree_pid_file")"
 for _ in $(seq 1 30); do

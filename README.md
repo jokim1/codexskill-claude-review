@@ -502,8 +502,9 @@ the macOS per-user `/var/folders` namespace. The canonical target must also be a
 regular, executable, non-world-writable file before Claude runs.
 
 Trust validation prefers the fixed `/usr/bin` or `/bin` `stat` and `readlink`
-utilities. On NixOS it may use PATH-resolved regular executables only when their
-physical paths are inside the immutable `/nix/store` boundary. Every intermediate
+utilities. On NixOS it searches the captured inherited PATH, but accepts a resolved
+regular executable only when its physical path is inside the immutable `/nix/store`
+boundary. Every intermediate
 launcher symlink hop receives the same boundary validation as the launch and final
 target. If no trusted validation utility is available, the bridge fails closed with
 `claude_path_status=unsafe_candidate` and
@@ -529,8 +530,9 @@ Review and preflight prompt bodies are written with mode `0600` inside the priva
 runtime directory and streamed to Claude on stdin. The bounded artifact therefore
 never occupies one OS argv element, including near the 200000-byte review cap;
 control flags, schema, model, and other non-artifact values remain discrete argv.
-On Windows, the shared Python driver assigns Claude and its descendants to a
-kill-on-close Job Object. Timeout cleanup terminates that whole tree and uses only
+On Windows, the shared Python driver creates Claude suspended, assigns it to a
+kill-on-close Job Object, and resumes it only after assignment. Timeout cleanup
+terminates that whole tree and uses only
 bounded output-drain waits, so a grandchild retaining inherited pipes cannot keep
 runner or doctor alive indefinitely. POSIX continues to use a private process
 group with the same bounded drain behavior.

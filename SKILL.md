@@ -223,9 +223,10 @@ reinterpreted as a script argument. Do not fall back to a second PATH lookup.
 Temporary trust boundaries include inherited absolute `TMPDIR`, `TEMP`, and `TMP`
 roots plus the macOS `/var/folders` namespace.
 
-The shared runtime driver owns bounded child-process lifetime. On Windows it uses
-a kill-on-close Job Object for the complete descendant tree; on POSIX it uses a
-private process group. Do not replace either path with direct-process-only
+The shared runtime driver owns bounded child-process lifetime. On Windows it creates
+the child suspended, assigns it to a kill-on-close Job Object, and only then resumes
+it so the complete descendant tree is owned from its first instruction; on POSIX it
+uses a private process group. Do not replace either path with direct-process-only
 `terminate()`/`kill()` or an unbounded final output drain.
 
 ### Claude State Writes And Codex Sandbox Boundary

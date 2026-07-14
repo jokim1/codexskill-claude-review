@@ -160,6 +160,7 @@ import time
 
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
+CREATE_SUSPENDED = 0x00000004
 
 
 if os.name == "nt":
@@ -214,6 +215,9 @@ if os.name == "nt":
     _kernel32.TerminateJobObject.restype = wintypes.BOOL
     _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
     _kernel32.CloseHandle.restype = wintypes.BOOL
+    _ntdll = ctypes.WinDLL("ntdll")
+    _ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
+    _ntdll.NtResumeProcess.restype = ctypes.c_long
 
 
 def _create_kill_on_close_job():
@@ -239,6 +243,14 @@ def _create_kill_on_close_job():
 def _close_job(job):
     if job is not None:
         _kernel32.CloseHandle(job)
+
+
+def _resume_suspended_process(proc):
+    status = _ntdll.NtResumeProcess(wintypes.HANDLE(int(proc._handle)))
+    if status != 0:
+        raise OSError(
+            f"NtResumeProcess failed with NTSTATUS 0x{status & 0xFFFFFFFF:08x}"
+        )
 
 
 def _stop_process_tree(proc, job, force):
@@ -305,7 +317,9 @@ def _run_process(timeout, msys_present, msys_value, input_path, cmd):
     job = _create_kill_on_close_job()
     proc = None
     if os.name == "nt":
-        process_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        process_options["creationflags"] = (
+            subprocess.CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED
+        )
     else:
         process_options["start_new_session"] = True
     try:
@@ -330,6 +344,16 @@ def _run_process(timeout, msys_present, msys_value, input_path, cmd):
             except subprocess.TimeoutExpired:
                 proc.kill()
             raise error
+        if os.name == "nt":
+            try:
+                _resume_suspended_process(proc)
+            except OSError:
+                _kernel32.TerminateJobObject(job, 1)
+                try:
+                    proc.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    pass
+                raise
         try:
             out, err = proc.communicate(input_payload, timeout=timeout)
             timed_out = False

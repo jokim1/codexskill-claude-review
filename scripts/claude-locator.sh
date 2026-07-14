@@ -261,7 +261,7 @@ claude_locator_resolve_trusted_utility() {
     fi
   done
 
-  candidate="$(type -P "$utility" 2>/dev/null || true)"
+  candidate="$(PATH="${CLAUDE_RUNTIME_INHERITED_PATH:-${PATH-}}" type -P "$utility" 2>/dev/null || true)"
   [ -n "$candidate" ] || return 1
   physical_candidate="$(claude_locator_physical_launch_path "$candidate" "${PWD:-/}" 2>/dev/null || true)"
   [ -n "$physical_candidate" ] || return 1

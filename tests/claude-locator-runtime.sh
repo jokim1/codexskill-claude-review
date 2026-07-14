@@ -144,13 +144,14 @@ real_readlink="$(type -P readlink)"
 chmod 555 "$portable_tools/stat" "$portable_tools/readlink"
 chmod 555 "$portable_tools" "$portable_store/coreutils-test" "$portable_store"
 (
-  PATH="$portable_tools"
-  export PATH
+  PATH="/usr/bin:/bin"
+  CLAUDE_RUNTIME_INHERITED_PATH="$portable_tools"
+  export PATH CLAUDE_RUNTIME_INHERITED_PATH
   resolved_stat="$(claude_locator_resolve_trusted_utility stat "$portable_store" "$TEST_ROOT/missing/stat")"
   resolved_readlink="$(claude_locator_resolve_trusted_utility readlink "$portable_store" "$TEST_ROOT/missing/readlink")"
   [ "$resolved_stat" = "$portable_tools/stat" ] || exit 1
   [ "$resolved_readlink" = "$portable_tools/readlink" ] || exit 1
-) || fail "trusted immutable-store utility fallback"
+) || fail "trusted immutable-store utility fallback through captured inherited PATH"
 (
   claude_locator_resolve_trusted_utility() {
     case "${1:-}" in
