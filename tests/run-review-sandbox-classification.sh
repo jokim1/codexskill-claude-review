@@ -158,7 +158,12 @@ run_case() {
   local claude_config_dir="${9:-}"
   local shell_path="${10:-/bin/bash}"
   local expected_doctor_offer="${11:-}"
+  local fake_auth_status="${12:-}"
   local fake_root tmpdir output
+
+  if [ -z "$fake_auth_status" ]; then
+    fake_auth_status='{"loggedIn":true,"apiProvider":"firstParty"}'
+  fi
 
   fake_root="$(make_fake_claude_root)"
   tmpdir="$(mktemp -d /tmp/claude-review-test-XXXXXX)"
@@ -175,7 +180,7 @@ if [ "${1:-}" = "-v" ] || [ "${1:-}" = "--version" ]; then
 fi
 
 if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
-  printf '{"loggedIn":true,"apiProvider":"firstParty"}\n'
+  printf '%s\n' "$FAKE_CLAUDE_AUTH_STATUS"
   exit 0
 fi
 
@@ -207,6 +212,7 @@ EOF
       FAKE_CLAUDE_PROBE_STATUS="$probe_status" \
       FAKE_CLAUDE_REVIEW_OUTPUT="$review_output" \
       FAKE_CLAUDE_REVIEW_STATUS="$review_status" \
+      FAKE_CLAUDE_AUTH_STATUS="$fake_auth_status" \
       CLAUDE_CONFIG_DIR="$claude_config_dir" \
       SHELL="$shell_path" \
       bash scripts/run-review.sh \
@@ -931,6 +937,72 @@ run_case \
   0 \
   "subscription auth is unavailable" \
   "claude auth login --claudeai" \
+  "" \
+  "" \
+  "" \
+  "true"
+
+run_case \
+  "probe timeout outranks partial auth output" \
+  "$(make_error_result "Error: not logged in; run auth login")" \
+  124 \
+  "" \
+  0 \
+  "preflight timed out" \
+  "increasing LIVE_PROBE_TIMEOUT_SECONDS" \
+  "subscription auth is unavailable" \
+  "" \
+  "" \
+  "true"
+
+run_case \
+  "non-first-party auth is rejected" \
+  "" \
+  0 \
+  "" \
+  0 \
+  "authenticated through Anthropic Console" \
+  "claude auth login --claudeai" \
+  "" \
+  "" \
+  "" \
+  "true" \
+  '{"loggedIn":true,"apiProvider":"console"}'
+
+run_case \
+  "review timeout preserves remediation" \
+  '{"ok":true}' \
+  0 \
+  "" \
+  124 \
+  "after 2 attempt(s)" \
+  "/claude-review set timeout <seconds>" \
+  "" \
+  "" \
+  "" \
+  "false"
+
+run_case \
+  "review budget preserves cap and remediation" \
+  '{"ok":true}' \
+  0 \
+  "Error: reached maximum budget" \
+  1 \
+  'budget cap ($5.00)' \
+  "/claude-review set budget <usd>" \
+  "" \
+  "" \
+  "" \
+  "false"
+
+run_case \
+  "runtime API-key auth path is rejected" \
+  '{"ok":true}' \
+  0 \
+  "ANTHROPIC_API_KEY is set" \
+  1 \
+  "API-key-style auth path" \
+  "Remove Anthropic API credential env vars" \
   "" \
   "" \
   "" \

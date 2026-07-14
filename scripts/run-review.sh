@@ -508,44 +508,6 @@ validate_readable_inputs() {
   fi
 }
 
-failure_priority() {
-  case "${1:-}" in
-    missing_binary)
-      printf '1'
-      ;;
-    unusable_runner|launcher_dependency_missing|launcher_dependency_unsafe|launcher_dependency_unsupported|launcher_dependency_unreadable)
-      printf '2'
-      ;;
-    subscription_auth_unavailable)
-      printf '3'
-      ;;
-    probe_budget_too_low)
-      printf '4'
-      ;;
-    ambiguous_auth)
-      printf '5'
-      ;;
-    probe_timed_out)
-      printf '6'
-      ;;
-    claude_state_write_denied)
-      printf '6'
-      ;;
-    review_budget_too_low)
-      printf '7'
-      ;;
-    review_timed_out)
-      printf '8'
-      ;;
-    invocation_failed)
-      printf '9'
-      ;;
-    *)
-      printf '0'
-      ;;
-  esac
-}
-
 record_failure() {
   local code="$1"
   local summary="$2"
@@ -554,11 +516,9 @@ record_failure() {
   if failure_offers_doctor "$code"; then
     question="$(append_doctor_offer "$question")"
   fi
-  if [ "$(failure_priority "$code")" -ge "$(failure_priority "$CLAUDE_FAILURE_CODE")" ]; then
-    CLAUDE_FAILURE_CODE="$code"
-    CLAUDE_FAILURE_SUMMARY="$summary"
-    CLAUDE_FAILURE_QUESTION="$question"
-  fi
+  CLAUDE_FAILURE_CODE="$code"
+  CLAUDE_FAILURE_SUMMARY="$summary"
+  CLAUDE_FAILURE_QUESTION="$question"
 }
 
 failure_offers_doctor() {
@@ -1133,7 +1093,12 @@ probe_runner_usability() {
     return 1
   fi
 
-  if budget_exhausted_output "$probe_output"; then
+  if [ "$probe_status" -eq 124 ]; then
+    record_failure \
+      "probe_timed_out" \
+      "Claude subscription preflight timed out after ${probe_timeout_seconds}s before it could return." \
+      "The review was not started. Check Claude Code startup hooks, MCP/config loading, and user/global settings, or retry after increasing LIVE_PROBE_TIMEOUT_SECONDS."
+  elif budget_exhausted_output "$probe_output"; then
     record_failure \
       "probe_budget_too_low" \
       "Claude subscription preflight hit the CLI budget cap before it could return." \
@@ -1145,11 +1110,6 @@ probe_runner_usability() {
       "subscription_auth_unavailable" \
       "Claude Code was found, but Claude subscription auth is unavailable from the shell context this skill uses." \
       "Run claude auth login --claudeai in the same environment Codex uses, then retry."
-  elif [ "$probe_status" -eq 124 ]; then
-    record_failure \
-      "probe_timed_out" \
-      "Claude subscription preflight timed out after ${probe_timeout_seconds}s before it could return." \
-      "The review was not started. Check Claude Code startup hooks, MCP/config loading, and user/global settings, or retry after increasing LIVE_PROBE_TIMEOUT_SECONDS."
   else
     record_failure \
       "ambiguous_auth" \
@@ -1281,15 +1241,15 @@ classify_runtime_failure() {
     record_failure \
       "review_timed_out" \
       "Claude review timed out after ${timeout_attempts} attempt(s) (${timeout_attempt_seconds}) before it could return a result." \
-      "The configured timeout is ${configured_timeout}s; the effective timeout was ${effective_timeout}s based on artifact size, model=${configured_model}, and effort=${EFFORT}. Retry with a narrower scope or increase the timeout with `/claude-review set timeout <seconds>`."
+      "The configured timeout is ${configured_timeout}s; the effective timeout was ${effective_timeout}s based on artifact size, model=${configured_model}, and effort=${EFFORT}. Retry with a narrower scope or increase the timeout with \`/claude-review set timeout <seconds>\`."
     return
   fi
 
   if budget_exhausted_output "$output"; then
     record_failure \
       "review_budget_too_low" \
-      "Claude review hit the configured budget cap ($${MAX_BUDGET_USD}) before it could return a result." \
-      "Retry with a smaller artifact (current artifact=${artifact_bytes:-unknown} bytes), a cheaper model/effort pair, or increase the budget with `/claude-review set budget <usd>`."
+      "Claude review hit the configured budget cap (\$${MAX_BUDGET_USD}) before it could return a result." \
+      "Retry with a smaller artifact (current artifact=${artifact_bytes:-unknown} bytes), a cheaper model/effort pair, or increase the budget with \`/claude-review set budget <usd>\`."
     return
   fi
 
