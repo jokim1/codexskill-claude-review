@@ -66,8 +66,22 @@ claude_runtime_run_direct() {
   )
 }
 
-claude_runtime_check_launcher_dependency() {
-  local canonical_target="${1:-}"
+claude_runtime_add_dependency_path() {
+  local dependency_path="$1"
+  local existing_path=""
+
+  for existing_path in "${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATHS[@]+"${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATHS[@]}"}"; do
+    [ "$existing_path" = "$dependency_path" ] && return 0
+  done
+  CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATHS+=("$dependency_path")
+  CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_COUNT=$((CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_COUNT + 1))
+  CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="$dependency_path"
+  CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="${dependency_path##*/}"
+}
+
+claude_runtime_inspect_shebang_path() {
+  local current_path="$1"
+  local depth="$2"
   local first_line=""
   local payload=""
   local interpreter=""
@@ -75,14 +89,42 @@ claude_runtime_check_launcher_dependency() {
   local dependency_path=""
   local remainder=""
   local extra=""
+  local stack_index=0
 
-  CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unknown"
-  CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="none"
-  CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="none"
-  CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH="none"
+  if [ "$depth" -gt 8 ]; then
+    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unsupported"
+    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="shebang_depth"
+    return 1
+  fi
+  for ((stack_index = 0; stack_index < depth; stack_index++)); do
+    if [ "${CLAUDE_RUNTIME_SHEBANG_STACK[$stack_index]:-}" = "$current_path" ]; then
+      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unsupported"
+      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="shebang_cycle"
+      return 1
+    fi
+  done
+  CLAUDE_RUNTIME_SHEBANG_STACK[$depth]="$current_path"
 
-  [ -f "$canonical_target" ] || return 0
-  IFS= read -r -n 4096 first_line < "$canonical_target" || true
+  if [ ! -f "$current_path" ] || [ ! -x "$current_path" ]; then
+    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="missing"
+    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="${current_path##*/}"
+    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="$current_path"
+    return 1
+  fi
+  if [ ! -r "$current_path" ]; then
+    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unreadable"
+    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="${current_path##*/}"
+    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="$current_path"
+    return 1
+  fi
+  if { IFS= read -r -n 4096 first_line || true; } 2>/dev/null < "$current_path"; then
+    :
+  else
+    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unreadable"
+    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="${current_path##*/}"
+    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="$current_path"
+    return 1
+  fi
   case "$first_line" in
     '#!'*)
       ;;
@@ -102,9 +144,10 @@ claude_runtime_check_launcher_dependency() {
   case "$interpreter" in
     /*/env|/env)
       CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH="$interpreter"
-      if [ ! -x "$interpreter" ]; then
+      if [ ! -f "$interpreter" ] || [ ! -x "$interpreter" ]; then
         CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="missing"
         CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="env"
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="$interpreter"
         return 1
       fi
       IFS=$' \t' read -r dependency extra <<< "$remainder"
@@ -120,36 +163,54 @@ claude_runtime_check_launcher_dependency() {
           return 1
           ;;
       esac
-      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="$dependency"
+      claude_runtime_add_dependency_path "$interpreter"
+      claude_runtime_inspect_shebang_path "$interpreter" "$((depth + 1))" || return 1
       dependency_path="$(type -P "$dependency" 2>/dev/null || true)"
-      if [ -n "$dependency_path" ]; then
-        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="available"
-        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="$dependency_path"
-        return 0
+      if [ -z "$dependency_path" ]; then
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="missing"
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="$dependency"
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="none"
+        return 1
       fi
-      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="missing"
-      return 1
+      claude_runtime_add_dependency_path "$dependency_path"
+      claude_runtime_inspect_shebang_path "$dependency_path" "$((depth + 1))" || return 1
+      return 0
       ;;
-  esac
-
-  case "$interpreter" in
     /*)
-      dependency="${interpreter##*/}"
-      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="$dependency"
       CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH="$interpreter"
-      if [ -x "$interpreter" ]; then
-        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="available"
+      if [ ! -f "$interpreter" ] || [ ! -x "$interpreter" ]; then
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="missing"
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="${interpreter##*/}"
         CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="$interpreter"
-        return 0
+        return 1
       fi
-      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="missing"
-      return 1
+      claude_runtime_add_dependency_path "$interpreter"
+      claude_runtime_inspect_shebang_path "$interpreter" "$((depth + 1))" || return 1
+      return 0
       ;;
   esac
 
   CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unsupported"
   CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="shebang"
   return 1
+}
+
+claude_runtime_check_launcher_dependency() {
+  local canonical_target="${1:-}"
+
+  CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unknown"
+  CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="none"
+  CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="none"
+  CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH="none"
+  CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATHS=()
+  CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_COUNT=0
+  CLAUDE_RUNTIME_SHEBANG_STACK=()
+
+  claude_runtime_inspect_shebang_path "$canonical_target" 0 || return 1
+  if [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_COUNT" -gt 0 ]; then
+    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="available"
+  fi
+  return 0
 }
 
 # claude-review-helper-complete: runtime_v1

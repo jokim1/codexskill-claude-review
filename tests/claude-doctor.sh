@@ -424,6 +424,39 @@ assert_line "$unsafe_dependency_output" "claude_launcher_dependency_path=$unsafe
 assert_line "$unsafe_dependency_output" "claude_launcher_dependency_trust_scope=launch" "unsafe dependency trust scope"
 assert_line "$unsafe_dependency_output" "claude_launcher_dependency_trust_reason=invocation_cwd_path" "unsafe dependency trust reason"
 [ ! -e "$unsafe_dependency_log" ] || fail "unsafe dependency launcher executed"
+
+nested_home="$TEST_ROOT/nested-dependency-home"
+nested_tools="$TEST_ROOT/nested-tools"
+nested_invocation="$TEST_ROOT/nested-invocation"
+nested_log="$TEST_ROOT/nested-executed.log"
+mkdir -p "$nested_home/.local/bin" "$nested_tools" "$nested_invocation/bin"
+cat > "$nested_invocation/bin/fake-python" <<SH
+#!/bin/bash
+printf executed > "$nested_log"
+SH
+cat > "$nested_tools/fake-node" <<SH
+#!$nested_invocation/bin/fake-python
+exit 0
+SH
+cat > "$nested_home/.local/bin/claude" <<'SH'
+#!/usr/bin/env fake-node
+exit 0
+SH
+chmod 755 "$nested_invocation/bin/fake-python" "$nested_tools/fake-node" "$nested_home/.local/bin/claude"
+nested_output="$(run_doctor "$REPO_ROOT" "$REPO_ROOT" "$nested_invocation" "$nested_home" "$nested_tools:$SYSTEM_PATH" "$TEST_ROOT/nested-claude.log" --skip-probes)"
+assert_line "$nested_output" "claude_path_status=launcher_dependency_unsafe" "nested dependency status"
+assert_line "$nested_output" "claude_launcher_dependency=fake-python" "nested dependency name"
+assert_line "$nested_output" "claude_launcher_dependency_trust_reason=invocation_cwd_path" "nested dependency trust reason"
+[ ! -e "$nested_log" ] || fail "nested unsafe dependency executed"
+
+unreadable_home="$TEST_ROOT/unreadable-home"
+unreadable_log="$TEST_ROOT/unreadable.log"
+write_fake_claude "$unreadable_home/.local/bin/claude"
+chmod 111 "$unreadable_home/.local/bin/claude"
+unreadable_output="$(run_doctor "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$unreadable_home" "$SYSTEM_PATH" "$unreadable_log" --skip-probes)"
+assert_line "$unreadable_output" "claude_path_status=launcher_dependency_unreadable" "unreadable dependency status"
+assert_line "$unreadable_output" "claude_launcher_dependency_path=$unreadable_home/.local/bin/claude" "unreadable dependency path"
+[ ! -e "$unreadable_log" ] || fail "unreadable launcher executed"
 pass "doctor launcher-dependency classification"
 
 # Profile-only values are not imported; directly inherited values are presence-only.

@@ -681,6 +681,8 @@ explain which inherited-PATH or absolute interpreter needs repair.
 Treat `claude_path_status=launcher_dependency_unsupported` as fail-closed too; use
 an absolute interpreter or exact `#!/usr/bin/env NAME` launcher rather than trying
 to interpret or bypass unsupported `env -S` syntax in the rendering layer.
+Treat `claude_path_status=launcher_dependency_unreadable` as fail-closed; repair
+read access to the reported launcher/interpreter chain or reinstall native Claude.
 Do not replace it with a hand-written `claude -p` probe.
 
 ### `/claude-review update`

@@ -425,6 +425,37 @@ assert_json_status "$unsafe_dependency_output" blocked "launcher interpreter res
 assert_doctor_offer "$unsafe_dependency_output" true
 [ ! -e "$unsafe_dependency_log" ] || fail "unsafe launcher interpreter executed"
 
+nested_home="$TEST_ROOT/nested-dependency-home"
+nested_tools="$TEST_ROOT/nested-tools"
+nested_invocation="$TEST_ROOT/nested-invocation"
+nested_log="$TEST_ROOT/nested-executed.log"
+mkdir -p "$nested_home/.local/bin" "$nested_tools" "$nested_invocation/bin"
+cat > "$nested_invocation/bin/fake-python" <<SH
+#!/bin/bash
+printf executed > "$nested_log"
+SH
+cat > "$nested_tools/fake-node" <<SH
+#!$nested_invocation/bin/fake-python
+exit 0
+SH
+cat > "$nested_home/.local/bin/claude" <<'SH'
+#!/usr/bin/env fake-node
+exit 0
+SH
+chmod 755 "$nested_invocation/bin/fake-python" "$nested_tools/fake-node" "$nested_home/.local/bin/claude"
+nested_output="$(run_runner "$REPO_ROOT" "$REPO_ROOT" "$nested_invocation" "$nested_home" "$nested_tools:$SYSTEM_PATH" "$TEST_ROOT/nested-claude.log")"
+assert_json_status "$nested_output" blocked "launcher interpreter resolves to an unsafe path" "fake-python"
+[ ! -e "$nested_log" ] || fail "nested unsafe interpreter executed"
+
+unreadable_home="$TEST_ROOT/unreadable-home"
+unreadable_log="$TEST_ROOT/unreadable.log"
+write_success_claude "$unreadable_home/.local/bin/claude"
+chmod 111 "$unreadable_home/.local/bin/claude"
+unreadable_output="$(run_runner "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$unreadable_home" "$SYSTEM_PATH" "$unreadable_log")"
+assert_json_status "$unreadable_output" blocked "cannot be read safely" "$unreadable_home/.local/bin/claude"
+assert_doctor_offer "$unreadable_output" true
+[ ! -e "$unreadable_log" ] || fail "unreadable launcher executed"
+
 exit_home="$TEST_ROOT/exit-127-home"
 mkdir -p "$exit_home/.local/bin"
 cat > "$exit_home/.local/bin/claude" <<'SH'

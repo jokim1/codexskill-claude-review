@@ -334,6 +334,28 @@ if claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/env-extra"; 
   fail "env with extra args accepted"
 fi
 assert_eq "unsupported" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "env extra fails closed"
+
+cat > "$TEST_ROOT/trusted/bin/unreadable-launcher" <<'SH'
+#!/bin/bash
+exit 0
+SH
+chmod 111 "$TEST_ROOT/trusted/bin/unreadable-launcher"
+if claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/unreadable-launcher"; then
+  fail "unreadable launcher accepted as native"
+fi
+assert_eq "unreadable" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "unreadable launcher fails closed"
+
+cycle_a="$TEST_ROOT/trusted/bin/cycle-a"
+cycle_b="$TEST_ROOT/trusted/bin/cycle-b"
+printf '#!%s\n' "$cycle_b" > "$cycle_a"
+printf '#!%s\n' "$cycle_a" > "$cycle_b"
+chmod 755 "$cycle_a" "$cycle_b"
+if claude_runtime_check_launcher_dependency "$cycle_a"; then
+  fail "cyclic shebang chain accepted"
+fi
+assert_eq "unsupported" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "cyclic shebang fails closed"
+assert_eq "shebang_cycle" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY" "cyclic shebang reason"
+
 cat > "$TEST_ROOT/trusted/bin/existing-interpreter-exit" <<'SH'
 #!/bin/bash
 exit 127
@@ -375,6 +397,30 @@ assert_eq "$selected_target" "$CLAUDE_LOCATOR_CANONICAL_TARGET" "launcher diagno
 PATH="$saved_path"
 export PATH
 pass "alternate env and resolved interpreters reuse trust validation without clobbering launcher diagnostics"
+
+nested_launcher="$TEST_ROOT/trusted/bin/nested-launcher"
+nested_wrapper="$TEST_ROOT/trusted/bin/nested-node"
+nested_interpreter="$dependency_invocation/bin/nested-python"
+printf '#!/bin/bash\nexit 0\n' > "$nested_interpreter"
+printf '#!%s\nexit 0\n' "$nested_interpreter" > "$nested_wrapper"
+printf '#!/usr/bin/env nested-node\nexit 0\n' > "$nested_launcher"
+chmod 755 "$nested_interpreter" "$nested_wrapper" "$nested_launcher"
+saved_path="$PATH"
+PATH="$TEST_ROOT/trusted/bin:$PATH"
+export PATH
+claude_runtime_check_launcher_dependency "$nested_launcher" || fail "nested shebang chain classified"
+nested_wrapper_found=false
+for dependency_path in "${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATHS[@]}"; do
+  [ "$dependency_path" = "$nested_wrapper" ] && nested_wrapper_found=true
+done
+[ "$nested_wrapper_found" = true ] || fail "nested wrapper missing from dependency chain"
+if claude_locator_validate_launcher_dependency "$nested_interpreter" "$ROOT" "$dependency_invocation"; then
+  fail "nested unsafe interpreter accepted"
+fi
+assert_eq "invocation_cwd_path" "$CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_STATUS" "nested interpreter trust reason"
+PATH="$saved_path"
+export PATH
+pass "recursive shebang inspection exposes nested interpreters to trust validation"
 
 # A BASH_ENV/ENV set in an already-running shell must not reach or initialize the
 # candidate interpreter.

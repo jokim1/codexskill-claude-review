@@ -23,6 +23,11 @@ source "$ROOT/scripts/claude-locator.sh"
 # shellcheck source=/dev/null
 source "$ROOT/scripts/claude-runtime.sh"
 
+grep -Fq 'if os.name == "nt"' "$ROOT/scripts/claude-doctor.sh" || fail "doctor lacks Windows timeout termination"
+if grep -Fq 'start_new_session=True' "$ROOT/scripts/claude-doctor.sh"; then
+  fail "doctor unconditionally requests a Unix process session"
+fi
+
 for platform in msys mingw64_nt cygwin; do
   if claude_locator_native_supported "$platform"; then
     fail "native fallback unexpectedly enabled for $platform"

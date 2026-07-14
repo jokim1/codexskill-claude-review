@@ -476,7 +476,7 @@ failure_priority() {
     missing_binary)
       printf '1'
       ;;
-    unusable_runner|launcher_dependency_missing|launcher_dependency_unsafe|launcher_dependency_unsupported)
+    unusable_runner|launcher_dependency_missing|launcher_dependency_unsafe|launcher_dependency_unsupported|launcher_dependency_unreadable)
       printf '2'
       ;;
     subscription_auth_unavailable)
@@ -526,7 +526,7 @@ record_failure() {
 
 failure_offers_doctor() {
   case "${1:-}" in
-    missing_binary|unusable_runner|launcher_dependency_missing|launcher_dependency_unsafe|launcher_dependency_unsupported|subscription_auth_unavailable|ambiguous_auth|probe_timed_out|invocation_failed)
+    missing_binary|unusable_runner|launcher_dependency_missing|launcher_dependency_unsafe|launcher_dependency_unsupported|launcher_dependency_unreadable|subscription_auth_unavailable|ambiguous_auth|probe_timed_out|invocation_failed)
       return 0
       ;;
     *)
@@ -945,6 +945,7 @@ probe_runner_usability() {
   local probe_timeout_seconds="$LIVE_PROBE_TIMEOUT_SECONDS"
   local probe_schema='{"type":"object","properties":{"ok":{"const":true}},"required":["ok"],"additionalProperties":false}'
   local probe_args=()
+  local dependency_path=""
 
   case "$probe_timeout_seconds" in
     ''|*[!0-9]*|0)
@@ -953,44 +954,40 @@ probe_runner_usability() {
   esac
 
   if ! claude_runtime_check_launcher_dependency "$CLAUDE_TARGET"; then
-    if [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" = "unsupported" ]; then
+    case "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" in
+      unsupported)
+        record_failure \
+          "launcher_dependency_unsupported" \
+          "Claude Code was found, but its launcher uses unsupported shebang interpreter syntax." \
+          "Use a launcher with an absolute interpreter or exact '#!/usr/bin/env NAME' shebang, or install the recommended native Claude with curl -fsSL https://claude.ai/install.sh | bash. Then run /claude-review doctor."
+        ;;
+      unreadable)
+        record_failure \
+          "launcher_dependency_unreadable" \
+          "Claude Code was found, but its launcher or interpreter chain cannot be read safely." \
+          "Make '${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH}' readable to the Codex process, or reinstall native Claude. Then run /claude-review doctor."
+        ;;
+      *)
+        record_failure \
+          "launcher_dependency_missing" \
+          "Claude Code was found, but its launcher interpreter is unavailable from Codex's inherited PATH." \
+          "Make the '${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY}' interpreter available in the environment that launches Codex, or install the recommended native Claude with curl -fsSL https://claude.ai/install.sh | bash. Then run /claude-review doctor."
+        ;;
+    esac
+    return 1
+  fi
+  for dependency_path in "${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATHS[@]+"${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATHS[@]}"}"; do
+    if ! claude_locator_validate_launcher_dependency \
+      "$dependency_path" \
+      "$REPO_ROOT" \
+      "$CLAUDE_INVOCATION_CWD"; then
       record_failure \
-        "launcher_dependency_unsupported" \
-        "Claude Code was found, but its launcher uses unsupported shebang interpreter syntax." \
-        "Use a launcher with an absolute interpreter or exact '#!/usr/bin/env NAME' shebang, or install the recommended native Claude with curl -fsSL https://claude.ai/install.sh | bash. Then run /claude-review doctor."
-    else
-      record_failure \
-        "launcher_dependency_missing" \
-        "Claude Code was found, but its launcher interpreter is unavailable from Codex's inherited PATH." \
-        "Make the '${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY}' interpreter available in the environment that launches Codex, or install the recommended native Claude with curl -fsSL https://claude.ai/install.sh | bash. Then run /claude-review doctor."
+        "launcher_dependency_unsafe" \
+        "Claude Code was found, but its launcher interpreter resolves to an unsafe path." \
+        "Use a trusted '${dependency_path##*/}' interpreter outside repository, invocation-CWD, temp, world-writable file, and world-writable parent boundaries. Rejected interpreter: ${CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_SCOPE}:${CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_STATUS}."
+      return 1
     fi
-    return 1
-  fi
-  if [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" = "available" ] && \
-    [ "$CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH" != "none" ] && \
-    [ "$CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH" != "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" ] && \
-    ! claude_locator_validate_launcher_dependency \
-      "$CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH" \
-      "$REPO_ROOT" \
-      "$CLAUDE_INVOCATION_CWD"; then
-    record_failure \
-      "launcher_dependency_unsafe" \
-      "Claude Code was found, but its launcher interpreter resolves to an unsafe path." \
-      "Use a trusted shebang interpreter outside repository, invocation-CWD, temp, world-writable file, and world-writable parent boundaries. Rejected interpreter: ${CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_SCOPE}:${CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_STATUS}."
-    return 1
-  fi
-  if [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" = "available" ] && \
-    [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" != "none" ] && \
-    ! claude_locator_validate_launcher_dependency \
-      "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" \
-      "$REPO_ROOT" \
-      "$CLAUDE_INVOCATION_CWD"; then
-    record_failure \
-      "launcher_dependency_unsafe" \
-      "Claude Code was found, but its launcher interpreter resolves to an unsafe path." \
-      "Use a trusted '${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY}' interpreter outside repository, invocation-CWD, temp, world-writable file, and world-writable parent boundaries. Rejected interpreter: ${CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_SCOPE}:${CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_STATUS}."
-    return 1
-  fi
+  done
 
   if ! run_candidate_claude "$claude_bin" -v >/dev/null 2>&1; then
     record_failure \

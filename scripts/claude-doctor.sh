@@ -275,11 +275,25 @@ import subprocess
 import sys
 import time
 
+def stop_process(proc, force=False):
+    try:
+        if os.name == "nt":
+            proc.kill() if force else proc.terminate()
+        else:
+            os.killpg(proc.pid, signal.SIGKILL if force else signal.SIGTERM)
+    except OSError:
+        pass
+
 label = sys.argv[1]
 timeout = int(sys.argv[2])
 cmd = sys.argv[3:]
 
 started = time.time()
+process_options = {}
+if os.name == "nt":
+    process_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+else:
+    process_options["start_new_session"] = True
 try:
     proc = subprocess.Popen(
         cmd,
@@ -289,7 +303,7 @@ try:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        start_new_session=True,
+        **process_options,
     )
 except OSError as exc:
     print(f"{label}_status=spawn_failed")
@@ -300,17 +314,11 @@ try:
     out, err = proc.communicate("OK\n", timeout=timeout)
     status = "completed"
 except subprocess.TimeoutExpired:
-    try:
-        os.killpg(proc.pid, signal.SIGTERM)
-    except OSError:
-        pass
+    stop_process(proc)
     try:
         out, err = proc.communicate(timeout=3)
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except OSError:
-            pass
+        stop_process(proc, force=True)
         out, err = proc.communicate()
     status = "timeout"
 
@@ -444,6 +452,7 @@ launcher_dependency="none"
 launcher_dependency_path="none"
 launcher_dependency_trust_scope="none"
 launcher_dependency_trust_reason="none"
+dependency_path=""
 candidate_safe="false"
 
 if [ -n "$candidate_path" ]; then
@@ -459,36 +468,33 @@ if [ -n "$candidate_path" ]; then
     if ! claude_runtime_check_launcher_dependency "$claude_target"; then
       candidate_safe="false"
       launcher_dependency="$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY"
-      if [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" = "unsupported" ]; then
-        path_status="launcher_dependency_unsupported"
-      else
-        path_status="launcher_dependency_missing"
-      fi
-    elif [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" = "available" ] && \
-      [ "$CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH" != "none" ] && \
-      [ "$CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH" != "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" ] && \
-      ! claude_locator_validate_launcher_dependency \
-        "$CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH" \
-        "$REPO_ROOT" \
-        "$INVOCATION_CWD"; then
-      candidate_safe="false"
-      path_status="launcher_dependency_unsafe"
-      launcher_dependency="${CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH##*/}"
-      launcher_dependency_path="${CLAUDE_LOCATOR_DEPENDENCY_LAUNCH_PATH:-$CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH}"
-      launcher_dependency_trust_scope="${CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_SCOPE:-launch}"
-      launcher_dependency_trust_reason="${CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_STATUS:-missing}"
-    elif [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" = "available" ] && \
-      [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" != "none" ] && \
-      ! claude_locator_validate_launcher_dependency \
-        "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" \
-        "$REPO_ROOT" \
-        "$INVOCATION_CWD"; then
-      candidate_safe="false"
-      path_status="launcher_dependency_unsafe"
-      launcher_dependency="$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY"
-      launcher_dependency_path="${CLAUDE_LOCATOR_DEPENDENCY_LAUNCH_PATH:-$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH}"
-      launcher_dependency_trust_scope="${CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_SCOPE:-launch}"
-      launcher_dependency_trust_reason="${CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_STATUS:-missing}"
+      case "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" in
+        unsupported)
+          path_status="launcher_dependency_unsupported"
+          ;;
+        unreadable)
+          path_status="launcher_dependency_unreadable"
+          launcher_dependency_path="$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH"
+          ;;
+        *)
+          path_status="launcher_dependency_missing"
+          ;;
+      esac
+    else
+      for dependency_path in "${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATHS[@]+"${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATHS[@]}"}"; do
+        if ! claude_locator_validate_launcher_dependency \
+          "$dependency_path" \
+          "$REPO_ROOT" \
+          "$INVOCATION_CWD"; then
+          candidate_safe="false"
+          path_status="launcher_dependency_unsafe"
+          launcher_dependency="${dependency_path##*/}"
+          launcher_dependency_path="${CLAUDE_LOCATOR_DEPENDENCY_LAUNCH_PATH:-$dependency_path}"
+          launcher_dependency_trust_scope="${CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_SCOPE:-launch}"
+          launcher_dependency_trust_reason="${CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_STATUS:-missing}"
+          break
+        fi
+      done
     fi
   else
     claude_bin="${CLAUDE_LOCATOR_LAUNCH_PATH:-$candidate_path}"
@@ -553,6 +559,9 @@ if [ "$candidate_safe" != "true" ]; then
       ;;
     launcher_dependency_unsupported)
       print_kv "claude_guidance" "Use an absolute interpreter or exact '#!/usr/bin/env NAME' launcher shebang, or install native Claude with: curl -fsSL https://claude.ai/install.sh | bash"
+      ;;
+    launcher_dependency_unreadable)
+      print_kv "claude_guidance" "Make the selected launcher and every shebang interpreter readable to Codex, or reinstall native Claude."
       ;;
   esac
   exit 0
