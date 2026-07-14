@@ -217,7 +217,8 @@ grep -Fq 'call=-p' "$shim_log" || fail "production runner never reached shim tim
 if grep -Fq 'msys=*' "$shim_log"; then
   fail "production transport leaked its internal MSYS conversion override"
 fi
-grep -Eq '^cwd=/[a-zA-Z]?/?(private/)?tmp/claude-review-runtime-' "$shim_log" || fail "production runner skipped private runtime CWD"
+[ "$(grep '^cwd=' "$shim_log" | sort -u | wc -l | tr -d ' ')" = "1" ] || fail "production runner drifted across runtime CWDs"
+grep -Eq '^cwd=.*/claude-review-runtime-[^/]+$' "$shim_log" || fail "production runner skipped private runtime CWD"
 
 doctor_output="$({
   cd "$ROOT"
