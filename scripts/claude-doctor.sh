@@ -152,6 +152,7 @@ if ! load_required_claude_helper \
   claude_locator_native_path \
   claude_locator_homebrew_paths \
   claude_locator_first_present_fallback \
+  claude_locator_is_dangling_symlink \
   claude_locator_validate_candidate \
   claude_locator_validate_launcher_dependency; then
   print_kv "doctor_status" "bridge_installation_incomplete"
@@ -166,6 +167,7 @@ if ! load_required_claude_helper \
   claude_runtime_check_launcher_dependency \
   claude_runtime_build_command \
   claude_runtime_prepare_python_argv \
+  claude_runtime_resolve_path_dependency \
   claude_runtime_run_direct \
   claude_runtime_scrub_environment; then
   print_kv "doctor_status" "bridge_installation_incomplete"
@@ -465,7 +467,7 @@ if [ -n "$candidate_path" ]; then
     else
       path_status="installed_not_on_path"
     fi
-    if ! claude_runtime_check_launcher_dependency "$claude_target"; then
+    if ! claude_runtime_check_launcher_dependency "$claude_target" "$CLAUDE_RUNTIME_CWD"; then
       candidate_safe="false"
       launcher_dependency="$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY"
       case "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" in

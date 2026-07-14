@@ -79,9 +79,31 @@ claude_runtime_add_dependency_path() {
   CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="${dependency_path##*/}"
 }
 
+claude_runtime_resolve_path_dependency() {
+  local dependency="$1"
+  local execution_cwd="$2"
+  local resolved_dependency=""
+
+  (
+    CDPATH=
+    cd -P -- "$execution_cwd" 2>/dev/null || exit 1
+    resolved_dependency="$(type -P "$dependency" 2>/dev/null || true)"
+    [ -n "$resolved_dependency" ] || exit 0
+    case "$resolved_dependency" in
+      /*)
+        printf '%s' "$resolved_dependency"
+        ;;
+      *)
+        printf '%s/%s' "$PWD" "$resolved_dependency"
+        ;;
+    esac
+  )
+}
+
 claude_runtime_inspect_shebang_path() {
   local current_path="$1"
   local depth="$2"
+  local execution_cwd="$3"
   local first_line=""
   local payload=""
   local interpreter=""
@@ -164,8 +186,8 @@ claude_runtime_inspect_shebang_path() {
           ;;
       esac
       claude_runtime_add_dependency_path "$interpreter"
-      claude_runtime_inspect_shebang_path "$interpreter" "$((depth + 1))" || return 1
-      dependency_path="$(type -P "$dependency" 2>/dev/null || true)"
+      claude_runtime_inspect_shebang_path "$interpreter" "$((depth + 1))" "$execution_cwd" || return 1
+      dependency_path="$(claude_runtime_resolve_path_dependency "$dependency" "$execution_cwd" 2>/dev/null || true)"
       if [ -z "$dependency_path" ]; then
         CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="missing"
         CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="$dependency"
@@ -173,7 +195,7 @@ claude_runtime_inspect_shebang_path() {
         return 1
       fi
       claude_runtime_add_dependency_path "$dependency_path"
-      claude_runtime_inspect_shebang_path "$dependency_path" "$((depth + 1))" || return 1
+      claude_runtime_inspect_shebang_path "$dependency_path" "$((depth + 1))" "$execution_cwd" || return 1
       return 0
       ;;
     /*)
@@ -185,7 +207,7 @@ claude_runtime_inspect_shebang_path() {
         return 1
       fi
       claude_runtime_add_dependency_path "$interpreter"
-      claude_runtime_inspect_shebang_path "$interpreter" "$((depth + 1))" || return 1
+      claude_runtime_inspect_shebang_path "$interpreter" "$((depth + 1))" "$execution_cwd" || return 1
       return 0
       ;;
   esac
@@ -197,6 +219,7 @@ claude_runtime_inspect_shebang_path() {
 
 claude_runtime_check_launcher_dependency() {
   local canonical_target="${1:-}"
+  local execution_cwd="${2:-${PWD:-/}}"
 
   CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unknown"
   CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="none"
@@ -206,7 +229,7 @@ claude_runtime_check_launcher_dependency() {
   CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_COUNT=0
   CLAUDE_RUNTIME_SHEBANG_STACK=()
 
-  claude_runtime_inspect_shebang_path "$canonical_target" 0 || return 1
+  claude_runtime_inspect_shebang_path "$canonical_target" 0 "$execution_cwd" || return 1
   if [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_COUNT" -gt 0 ]; then
     CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="available"
   fi

@@ -479,7 +479,9 @@ selected entry blocks rather than silently switching Claude versions. Within the
 fixed native/Homebrew fallback slots, only a dangling symlink is deferred; a later
 healthy default may run, while doctor reports `stale_fallback_source`,
 `stale_fallback_path`, and `stale_fallback_status=dangling_symlink` with cleanup
-guidance.
+guidance. Deferral requires bounded resolution to prove that the final target is
+absent through an accessible parent. Symlink loops and inaccessible targets are
+not treated as dangling and remain authoritative fail-closed diagnoses.
 
 Every selected launcher is normalized to an absolute path by physically resolving
 its parent, while its final symlink name is preserved for execution. The canonical
@@ -520,7 +522,10 @@ every executable in the resulting chain. An unsafe interpreter reports
 `launcher_dependency_unreadable`. Shebangs other than an absolute interpreter or
 exact `#!/usr/bin/env NAME` form fail closed as
 `launcher_dependency_unsupported` rather than being executed without deterministic
-dependency validation. Expose a trusted interpreter to the environment that
+dependency validation. For `env NAME`, PATH lookup is evaluated from the same
+private runtime directory used for execution, so a relative PATH entry cannot be
+validated against the invocation directory and then select a different executable
+after the runtime changes directory. Expose a trusted interpreter to the environment that
 launches Codex, or migrate to native Claude:
 
 ```bash

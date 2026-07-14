@@ -207,6 +207,30 @@ if claude_locator_validate_candidate "$TEST_ROOT/trusted/bin/dangling" "$ROOT" "
   fail "dangling candidate rejected"
 fi
 assert_eq "dangling_symlink" "$CLAUDE_LOCATOR_VALIDATION_STATUS" "dangling reason"
+
+ln -s "$TEST_ROOT/trusted/bin/loop-b" "$TEST_ROOT/trusted/bin/loop-a"
+ln -s "$TEST_ROOT/trusted/bin/loop-a" "$TEST_ROOT/trusted/bin/loop-b"
+if claude_locator_is_dangling_symlink "$TEST_ROOT/trusted/bin/loop-a"; then
+  fail "symlink loop classified as dangling"
+fi
+if claude_locator_validate_candidate "$TEST_ROOT/trusted/bin/loop-a" "$ROOT" "$TEST_ROOT/work"; then
+  fail "symlink loop accepted"
+fi
+assert_eq "validation_unavailable" "$CLAUDE_LOCATOR_VALIDATION_STATUS" "symlink loop fails closed"
+
+mkdir -p "$TEST_ROOT/inaccessible-target"
+ln -s "$TEST_ROOT/inaccessible-target/claude" "$TEST_ROOT/trusted/bin/inaccessible-link"
+chmod 000 "$TEST_ROOT/inaccessible-target"
+if claude_locator_is_dangling_symlink "$TEST_ROOT/trusted/bin/inaccessible-link"; then
+  chmod 700 "$TEST_ROOT/inaccessible-target"
+  fail "inaccessible symlink target classified as dangling"
+fi
+if claude_locator_validate_candidate "$TEST_ROOT/trusted/bin/inaccessible-link" "$ROOT" "$TEST_ROOT/work"; then
+  chmod 700 "$TEST_ROOT/inaccessible-target"
+  fail "inaccessible symlink target accepted"
+fi
+chmod 700 "$TEST_ROOT/inaccessible-target"
+assert_eq "validation_unavailable" "$CLAUDE_LOCATOR_VALIDATION_STATUS" "inaccessible symlink target fails closed"
 pass "independent trust rejection statuses"
 
 mkdir -p "$TEST_ROOT/physical/inside/trusted/bin"
@@ -397,6 +421,37 @@ assert_eq "$selected_target" "$CLAUDE_LOCATOR_CANONICAL_TARGET" "launcher diagno
 PATH="$saved_path"
 export PATH
 pass "alternate env and resolved interpreters reuse trust validation without clobbering launcher diagnostics"
+
+execution_root="$TEST_ROOT/execution-cwd-dependency"
+execution_invocation="$execution_root/invocation/work"
+execution_runtime="$execution_root/runtime/work"
+execution_launcher="$TEST_ROOT/trusted/bin/execution-cwd-launcher"
+mkdir -p "$execution_invocation" "$execution_root/invocation/bin" "$execution_runtime" "$execution_root/runtime/bin"
+printf '#!/bin/bash\nexit 0\n' > "$execution_root/invocation/bin/runtime-node"
+printf '#!/bin/bash\nexit 0\n' > "$execution_root/runtime/bin/runtime-node"
+printf '#!/usr/bin/env runtime-node\nexit 0\n' > "$execution_launcher"
+chmod 755 "$execution_root/invocation/bin/runtime-node" "$execution_root/runtime/bin/runtime-node" "$execution_launcher"
+saved_path="$PATH"
+(
+  runtime_node_path=""
+  cd "$execution_invocation"
+  PATH="../bin:/usr/bin:/bin"
+  export PATH
+  claude_runtime_check_launcher_dependency "$execution_launcher" "$execution_runtime" || exit 1
+  for dependency_path in "${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATHS[@]}"; do
+    case "$dependency_path" in
+      */runtime-node)
+        runtime_node_path="$dependency_path"
+        ;;
+    esac
+  done
+  [ -n "$runtime_node_path" ] || exit 1
+  claude_locator_validate_launcher_dependency "$runtime_node_path" "$ROOT" "$execution_invocation" || exit 1
+  [ "$CLAUDE_LOCATOR_DEPENDENCY_LAUNCH_PATH" = "$execution_root/runtime/bin/runtime-node" ] || exit 1
+) || fail "env interpreter resolved from runtime execution CWD"
+PATH="$saved_path"
+export PATH
+pass "env shebang PATH lookup matches the private runtime execution CWD"
 
 nested_launcher="$TEST_ROOT/trusted/bin/nested-launcher"
 nested_wrapper="$TEST_ROOT/trusted/bin/nested-node"

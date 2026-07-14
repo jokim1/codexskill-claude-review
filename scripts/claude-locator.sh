@@ -117,7 +117,7 @@ claude_locator_first_present_fallback() {
   if claude_locator_native_path; then
     candidate="$CLAUDE_LOCATOR_CANDIDATE_PATH"
     source="$CLAUDE_LOCATOR_CANDIDATE_SOURCE"
-    if [ -L "$candidate" ] && [ ! -e "$candidate" ]; then
+    if claude_locator_is_dangling_symlink "$candidate"; then
       CLAUDE_LOCATOR_DEFERRED_SOURCE="$source"
       CLAUDE_LOCATOR_DEFERRED_PATH="$candidate"
       CLAUDE_LOCATOR_DEFERRED_STATUS="dangling_symlink"
@@ -132,7 +132,7 @@ claude_locator_first_present_fallback() {
       continue
     fi
     source="homebrew_default"
-    if [ -L "$candidate" ] && [ ! -e "$candidate" ]; then
+    if claude_locator_is_dangling_symlink "$candidate"; then
       if [ "$CLAUDE_LOCATOR_DEFERRED_STATUS" = "none" ]; then
         CLAUDE_LOCATOR_DEFERRED_SOURCE="$source"
         CLAUDE_LOCATOR_DEFERRED_PATH="$candidate"
@@ -312,11 +312,28 @@ claude_locator_canonical_target() {
   parent="${current%/*}"
   [ -n "$parent" ] || parent="/"
   physical_parent="$(CDPATH=; cd -P -- "$parent" 2>/dev/null && pwd -P)" || return 3
+  if [ ! -e "$current" ] && [ ! -L "$current" ]; then
+    [ -r "$physical_parent" ] && [ -x "$physical_parent" ] || return 3
+    return 4
+  fi
   if [ "$physical_parent" = "/" ]; then
     printf '/%s' "$basename_part"
   else
     printf '%s/%s' "$physical_parent" "$basename_part"
   fi
+}
+
+claude_locator_is_dangling_symlink() {
+  local candidate="${1:-}"
+  local canonical_status=0
+
+  [ -L "$candidate" ] || return 1
+  if claude_locator_canonical_target "$candidate" "" "${PWD:-/}" >/dev/null 2>&1; then
+    return 1
+  else
+    canonical_status=$?
+  fi
+  [ "$canonical_status" -eq 4 ]
 }
 
 claude_locator_path_within() {
@@ -438,12 +455,7 @@ claude_locator_validate_candidate() {
   launch_path="$(claude_locator_physical_launch_path "$raw_path" "$invocation_cwd" 2>/dev/null)" || return 1
   CLAUDE_LOCATOR_LAUNCH_PATH="$launch_path"
 
-  if [ -L "$launch_path" ] && [ ! -e "$launch_path" ]; then
-    CLAUDE_LOCATOR_VALIDATION_SCOPE="target"
-    CLAUDE_LOCATOR_VALIDATION_STATUS="dangling_symlink"
-    return 1
-  fi
-  if [ ! -e "$launch_path" ]; then
+  if [ ! -e "$launch_path" ] && [ ! -L "$launch_path" ]; then
     CLAUDE_LOCATOR_VALIDATION_STATUS="missing"
     return 1
   fi
@@ -460,7 +472,7 @@ claude_locator_validate_candidate() {
     canonical_status=$?
     CLAUDE_LOCATOR_VALIDATION_SCOPE="target"
     case "$canonical_status" in
-      3)
+      4)
         CLAUDE_LOCATOR_VALIDATION_STATUS="dangling_symlink"
         ;;
       20)

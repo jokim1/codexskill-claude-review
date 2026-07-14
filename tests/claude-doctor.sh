@@ -105,6 +105,30 @@ run_doctor() {
   )
 }
 
+run_doctor_without_home() {
+  local skill_root="$1"
+  local repo_root="$2"
+  local invocation_cwd="$3"
+  local path_value="$4"
+  local fake_log="$5"
+  shift 5
+
+  (
+    cd "$invocation_cwd"
+    /usr/bin/env -u HOME \
+      PATH="$path_value" \
+      FAKE_CLAUDE_LOG="$fake_log" \
+      PRESERVED_SENTINEL="preserved-value" \
+      /bin/bash "$skill_root/scripts/claude-doctor.sh" \
+        --repo-root "$repo_root" \
+        --skill-root "$skill_root" \
+        --config-file "$repo_root/.codex/claude/config.env" \
+        --probe-timeout 5 \
+        --skip-update-check \
+        "$@"
+  )
+}
+
 copy_fixture_skill() {
   local destination="$1"
   mkdir -p "$destination/scripts"
@@ -134,6 +158,26 @@ import sys
 
 path = Path(sys.argv[1])
 path.write_text(path.read_text().replace(sys.argv[2], sys.argv[3]))
+PY
+}
+
+disable_homebrew_paths() {
+  local skill_root="$1"
+  local replacement="$2"
+
+  python3 - "$skill_root/scripts/claude-locator.sh" "$replacement" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+for original in (
+    "/opt/homebrew/bin/claude",
+    "/usr/local/bin/claude",
+    "/home/linuxbrew/.linuxbrew/bin/claude",
+):
+    text = text.replace(original, sys.argv[2])
+path.write_text(text)
 PY
 }
 
@@ -209,6 +253,23 @@ assert_line "$relative_output" "inherited_home_status=missing_or_non_absolute" "
 assert_line "$relative_output" "claude_discovery=missing" "relative HOME no guessed fallback"
 pass "missing or relative HOME disables only native-user discovery"
 
+unset_home_skill="$TEST_ROOT/unset-home-skill"
+copy_fixture_skill "$unset_home_skill"
+disable_homebrew_paths "$unset_home_skill" "$TEST_ROOT/disabled-homebrew/claude"
+unset_home_output="$(run_doctor_without_home \
+  "$unset_home_skill" \
+  "$REPO_ROOT" \
+  "$REPO_ROOT" \
+  "$SYSTEM_PATH" \
+  "$TEST_ROOT/unset-home.log" \
+  --skip-probes)"
+assert_line "$unset_home_output" "checked_native_path=unavailable" "unset HOME native path"
+assert_line "$unset_home_output" "inherited_home_status=missing_or_non_absolute" "unset HOME status"
+assert_line "$unset_home_output" "claude_discovery=missing" "unset HOME discovery"
+assert_line "$unset_home_output" "doctor_status=ok" "unset HOME structured doctor result"
+[ ! -e "$TEST_ROOT/unset-home.log" ] || fail "unset-HOME doctor executed Claude"
+pass "doctor returns structured diagnostics when HOME is unset"
+
 missing_home="$TEST_ROOT/missing-home"
 mkdir -p "$missing_home"
 no_python_skill="$TEST_ROOT/no-python-skill"
@@ -258,6 +319,27 @@ if patch_homebrew_path "$brew_skill" "$brew_path"; then
   assert_line "$stale_output" "stale_fallback_source=native_user" "stale source"
   assert_line "$stale_output" "stale_fallback_path=$dangling_home/.local/bin/claude" "stale path"
   assert_line "$stale_output" "stale_fallback_status=dangling_symlink" "stale status"
+
+  loop_home="$TEST_ROOT/loop-native-home"
+  mkdir -p "$loop_home/.local/bin"
+  ln -s "$loop_home/.local/bin/claude-loop" "$loop_home/.local/bin/claude"
+  ln -s "$loop_home/.local/bin/claude" "$loop_home/.local/bin/claude-loop"
+  loop_output="$(run_doctor "$brew_skill" "$REPO_ROOT" "$REPO_ROOT" "$loop_home" "$SYSTEM_PATH" "$TEST_ROOT/loop-native.log" --skip-probes)"
+  assert_line "$loop_output" "claude_discovery=native_user" "symlink loop remains authoritative"
+  assert_line "$loop_output" "claude_path_status=unsafe_candidate" "symlink loop fails closed"
+  assert_line "$loop_output" "claude_trust_reason=validation_unavailable" "symlink loop is not dangling"
+  assert_line "$loop_output" "stale_fallback_status=none" "symlink loop not deferred"
+
+  inaccessible_home="$TEST_ROOT/inaccessible-native-home"
+  mkdir -p "$inaccessible_home/.local/bin" "$inaccessible_home/blocked"
+  ln -s "$inaccessible_home/blocked/claude" "$inaccessible_home/.local/bin/claude"
+  chmod 000 "$inaccessible_home/blocked"
+  inaccessible_output="$(run_doctor "$brew_skill" "$REPO_ROOT" "$REPO_ROOT" "$inaccessible_home" "$SYSTEM_PATH" "$TEST_ROOT/inaccessible-native.log" --skip-probes)"
+  chmod 700 "$inaccessible_home/blocked"
+  assert_line "$inaccessible_output" "claude_discovery=native_user" "inaccessible native remains authoritative"
+  assert_line "$inaccessible_output" "claude_path_status=unsafe_candidate" "inaccessible target fails closed"
+  assert_line "$inaccessible_output" "claude_trust_reason=validation_unavailable" "inaccessible target is not dangling"
+  assert_line "$inaccessible_output" "stale_fallback_status=none" "inaccessible target not deferred"
 
   invalid_home="$TEST_ROOT/invalid-home"
   write_fake_claude "$invalid_home/.local/bin/claude"

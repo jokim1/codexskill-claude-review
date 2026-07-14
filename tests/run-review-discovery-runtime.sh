@@ -139,6 +139,30 @@ run_runner() {
   )
 }
 
+run_runner_without_home() {
+  local skill_root="$1"
+  local repo_root="$2"
+  local invocation_cwd="$3"
+  local path_value="$4"
+  local fake_log="$5"
+
+  (
+    cd "$invocation_cwd"
+    /usr/bin/env -u HOME \
+      PATH="$path_value" \
+      FAKE_CLAUDE_LOG="$fake_log" \
+      PRESERVED_SENTINEL="runner-preserved" \
+      /bin/bash "$skill_root/scripts/run-review.sh" \
+        --mode code \
+        --artifact-file "$ARTIFACT_ROOT/claude-review-artifact.txt" \
+        --base-prompt "$skill_root/prompts/code-review.base.md" \
+        --schema-file "$skill_root/schemas/review-output.json" \
+        --repo-root "$repo_root" \
+        --branch test \
+        --base-branch main
+  )
+}
+
 copy_fixture_skill() {
   local destination="$1"
   mkdir -p "$destination/scripts" "$destination/prompts" "$destination/schemas"
@@ -168,6 +192,26 @@ import sys
 
 path = Path(sys.argv[1])
 path.write_text(path.read_text().replace(sys.argv[2], sys.argv[3]))
+PY
+}
+
+disable_homebrew_paths() {
+  local skill_root="$1"
+  local replacement="$2"
+
+  python3 - "$skill_root/scripts/claude-locator.sh" "$replacement" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+for original in (
+    "/opt/homebrew/bin/claude",
+    "/usr/local/bin/claude",
+    "/home/linuxbrew/.linuxbrew/bin/claude",
+):
+    text = text.replace(original, sys.argv[2])
+path.write_text(text)
 PY
 }
 
@@ -207,6 +251,29 @@ relative_output="$(run_runner "$REPO_ROOT" "$REPO_ROOT" "$relative_work" "$nativ
 assert_json_status "$relative_output" clean ok
 grep -Fq "executable=$relative_bin/claude" "$relative_log" || fail "relative PATH launch was not normalized to absolute"
 pass "runner physically normalizes relative PATH before isolated CWD execution"
+
+relative_dependency_home="$TEST_ROOT/relative-dependency-home"
+relative_dependency_work="$TEST_ROOT/relative-dependency/work"
+relative_dependency_tools="$TEST_ROOT/relative-dependency/runtime-node-tools-$PPID"
+relative_dependency_log="$TEST_ROOT/relative-dependency.log"
+mkdir -p "$relative_dependency_home/.local/bin" "$relative_dependency_work" "$relative_dependency_tools"
+printf '#!/usr/bin/env runtime-node\nexit 0\n' > "$relative_dependency_home/.local/bin/claude"
+cat > "$relative_dependency_tools/runtime-node" <<'SH'
+#!/bin/bash
+printf 'unexpected execution\n' > "${FAKE_CLAUDE_LOG:?}"
+exec /bin/bash "$@"
+SH
+chmod 755 "$relative_dependency_home/.local/bin/claude" "$relative_dependency_tools/runtime-node"
+relative_dependency_output="$(run_runner \
+  "$REPO_ROOT" \
+  "$REPO_ROOT" \
+  "$relative_dependency_work" \
+  "$relative_dependency_home" \
+  "../${relative_dependency_tools##*/}:$SYSTEM_PATH" \
+  "$relative_dependency_log")"
+assert_json_status "$relative_dependency_output" blocked "launcher interpreter is unavailable from Codex's inherited PATH"
+[ ! -e "$relative_dependency_log" ] || fail "relative interpreter resolved from invocation CWD instead of runtime CWD"
+pass "runner resolves env shebang dependencies from the private runtime CWD"
 
 # A stale non-resolvable PATH entry blocks fixed fallbacks, while type -P still
 # selects a later executable under normal Bash semantics.
@@ -248,6 +315,20 @@ assert_json_status "$missing_output" blocked "not found in PATH or any checked o
 assert_doctor_offer "$missing_output" true
 pass "runner missing diagnosis includes the exact doctor opt-in once"
 
+unset_home_skill="$TEST_ROOT/unset-home-skill"
+copy_fixture_skill "$unset_home_skill"
+disable_homebrew_paths "$unset_home_skill" "$TEST_ROOT/disabled-homebrew/claude"
+unset_home_output="$(run_runner_without_home \
+  "$unset_home_skill" \
+  "$REPO_ROOT" \
+  "$REPO_ROOT" \
+  "$SYSTEM_PATH" \
+  "$TEST_ROOT/unset-home.log")"
+assert_json_status "$unset_home_output" blocked "not found in PATH or any checked official/default install location"
+assert_doctor_offer "$unset_home_output" true
+[ ! -e "$TEST_ROOT/unset-home.log" ] || fail "unset-HOME case executed Claude"
+pass "runner returns structured recovery when HOME is unset"
+
 # Homebrew discovery, native precedence, and dangling-only deferral.
 brew_skill="$TEST_ROOT/brew-skill"
 brew_path="$TEST_ROOT/default brew=prefix/bin/claude"
@@ -268,6 +349,25 @@ if patch_homebrew_path "$brew_skill" "$brew_path"; then
   dangling_output="$(run_runner "$brew_skill" "$REPO_ROOT" "$REPO_ROOT" "$dangling_home" "$SYSTEM_PATH" "$dangling_log")"
   assert_json_status "$dangling_output" clean ok
   grep -Fq "executable=$brew_path" "$dangling_log" || fail "dangling native did not defer"
+
+  loop_home="$TEST_ROOT/loop-native-home"
+  loop_log="$TEST_ROOT/loop-native.log"
+  mkdir -p "$loop_home/.local/bin"
+  ln -s "$loop_home/.local/bin/claude-loop" "$loop_home/.local/bin/claude"
+  ln -s "$loop_home/.local/bin/claude" "$loop_home/.local/bin/claude-loop"
+  loop_output="$(run_runner "$brew_skill" "$REPO_ROOT" "$REPO_ROOT" "$loop_home" "$SYSTEM_PATH" "$loop_log")"
+  assert_json_status "$loop_output" blocked "unsafe path" "target:validation_unavailable"
+  [ ! -e "$loop_log" ] || fail "symlink loop deferred to Homebrew"
+
+  inaccessible_home="$TEST_ROOT/inaccessible-native-home"
+  inaccessible_log="$TEST_ROOT/inaccessible-native.log"
+  mkdir -p "$inaccessible_home/.local/bin" "$inaccessible_home/blocked"
+  ln -s "$inaccessible_home/blocked/claude" "$inaccessible_home/.local/bin/claude"
+  chmod 000 "$inaccessible_home/blocked"
+  inaccessible_output="$(run_runner "$brew_skill" "$REPO_ROOT" "$REPO_ROOT" "$inaccessible_home" "$SYSTEM_PATH" "$inaccessible_log")"
+  chmod 700 "$inaccessible_home/blocked"
+  assert_json_status "$inaccessible_output" blocked "unsafe path" "target:validation_unavailable"
+  [ ! -e "$inaccessible_log" ] || fail "inaccessible symlink target deferred to Homebrew"
 
   invalid_home="$TEST_ROOT/invalid-native-home"
   write_success_claude "$invalid_home/.local/bin/claude"

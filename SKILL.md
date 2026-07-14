@@ -683,6 +683,10 @@ an absolute interpreter or exact `#!/usr/bin/env NAME` launcher rather than tryi
 to interpret or bypass unsupported `env -S` syntax in the rendering layer.
 Treat `claude_path_status=launcher_dependency_unreadable` as fail-closed; repair
 read access to the reported launcher/interpreter chain or reinstall native Claude.
+Treat symlink loops and inaccessible targets as fail-closed
+`validation_unavailable` results, not dangling fallbacks. Only a bounded resolution
+that proves an absent final target may be reported as `dangling_symlink` and defer
+to a later fixed fallback.
 Do not replace it with a hand-written `claude -p` probe.
 
 ### `/claude-review update`

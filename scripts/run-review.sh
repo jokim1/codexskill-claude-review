@@ -47,12 +47,18 @@ REVIEW_RETRY_TIMEOUT_SECONDS=""
 REVIEW_TIMEOUT_ATTEMPTS="0"
 REVIEW_TIMEOUT_ATTEMPT_SECONDS=""
 LIVE_PROBE_TIMEOUT_SECONDS="${LIVE_PROBE_TIMEOUT_SECONDS:-30}"
-CLAUDE_HOME_ERE="$(printf '%s' "$HOME" | sed 's/[][(){}.^$*+?|\\]/\\&/g')"
+CLAUDE_HOME_ERE=""
 CLAUDE_CONFIG_DIR_ERE=""
+if [ -n "${HOME:-}" ]; then
+  CLAUDE_HOME_ERE="$(printf '%s' "$HOME" | sed 's/[][(){}.^$*+?|\\]/\\&/g')"
+fi
 if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
   CLAUDE_CONFIG_DIR_ERE="$(printf '%s' "$CLAUDE_CONFIG_DIR" | sed 's/[][(){}.^$*+?|\\]/\\&/g')"
 fi
-CLAUDE_STATE_PATH_PATTERN="oauth_refresh\\.lock|${CLAUDE_HOME_ERE}/\\.claude|~/\\.claude|CLAUDE_CONFIG_DIR"
+CLAUDE_STATE_PATH_PATTERN="oauth_refresh\\.lock|~/\\.claude|CLAUDE_CONFIG_DIR"
+if [ -n "$CLAUDE_HOME_ERE" ]; then
+  CLAUDE_STATE_PATH_PATTERN="${CLAUDE_STATE_PATH_PATTERN}|${CLAUDE_HOME_ERE}/\\.claude"
+fi
 if [ -n "$CLAUDE_CONFIG_DIR_ERE" ]; then
   CLAUDE_STATE_PATH_PATTERN="${CLAUDE_STATE_PATH_PATTERN}|${CLAUDE_CONFIG_DIR_ERE}"
 fi
@@ -271,6 +277,7 @@ if ! load_required_claude_helper \
   claude_locator_native_path \
   claude_locator_homebrew_paths \
   claude_locator_first_present_fallback \
+  claude_locator_is_dangling_symlink \
   claude_locator_validate_candidate \
   claude_locator_validate_launcher_dependency; then
   emit_bridge_installation_incomplete "claude-locator.sh"
@@ -283,6 +290,7 @@ if ! load_required_claude_helper \
   claude_runtime_check_launcher_dependency \
   claude_runtime_build_command \
   claude_runtime_prepare_python_argv \
+  claude_runtime_resolve_path_dependency \
   claude_runtime_run_direct \
   claude_runtime_scrub_environment; then
   emit_bridge_installation_incomplete "claude-runtime.sh"
@@ -386,7 +394,11 @@ append_prompt_allowed() {
   local prompt="$1"
   local inferred_repo_root=""
 
-  path_within "$prompt" "$HOME/.codex/claude" && return 0
+  case "${HOME:-}" in
+    /*)
+      path_within "$prompt" "$HOME/.codex/claude" && return 0
+      ;;
+  esac
   if [ -n "$REPO_ROOT" ] && path_within "$prompt" "$REPO_ROOT/.codex/claude"; then
     return 0
   fi
@@ -398,9 +410,15 @@ append_prompt_allowed() {
 }
 
 trusted_review_bridge_guidance() {
-  local installed_run_review="$HOME/.codex/skills/claude-review/scripts/run-review.sh"
+  local installed_run_review=""
 
-  if [ -e "$installed_run_review" ]; then
+  case "${HOME:-}" in
+    /*)
+      installed_run_review="$HOME/.codex/skills/claude-review/scripts/run-review.sh"
+      ;;
+  esac
+
+  if [ -n "$installed_run_review" ] && [ -e "$installed_run_review" ]; then
     printf 'If this review bridge is running inside the Codex filesystem sandbox, run it outside that sandbox or approve this exact trusted installed-skill command prefix: ["bash", "%s"]. Do not approve repo-local worktree copies or broad prefixes such as ["bash"]. If it still fails outside the sandbox, check ownership and permissions for ~/.claude or CLAUDE_CONFIG_DIR.' "$installed_run_review"
     return 0
   fi
@@ -953,7 +971,7 @@ probe_runner_usability() {
       ;;
   esac
 
-  if ! claude_runtime_check_launcher_dependency "$CLAUDE_TARGET"; then
+  if ! claude_runtime_check_launcher_dependency "$CLAUDE_TARGET" "$CLAUDE_RUNTIME_CWD"; then
     case "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" in
       unsupported)
         record_failure \
