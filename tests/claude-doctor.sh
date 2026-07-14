@@ -269,6 +269,28 @@ assert_line "$report_only_output" "update_check=skipped" "report-only update sta
 [ ! -e "$doctor_update_marker" ] || fail "doctor default executed the mutating update helper"
 pass "doctor skips update mutation by default"
 
+redirected_skill_root="$TEST_ROOT/redirected-skill-root"
+redirected_helper_marker="$TEST_ROOT/redirected-helper-ran"
+mkdir -p "$redirected_skill_root/scripts"
+cat > "$redirected_skill_root/scripts/claude-config.sh" <<SH
+printf ran > "$redirected_helper_marker"
+# claude-review-helper-complete: config_v1
+SH
+set +e
+redirected_skill_output="$(
+  BASH_ENV= ENV= /bin/bash --noprofile --norc -p "$REPO_ROOT/scripts/claude-doctor.sh" \
+    --repo-root "$REPO_ROOT" \
+    --skill-root "$redirected_skill_root" \
+    --config-file "$REPO_ROOT/.codex/claude/config.env" \
+    --skip-probes 2>&1
+)"
+redirected_skill_status=$?
+set -e
+[ "$redirected_skill_status" -eq 2 ] || fail "doctor accepted a redirected helper root"
+assert_contains "$redirected_skill_output" "cannot redirect doctor helper execution" "redirected helper root guidance"
+[ ! -e "$redirected_helper_marker" ] || fail "doctor sourced a helper from the redirected root"
+pass "doctor pins sourced helpers to its canonical installed root"
+
 git_diagnostic_skill="$TEST_ROOT/git-diagnostic-skill"
 git_fsmonitor_hook="$TEST_ROOT/git-fsmonitor-hook"
 git_fsmonitor_marker="$TEST_ROOT/git-fsmonitor-ran"

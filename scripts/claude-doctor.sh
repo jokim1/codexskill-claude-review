@@ -312,8 +312,9 @@ unset BASH_ENV ENV
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SKILL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+SCRIPT_DIR="$(builtin cd -P -- "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SKILL_ROOT="$(builtin cd -P -- "$SCRIPT_DIR/.." && pwd -P)"
+CANONICAL_SKILL_ROOT="$SKILL_ROOT"
 INVOCATION_CWD="$(pwd -P)"
 REPO_ROOT="$INVOCATION_CWD"
 CONFIG_FILE=""
@@ -356,11 +357,15 @@ while [ "$#" -gt 0 ]; do
       shift 2
       ;;
     --skill-root)
-      SKILL_ROOT="$(normalize_path "${2:-}")"
-      SCRIPT_DIR="$SKILL_ROOT/scripts"
-      LOCATOR_HELPER="$SCRIPT_DIR/claude-locator.sh"
-      RUNTIME_HELPER="$SCRIPT_DIR/claude-runtime.sh"
-      CONFIG_HELPER="$SCRIPT_DIR/claude-config.sh"
+      requested_skill_root="$(normalize_path "${2:-}")"
+      requested_skill_root="$(builtin cd -P -- "$requested_skill_root" 2>/dev/null && pwd -P)" || {
+        printf '%s\n' 'The --skill-root value must identify the physical root containing this claude-doctor.sh.' >&2
+        exit 2
+      }
+      if [ "$requested_skill_root" != "$CANONICAL_SKILL_ROOT" ]; then
+        printf '%s\n' 'The --skill-root value cannot redirect doctor helper execution away from the running installed skill.' >&2
+        exit 2
+      fi
       shift 2
       ;;
     --config-file)

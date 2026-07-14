@@ -700,6 +700,9 @@ BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/claude-d
   --config-file <repo>/.codex/claude/config.env
 ```
 
+`--skill-root` must physically match the root containing the invoked doctor. It is
+an assertion only and must never redirect config, locator, or runtime helper loading.
+
 Render the command output directly. Use this command to diagnose stale skill
 checkouts, stale Codex thread routing, missing safe-mode runner flags, Claude CLI
 discovery/trust/runtime/auth/config problems and inherited environment. Doctor
