@@ -122,6 +122,30 @@ if data.get("summary") != expected_summary:
 PY
 }
 
+assert_doctor_offer_state() {
+  local case_name="$1"
+  local output="$2"
+  local expected="$3"
+
+  CASE_NAME="$case_name" OUTPUT_JSON="$output" EXPECTED_OFFER="$expected" python3 - <<'PY'
+import json
+import os
+import sys
+
+data = json.loads(os.environ["OUTPUT_JSON"])
+question = "\n".join(data.get("open_questions", []))
+offer = "Run /claude-review doctor now?\nReply Y to run diagnostics, or N to stop."
+count = question.count(offer)
+expected = os.environ["EXPECTED_OFFER"] == "true"
+if expected and count != 1:
+    print(f"{os.environ['CASE_NAME']}: expected one doctor offer, got {count}", file=sys.stderr)
+    sys.exit(1)
+if not expected and count:
+    print(f"{os.environ['CASE_NAME']}: unexpected doctor offer", file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
 run_case() {
   local case_name="$1"
   local probe_output="$2"
@@ -133,6 +157,7 @@ run_case() {
   local reject_summary="${8:-}"
   local claude_config_dir="${9:-}"
   local shell_path="${10:-/bin/bash}"
+  local expected_doctor_offer="${11:-}"
   local fake_root tmpdir output
 
   fake_root="$(make_fake_claude_root)"
@@ -201,6 +226,9 @@ EOF
   if ! assert_blocked_result "$case_name" "$output" "$expect_summary" "$expect_question" "$reject_summary"; then
     rm -rf "$fake_root" "$tmpdir"
     fail "$case_name assertion failed"
+  fi
+  if [ -n "$expected_doctor_offer" ]; then
+    assert_doctor_offer_state "$case_name" "$output" "$expected_doctor_offer"
   fi
 
   rm -rf "$fake_root" "$tmpdir"
@@ -436,6 +464,7 @@ run_artifact_boundary_case() {
     rm -rf "$tmpdir"
     fail "artifact boundary assertion failed"
   fi
+  assert_doctor_offer_state "artifact boundary" "$output" "false"
 
   rm -rf "$tmpdir"
   printf 'ok: artifact boundary\n'
@@ -469,6 +498,7 @@ run_config_boundary_case() {
     rm -rf "$tmpdir"
     fail "config boundary assertion failed"
   fi
+  assert_doctor_offer_state "config boundary" "$output" "false"
 
   rm -rf "$tmpdir"
   printf 'ok: config boundary\n'
@@ -652,6 +682,7 @@ EOF
     rm -rf "$fake_root" "$tmpdir"
     fail "probe timeout assertion failed"
   fi
+  assert_doctor_offer_state "probe timeout" "$output" "true"
 
   rm -rf "$fake_root" "$tmpdir"
   printf 'ok: probe timeout\n'
@@ -796,7 +827,11 @@ run_case \
   "" \
   0 \
   "$sandbox_summary" \
-  "oauth_refresh.lock"
+  "oauth_refresh.lock" \
+  "" \
+  "" \
+  "" \
+  "false"
 
 run_case \
   "probe claude dir EACCES" \
@@ -824,7 +859,10 @@ run_case \
   0 \
   "Claude Code was found" \
   "" \
-  "$sandbox_summary"
+  "$sandbox_summary" \
+  "" \
+  "" \
+  "true"
 
 run_case \
   "probe repo local claude permission error" \
@@ -867,7 +905,49 @@ run_case \
   0 \
   "Claude Code was found" \
   "" \
-  "$sandbox_summary"
+  "$sandbox_summary" \
+  "" \
+  "" \
+  "true"
+
+run_case \
+  "probe budget remains direct remediation" \
+  "$(make_error_result "Error: reached maximum budget")" \
+  0 \
+  "" \
+  0 \
+  "preflight hit the CLI budget cap" \
+  "Increase LIVE_PROBE_BUDGET_USD" \
+  "" \
+  "" \
+  "" \
+  "false"
+
+run_case \
+  "probe subscription auth offers doctor" \
+  "$(make_error_result "Error: not logged in; run auth login")" \
+  0 \
+  "" \
+  0 \
+  "subscription auth is unavailable" \
+  "claude auth login --claudeai" \
+  "" \
+  "" \
+  "" \
+  "true"
+
+run_case \
+  "generic invocation offers doctor" \
+  '{"ok":true}' \
+  0 \
+  "unclassified runtime child failure" \
+  9 \
+  "invocation failed" \
+  "Inspect the Claude CLI output" \
+  "" \
+  "" \
+  "" \
+  "true"
 
 run_case \
   "runtime claude dir EPERM" \
@@ -877,7 +957,10 @@ run_case \
   0 \
   "$sandbox_summary" \
   "oauth_refresh.lock" \
-  "$generic_runtime_summary"
+  "$generic_runtime_summary" \
+  "" \
+  "" \
+  "false"
 
 run_artifact_boundary_case
 run_config_boundary_case
@@ -885,4 +968,5 @@ run_unsafe_claude_candidate_case
 run_timeout_wrapper_closes_stdin_case
 run_probe_timeout_case
 run_safe_mode_args_case
+bash "$REPO_ROOT/tests/run-review-discovery-runtime.sh"
 rm -f "$evil_shell"

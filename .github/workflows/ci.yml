@@ -23,6 +23,9 @@ jobs:
       - name: Doctor tests
         run: bash tests/claude-doctor.sh
 
+      - name: Locator and runtime contract tests
+        run: bash tests/claude-locator-runtime.sh
+
       - name: Runner classification tests
         run: bash tests/run-review-sandbox-classification.sh
 
@@ -34,3 +37,18 @@ jobs:
 
       - name: Router guard docs test
         run: bash tests/claude-router-guard-docs.sh
+
+      - name: Install completeness test
+        run: bash tests/install-completeness.sh
+
+  windows-transport:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Windows Git Bash transport
+        run: bash tests/windows-transport.sh

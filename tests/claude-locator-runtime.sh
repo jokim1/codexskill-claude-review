@@ -1,0 +1,487 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOCATOR="$ROOT/scripts/claude-locator.sh"
+RUNTIME="$ROOT/scripts/claude-runtime.sh"
+TEST_ROOT="$(mktemp -d "$HOME/.claude-review-helper-test-XXXXXX")"
+trap 'chmod -R u+w "$TEST_ROOT" 2>/dev/null || true; rm -rf "$TEST_ROOT"' EXIT
+
+fail() {
+  echo "not ok: $1" >&2
+  exit 1
+}
+
+pass() {
+  echo "ok: $1"
+}
+
+assert_eq() {
+  local expected="$1"
+  local actual="$2"
+  local label="$3"
+  [ "$actual" = "$expected" ] || fail "$label (expected=$expected actual=$actual)"
+}
+
+# shellcheck source=/dev/null
+source "$LOCATOR"
+# shellcheck source=/dev/null
+source "$RUNTIME"
+
+for supported in darwin23 linux-gnu linux-musl; do
+  claude_locator_native_supported "$supported" || fail "native predicate accepts $supported"
+done
+for unsupported in msys mingw64_nt cygwin unknown ""; do
+  if claude_locator_native_supported "$unsupported"; then
+    fail "native predicate rejects $unsupported"
+  fi
+done
+pass "bounded native platform predicate"
+
+claude_locator_homebrew_paths darwin23 x86_64-apple-darwin
+assert_eq "2" "${#CLAUDE_LOCATOR_HOMEBREW_PATHS[@]}" "darwin Homebrew path count"
+assert_eq "/opt/homebrew/bin/claude" "${CLAUDE_LOCATOR_HOMEBREW_PATHS[0]}" "darwin arm prefix first"
+assert_eq "/usr/local/bin/claude" "${CLAUDE_LOCATOR_HOMEBREW_PATHS[1]}" "darwin intel prefix second"
+claude_locator_homebrew_paths darwin23 arm64-apple-darwin
+assert_eq "/opt/homebrew/bin/claude" "${CLAUDE_LOCATOR_HOMEBREW_PATHS[0]}" "darwin mapping ignores process architecture"
+claude_locator_homebrew_paths linux-gnu x86_64-pc-linux-gnu
+assert_eq "/home/linuxbrew/.linuxbrew/bin/claude" "${CLAUDE_LOCATOR_HOMEBREW_PATHS[0]}" "linux x86_64 prefix"
+claude_locator_homebrew_paths linux-gnu aarch64-unknown-linux-gnu
+assert_eq "0" "${#CLAUDE_LOCATOR_HOMEBREW_PATHS[@]}" "linux arm excluded"
+pass "documented Homebrew mapping"
+
+mkdir -p "$TEST_ROOT/trusted/bin" "$TEST_ROOT/work"
+cat > "$TEST_ROOT/trusted/bin/claude" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+chmod 755 "$TEST_ROOT/trusted/bin/claude"
+
+portable_store="$TEST_ROOT/nix-store"
+portable_tools="$portable_store/coreutils-test/bin"
+mkdir -p "$portable_tools"
+real_stat="$(type -P stat)"
+real_readlink="$(type -P readlink)"
+{
+  printf '#!/bin/bash\n'
+  printf 'exec %q "$@"\n' "$real_stat"
+} > "$portable_tools/stat"
+{
+  printf '#!/bin/bash\n'
+  printf 'exec %q "$@"\n' "$real_readlink"
+} > "$portable_tools/readlink"
+chmod 555 "$portable_tools/stat" "$portable_tools/readlink"
+chmod 555 "$portable_tools" "$portable_store/coreutils-test" "$portable_store"
+(
+  PATH="$portable_tools"
+  export PATH
+  resolved_stat="$(claude_locator_resolve_trusted_utility stat "$portable_store" "$TEST_ROOT/missing/stat")"
+  resolved_readlink="$(claude_locator_resolve_trusted_utility readlink "$portable_store" "$TEST_ROOT/missing/readlink")"
+  [ "$resolved_stat" = "$portable_tools/stat" ] || exit 1
+  [ "$resolved_readlink" = "$portable_tools/readlink" ] || exit 1
+) || fail "trusted immutable-store utility fallback"
+(
+  claude_locator_resolve_trusted_utility() {
+    case "${1:-}" in
+      stat)
+        printf '%s' "$portable_tools/stat"
+        ;;
+      readlink)
+        printf '%s' "$portable_tools/readlink"
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  }
+  claude_locator_validate_candidate "$TEST_ROOT/trusted/bin/claude" "$ROOT" "$TEST_ROOT/work" || exit 1
+) || fail "candidate validation with non-FHS trusted utilities"
+(
+  claude_locator_resolve_trusted_utility() { return 1; }
+  if claude_locator_validate_candidate "$TEST_ROOT/trusted/bin/claude" "$ROOT" "$TEST_ROOT/work"; then
+    exit 1
+  fi
+  [ "$CLAUDE_LOCATOR_VALIDATION_SCOPE" = "launch" ] || exit 1
+  [ "$CLAUDE_LOCATOR_VALIDATION_STATUS" = "validation_unavailable" ] || exit 1
+) || fail "missing trust utility fails closed without false world-writable diagnosis"
+pass "trusted utility portability preserves fail-closed validation"
+
+(
+  cd "$TEST_ROOT/work"
+  PATH="../trusted/bin:/usr/bin:/bin"
+  export PATH
+  claude_locator_path_candidate "$PWD" || exit 1
+  [ "$CLAUDE_LOCATOR_CANDIDATE_SOURCE" = "path" ] || exit 1
+  claude_locator_validate_candidate "$CLAUDE_LOCATOR_CANDIDATE_PATH" "$ROOT" "$PWD" || exit 1
+  [ "$CLAUDE_LOCATOR_LAUNCH_PATH" = "$TEST_ROOT/trusted/bin/claude" ] || exit 1
+) || fail "relative PATH candidate normalization"
+pass "relative PATH candidate physically normalizes before runtime CWD changes"
+
+mkdir -p "$TEST_ROOT/path-first" "$TEST_ROOT/path-later"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$TEST_ROOT/path-first/claude"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$TEST_ROOT/path-later/claude"
+chmod 644 "$TEST_ROOT/path-first/claude"
+chmod 755 "$TEST_ROOT/path-later/claude"
+(
+  cd "$TEST_ROOT/work"
+  PATH="$TEST_ROOT/path-first:$TEST_ROOT/path-later:/usr/bin:/bin"
+  export PATH
+  claude_locator_path_candidate "$PWD" || exit 1
+  [ "$CLAUDE_LOCATOR_CANDIDATE_PATH" = "$TEST_ROOT/path-later/claude" ] || exit 1
+) || fail "type -P later executable precedence"
+(
+  cd "$TEST_ROOT/work"
+  PATH="$TEST_ROOT/path-first:/usr/bin:/bin"
+  export PATH
+  claude_locator_path_candidate "$PWD" || exit 1
+  [ "$CLAUDE_LOCATOR_CANDIDATE_PATH" = "$TEST_ROOT/path-first/claude" ] || exit 1
+  if claude_locator_validate_candidate "$CLAUDE_LOCATOR_CANDIDATE_PATH" "$ROOT" "$PWD"; then
+    exit 1
+  fi
+  [ "$CLAUDE_LOCATOR_VALIDATION_STATUS" = "not_executable" ] || exit 1
+) || fail "diagnostic PATH scan classification"
+pass "PATH executable resolution and stale-entry scan precedence"
+
+(
+  function claude() { return 0; }
+  alias claude='printf alias'
+  PATH="/usr/bin:/bin"
+  export PATH
+  if claude_locator_path_candidate "$TEST_ROOT/work"; then
+    exit 1
+  fi
+) || fail "function and alias ignored"
+pass "type -P ignores functions and aliases"
+
+ln -s "$TEST_ROOT/trusted/bin/claude" "$TEST_ROOT/trusted/bin/claude-link"
+if ! claude_locator_validate_candidate "$TEST_ROOT/trusted/bin/claude-link" "$ROOT" "$TEST_ROOT/work"; then
+  fail "safe symlink validation"
+fi
+assert_eq "$TEST_ROOT/trusted/bin/claude-link" "$CLAUDE_LOCATOR_LAUNCH_PATH" "launch symlink retained"
+assert_eq "$TEST_ROOT/trusted/bin/claude" "$CLAUDE_LOCATOR_CANONICAL_TARGET" "canonical target separated"
+pass "launch identity and canonical trust identity remain separate"
+
+mkdir -p "$TEST_ROOT/intermediate-world"
+chmod 777 "$TEST_ROOT/intermediate-world"
+ln -s "$TEST_ROOT/trusted/bin/claude" "$TEST_ROOT/intermediate-world/claude-hop"
+ln -s "$TEST_ROOT/intermediate-world/claude-hop" "$TEST_ROOT/trusted/bin/claude-chain"
+if claude_locator_validate_candidate "$TEST_ROOT/trusted/bin/claude-chain" "$ROOT" "$TEST_ROOT/work"; then
+  fail "world-writable intermediate symlink hop rejected"
+fi
+assert_eq "target" "$CLAUDE_LOCATOR_VALIDATION_SCOPE" "intermediate symlink scope"
+assert_eq "world_writable_parent" "$CLAUDE_LOCATOR_VALIDATION_STATUS" "intermediate symlink reason"
+pass "every intermediate symlink hop receives boundary validation"
+
+mkdir -p "$TEST_ROOT/invocation/bin"
+cp "$TEST_ROOT/trusted/bin/claude" "$TEST_ROOT/invocation/bin/claude"
+if claude_locator_validate_candidate "$TEST_ROOT/invocation/bin/claude" "$ROOT" "$TEST_ROOT/invocation"; then
+  fail "invocation CWD candidate rejected"
+fi
+assert_eq "invocation_cwd_path" "$CLAUDE_LOCATOR_VALIDATION_STATUS" "invocation CWD reason"
+
+mkdir -p "$TEST_ROOT/world-writable/bin"
+cp "$TEST_ROOT/trusted/bin/claude" "$TEST_ROOT/world-writable/bin/claude"
+chmod 777 "$TEST_ROOT/world-writable"
+if claude_locator_validate_candidate "$TEST_ROOT/world-writable/bin/claude" "$ROOT" "$TEST_ROOT/work"; then
+  fail "world-writable candidate rejected"
+fi
+assert_eq "world_writable_parent" "$CLAUDE_LOCATOR_VALIDATION_STATUS" "world-writable reason"
+
+mkdir -p "$TEST_ROOT/not-regular/claude"
+if claude_locator_validate_candidate "$TEST_ROOT/not-regular/claude" "$ROOT" "$TEST_ROOT/work"; then
+  fail "non-regular candidate rejected"
+fi
+assert_eq "not_regular" "$CLAUDE_LOCATOR_VALIDATION_STATUS" "not-regular reason"
+
+ln -s "$TEST_ROOT/missing-target" "$TEST_ROOT/trusted/bin/dangling"
+if claude_locator_validate_candidate "$TEST_ROOT/trusted/bin/dangling" "$ROOT" "$TEST_ROOT/work"; then
+  fail "dangling candidate rejected"
+fi
+assert_eq "dangling_symlink" "$CLAUDE_LOCATOR_VALIDATION_STATUS" "dangling reason"
+pass "independent trust rejection statuses"
+
+mkdir -p "$TEST_ROOT/physical/inside/trusted/bin"
+cp "$TEST_ROOT/trusted/bin/claude" "$TEST_ROOT/physical/inside/trusted/bin/claude"
+ln -s "$TEST_ROOT/physical/inside/child" "$TEST_ROOT/physical-link"
+mkdir -p "$TEST_ROOT/physical/inside/child"
+if ! claude_locator_validate_candidate "$TEST_ROOT/physical-link/../trusted/bin/claude" "$ROOT" "$TEST_ROOT/work"; then
+  fail "intermediate symlink physical normalization"
+fi
+assert_eq "$TEST_ROOT/physical/inside/trusted/bin/claude" "$CLAUDE_LOCATOR_LAUNCH_PATH" "physical normalization result"
+pass "dot segments follow intermediate symlink filesystem semantics"
+
+claude_runtime_build_command "$TEST_ROOT/trusted/bin/claude" --version
+assert_eq "$TEST_ROOT/trusted/bin/claude" "${CLAUDE_RUNTIME_COMMAND[0]}" "runtime exact launch path is argv zero"
+assert_eq "--version" "${CLAUDE_RUNTIME_COMMAND[1]}" "runtime version argv"
+case " ${CLAUDE_RUNTIME_COMMAND[*]} " in
+  *" --tools "*|*" --strict-mcp-config "*) fail "builder injected prompt flags" ;;
+esac
+claude_runtime_build_command "$TEST_ROOT/trusted/bin/claude" auth status
+assert_eq "auth" "${CLAUDE_RUNTIME_COMMAND[1]}" "runtime auth argv one"
+assert_eq "status" "${CLAUDE_RUNTIME_COMMAND[2]}" "runtime auth argv two"
+pass "runtime builder is transport-only"
+
+ENV_LOG="$TEST_ROOT/env.log"
+ARGV_LOG="$TEST_ROOT/argv.log"
+CWD_LOG="$TEST_ROOT/cwd.log"
+cat > "$TEST_ROOT/trusted/bin/claude-env" <<'SH'
+#!/usr/bin/env bash
+printf '%s' "$PATH" > "$ENV_LOG.path"
+for name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV; do
+  if [ -n "${!name+x}" ]; then printf '%s=present\n' "$name" >> "$ENV_LOG"; else printf '%s=absent\n' "$name" >> "$ENV_LOG"; fi
+done
+printf '%s' "${PRESERVED_SENTINEL:-}" >> "$ENV_LOG"
+printf '\nHOME=%s\n' "${HOME:-}" >> "$ENV_LOG"
+printf 'TMPDIR=%s\n' "${TMPDIR:-}" >> "$ENV_LOG"
+printf 'LC_ALL=%s\n' "${LC_ALL:-}" >> "$ENV_LOG"
+printf 'HTTPS_PROXY=%s\n' "${HTTPS_PROXY:-}" >> "$ENV_LOG"
+printf 'NO_PROXY=%s\n' "${NO_PROXY:-}" >> "$ENV_LOG"
+printf 'NODE_EXTRA_CA_CERTS=%s\n' "${NODE_EXTRA_CA_CERTS:-}" >> "$ENV_LOG"
+printf '%s\n' "$@" > "$ARGV_LOG"
+pwd -P > "$CWD_LOG"
+SH
+chmod 755 "$TEST_ROOT/trusted/bin/claude-env"
+export ENV_LOG ARGV_LOG CWD_LOG
+export ANTHROPIC_API_KEY=a ANTHROPIC_AUTH_TOKEN=b ANTHROPIC_BEARER_TOKEN=c
+export ANTHROPIC_CONSOLE_API_KEY=d ANTHROPIC_CONSOLE_AUTH_TOKEN=e
+export BASH_ENV="$TEST_ROOT/no-bash-env" ENV="$TEST_ROOT/no-env" PRESERVED_SENTINEL="preserved"
+original_path="$PATH"
+(
+  HOME="$TEST_ROOT/runtime-home"
+  TMPDIR="$TEST_ROOT/runtime-tmp"
+  LC_ALL=C
+  HTTPS_PROXY="https://runtime-proxy"
+  NO_PROXY="runtime-no-proxy"
+  NODE_EXTRA_CA_CERTS="$TEST_ROOT/runtime-ca"
+  export HOME TMPDIR LC_ALL HTTPS_PROXY NO_PROXY NODE_EXTRA_CA_CERTS
+  claude_runtime_run_direct "$TEST_ROOT/work" "$TEST_ROOT/trusted/bin/claude-env" "space arg" "" "equals=value"
+)
+assert_eq "$original_path" "$(cat "$ENV_LOG.path")" "PATH preserved byte-for-byte"
+assert_eq "$TEST_ROOT/work" "$(cat "$CWD_LOG")" "isolated runtime CWD"
+grep -q '^ANTHROPIC_API_KEY=absent$' "$ENV_LOG" || fail "API key scrubbed"
+grep -q '^BASH_ENV=absent$' "$ENV_LOG" || fail "BASH_ENV scrubbed"
+grep -q '^ENV=absent$' "$ENV_LOG" || fail "ENV scrubbed"
+grep -q 'preserved$' "$ENV_LOG" || fail "unrelated env preserved"
+grep -Fq "HOME=$TEST_ROOT/runtime-home" "$ENV_LOG" || fail "HOME preserved"
+grep -Fq "TMPDIR=$TEST_ROOT/runtime-tmp" "$ENV_LOG" || fail "TMPDIR preserved"
+grep -Fq 'LC_ALL=C' "$ENV_LOG" || fail "locale preserved"
+grep -Fq 'HTTPS_PROXY=https://runtime-proxy' "$ENV_LOG" || fail "proxy preserved"
+grep -Fq 'NO_PROXY=runtime-no-proxy' "$ENV_LOG" || fail "NO_PROXY preserved"
+grep -Fq "NODE_EXTRA_CA_CERTS=$TEST_ROOT/runtime-ca" "$ENV_LOG" || fail "custom CA preserved"
+[ "$(sed -n '1p' "$ARGV_LOG")" = "space arg" ] || fail "space argv preserved"
+[ "$(sed -n '2p' "$ARGV_LOG")" = "" ] || fail "empty argv preserved"
+[ "$(sed -n '3p' "$ARGV_LOG")" = "equals=value" ] || fail "equals argv preserved"
+pass "direct runtime preserves PATH/argv/env and scrubs only pinned variables"
+
+cat > "$TEST_ROOT/trusted/bin/missing-env-interpreter" <<'SH'
+#!/usr/bin/env definitely-missing-claude-interpreter
+SH
+chmod 755 "$TEST_ROOT/trusted/bin/missing-env-interpreter"
+if claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/missing-env-interpreter"; then
+  fail "missing env interpreter classified"
+fi
+assert_eq "missing" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "missing env status"
+assert_eq "definitely-missing-claude-interpreter" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY" "safe env dependency"
+
+cat > "$TEST_ROOT/trusted/bin/missing-absolute-interpreter" <<'SH'
+#!/definitely/missing/claude-interpreter
+SH
+chmod 755 "$TEST_ROOT/trusted/bin/missing-absolute-interpreter"
+if claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/missing-absolute-interpreter"; then
+  fail "missing absolute interpreter classified"
+fi
+assert_eq "claude-interpreter" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY" "safe absolute dependency basename"
+
+cat > "$TEST_ROOT/trusted/bin/unsupported-env-s" <<'SH'
+#!/usr/bin/env -S missing --flag
+SH
+chmod 755 "$TEST_ROOT/trusted/bin/unsupported-env-s"
+claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/unsupported-env-s" || fail "env -S remains unknown"
+assert_eq "unknown" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "env -S not classified"
+claude_runtime_check_launcher_dependency /bin/echo || fail "native candidate remains unknown"
+assert_eq "unknown" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "native not classified from exit behavior"
+pass "launcher dependency classification is bounded to recognized shebangs"
+
+cat > "$TEST_ROOT/trusted/bin/malformed-shebang" <<'SH'
+#!
+exit 127
+SH
+chmod 755 "$TEST_ROOT/trusted/bin/malformed-shebang"
+claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/malformed-shebang" || fail "malformed shebang remains unknown"
+assert_eq "unknown" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "malformed shebang classification"
+cat > "$TEST_ROOT/trusted/bin/env-extra" <<'SH'
+#!/usr/bin/env missing-name extra
+exit 127
+SH
+chmod 755 "$TEST_ROOT/trusted/bin/env-extra"
+claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/env-extra" || fail "env with extra args remains unknown"
+assert_eq "unknown" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "env extra classification"
+cat > "$TEST_ROOT/trusted/bin/existing-interpreter-exit" <<'SH'
+#!/bin/bash
+exit 127
+SH
+chmod 755 "$TEST_ROOT/trusted/bin/existing-interpreter-exit"
+claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/existing-interpreter-exit" || fail "existing interpreter available"
+assert_eq "available" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "exit code never drives dependency classification"
+pass "unsupported and exit-code-only dependency cases remain unclassified"
+
+# A BASH_ENV/ENV set in an already-running shell must not reach or initialize the
+# candidate interpreter.
+cat > "$TEST_ROOT/bash-env-sentinel.sh" <<SH
+printf loaded > "$TEST_ROOT/bash-env-loaded"
+SH
+cat > "$TEST_ROOT/env-sentinel.sh" <<SH
+printf loaded > "$TEST_ROOT/env-loaded"
+SH
+cat > "$TEST_ROOT/trusted/bin/startup-check" <<'SH'
+#!/bin/bash
+exit 0
+SH
+chmod 755 "$TEST_ROOT/trusted/bin/startup-check"
+export BASH_ENV="$TEST_ROOT/bash-env-sentinel.sh"
+export ENV="$TEST_ROOT/env-sentinel.sh"
+claude_runtime_run_direct "$TEST_ROOT/work" "$TEST_ROOT/trusted/bin/startup-check"
+[ ! -e "$TEST_ROOT/bash-env-loaded" ] || fail "candidate sourced BASH_ENV"
+[ ! -e "$TEST_ROOT/env-loaded" ] || fail "candidate sourced ENV"
+unset BASH_ENV ENV
+pass "already-running Bash startup variables are scrubbed before candidate execution"
+
+# Permanent projected parity with the retained compatibility helper.
+parity_candidate="$TEST_ROOT/trusted/bin/parity-candidate"
+cat > "$parity_candidate" <<'SH'
+#!/bin/bash
+printf 'argv-count=%s\n' "$#" > "$PARITY_OUT.argv"
+for arg in "$@"; do printf 'arg=[%s]\n' "$arg" >> "$PARITY_OUT.argv"; done
+for name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV HOME PATH TMPDIR CLAUDE_CONFIG_DIR HTTPS_PROXY PRESERVED_SENTINEL; do
+  if /usr/bin/env | /usr/bin/grep -q "^${name}="; then
+    value="$(/usr/bin/env | /usr/bin/grep "^${name}=" | /usr/bin/sed -n '1s/^[^=]*=//p')"
+    printf '%s=present:%s\n' "$name" "$value" >> "$PARITY_OUT.env"
+  else
+    printf '%s=absent\n' "$name" >> "$PARITY_OUT.env"
+  fi
+done
+pwd -P > "$PARITY_OUT.cwd"
+SH
+chmod 755 "$parity_candidate"
+parity_old="$TEST_ROOT/parity-old"
+parity_new="$TEST_ROOT/parity-new"
+mkdir -p "$parity_old" "$parity_new"
+parity_path="$PATH"
+(
+  cd "$parity_old"
+  PARITY_OUT="$parity_old/result" \
+  ANTHROPIC_API_KEY=a ANTHROPIC_AUTH_TOKEN=b ANTHROPIC_BEARER_TOKEN=c \
+  ANTHROPIC_CONSOLE_API_KEY=d ANTHROPIC_CONSOLE_AUTH_TOKEN=e \
+  BASH_ENV="$TEST_ROOT/nonexistent-bash-env" ENV="$TEST_ROOT/nonexistent-env" \
+  TMPDIR="$TEST_ROOT/parity-tmp" CLAUDE_CONFIG_DIR="$TEST_ROOT/parity-config" \
+  HTTPS_PROXY="https://parity-proxy" PRESERVED_SENTINEL="same" \
+  "$ROOT/scripts/claude-subscription-env.sh" "$parity_candidate" "space arg" "" "equals=value"
+)
+(
+  export PARITY_OUT="$parity_new/result"
+  export ANTHROPIC_API_KEY=a ANTHROPIC_AUTH_TOKEN=b ANTHROPIC_BEARER_TOKEN=c
+  export ANTHROPIC_CONSOLE_API_KEY=d ANTHROPIC_CONSOLE_AUTH_TOKEN=e
+  export BASH_ENV="$TEST_ROOT/nonexistent-bash-env" ENV="$TEST_ROOT/nonexistent-env"
+  export TMPDIR="$TEST_ROOT/parity-tmp" CLAUDE_CONFIG_DIR="$TEST_ROOT/parity-config"
+  export HTTPS_PROXY="https://parity-proxy" PRESERVED_SENTINEL="same"
+  claude_runtime_run_direct "$parity_new" "$parity_candidate" "space arg" "" "equals=value"
+)
+cmp "$parity_old/result.argv" "$parity_new/result.argv" >/dev/null || fail "legacy/runtime argv parity"
+for name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN HOME PATH TMPDIR CLAUDE_CONFIG_DIR HTTPS_PROXY PRESERVED_SENTINEL; do
+  old_line="$(grep "^${name}=" "$parity_old/result.env")"
+  new_line="$(grep "^${name}=" "$parity_new/result.env")"
+  assert_eq "$old_line" "$new_line" "projected parity $name"
+done
+grep -q '^BASH_ENV=present:' "$parity_old/result.env" || fail "legacy helper should preserve BASH_ENV"
+grep -q '^ENV=present:' "$parity_old/result.env" || fail "legacy helper should preserve ENV"
+grep -q '^BASH_ENV=absent$' "$parity_new/result.env" || fail "new runtime removes BASH_ENV"
+grep -q '^ENV=absent$' "$parity_new/result.env" || fail "new runtime removes ENV"
+assert_eq "$parity_old" "$(cat "$parity_old/result.cwd")" "legacy helper CWD"
+assert_eq "$parity_new" "$(cat "$parity_new/result.cwd")" "new isolated CWD"
+assert_eq "$parity_path" "$PATH" "test shell PATH unchanged"
+pass "retained helper and new runtime projected parity"
+
+# Descendant tools receive exactly the inherited PATH; profiles are never a
+# hidden retry source.
+descendant_tools="$TEST_ROOT/descendant-tools"
+mkdir -p "$descendant_tools"
+cat > "$descendant_tools/fake-runtime-tool" <<SH
+#!/bin/bash
+printf ran > "$TEST_ROOT/descendant-ran"
+SH
+chmod 755 "$descendant_tools/fake-runtime-tool"
+cat > "$TEST_ROOT/trusted/bin/descendant-claude" <<'SH'
+#!/bin/bash
+fake-runtime-tool
+SH
+chmod 755 "$TEST_ROOT/trusted/bin/descendant-claude"
+(
+  PATH="$descendant_tools:$PATH"
+  export PATH
+  claude_runtime_run_direct "$TEST_ROOT/work" "$TEST_ROOT/trusted/bin/descendant-claude"
+)
+[ -e "$TEST_ROOT/descendant-ran" ] || fail "inherited descendant helper did not run"
+rm -f "$TEST_ROOT/descendant-ran"
+cat > "$TEST_ROOT/profile-only.sh" <<SH
+export PATH="$descendant_tools:\$PATH"
+printf loaded > "$TEST_ROOT/descendant-profile-loaded"
+SH
+set +e
+(
+  PATH="/usr/bin:/bin"
+  BASH_ENV="$TEST_ROOT/profile-only.sh"
+  export PATH BASH_ENV
+  claude_runtime_run_direct "$TEST_ROOT/work" "$TEST_ROOT/trusted/bin/descendant-claude"
+) >/dev/null 2>&1
+descendant_status=$?
+set -e
+[ "$descendant_status" -ne 0 ] || fail "profile-only descendant helper unexpectedly ran"
+[ ! -e "$TEST_ROOT/descendant-ran" ] || fail "profile-only descendant helper marker exists"
+[ ! -e "$TEST_ROOT/descendant-profile-loaded" ] || fail "runtime loaded descendant profile"
+pass "descendant tools obey unchanged inherited PATH without profile retry"
+
+# Bounded source-purity checks: no output, hang, CWD/env mutation, or writes.
+python3 - "$LOCATOR" "$RUNTIME" "$TEST_ROOT/source-purity" <<'PY'
+from pathlib import Path
+import os
+import subprocess
+import sys
+
+helpers = sys.argv[1:3]
+cwd = Path(sys.argv[3])
+cwd.mkdir()
+before_files = sorted(str(p.relative_to(cwd)) for p in cwd.rglob("*"))
+for helper in helpers:
+    env = os.environ.copy()
+    env.pop("BASH_ENV", None)
+    env.pop("ENV", None)
+    env["PURITY_SENTINEL"] = "unchanged"
+    code = r'''
+before_pwd="$PWD"
+before_env="$(/usr/bin/env | /usr/bin/sort)"
+source "$1"
+after_env="$(/usr/bin/env | /usr/bin/sort)"
+[ "$PWD" = "$before_pwd" ] || exit 21
+[ "$before_env" = "$after_env" ] || exit 22
+printf 'purity-ok\n'
+'''
+    proc = subprocess.run(
+        ["/bin/bash", "--noprofile", "--norc", "-c", code, "bash", helper],
+        cwd=cwd,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=3,
+        shell=False,
+    )
+    if proc.returncode != 0 or proc.stdout != "purity-ok\n" or proc.stderr:
+        raise SystemExit(f"source purity failed for {helper}: rc={proc.returncode} out={proc.stdout!r} err={proc.stderr!r}")
+after_files = sorted(str(p.relative_to(cwd)) for p in cwd.rglob("*"))
+if before_files != after_files:
+    raise SystemExit(f"helper source wrote files: before={before_files!r} after={after_files!r}")
+PY
+pass "bounded helper source purity"
+
+assert_eq "direct_inherited_path_v1" "$CLAUDE_RUNTIME_CONTRACT" "runtime contract label"
+pass "shared helper contracts"

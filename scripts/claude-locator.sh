@@ -1,0 +1,484 @@
+#!/usr/bin/env bash
+
+# Shared Claude launcher discovery and trust validation. This file must remain
+# source-pure: definitions and readonly contract constants only.
+
+readonly CLAUDE_LOCATOR_CONTRACT="bounded_path_native_homebrew_v1"
+readonly CLAUDE_LOCATOR_TRUSTED_STORE_ROOT="/nix/store"
+
+claude_locator_native_supported() {
+  case "${1:-}" in
+    darwin*|linux*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+claude_locator_homebrew_paths() {
+  local os_type="${1:-}"
+  local machine_type="${2:-}"
+
+  CLAUDE_LOCATOR_HOMEBREW_PATHS=()
+  case "$os_type" in
+    darwin*)
+      CLAUDE_LOCATOR_HOMEBREW_PATHS=(
+        "/opt/homebrew/bin/claude"
+        "/usr/local/bin/claude"
+      )
+      ;;
+    linux*)
+      case "$machine_type" in
+        x86_64-*)
+          CLAUDE_LOCATOR_HOMEBREW_PATHS=(
+            "/home/linuxbrew/.linuxbrew/bin/claude"
+          )
+          ;;
+      esac
+      ;;
+  esac
+}
+
+claude_locator_path_candidate() {
+  local invocation_cwd="${1:-$PWD}"
+  local resolved=""
+  local remaining=""
+  local entry=""
+  local candidate=""
+
+  CLAUDE_LOCATOR_CANDIDATE_PATH=""
+  CLAUDE_LOCATOR_CANDIDATE_SOURCE="missing"
+
+  resolved="$(type -P claude 2>/dev/null || true)"
+  if [ -n "$resolved" ]; then
+    CLAUDE_LOCATOR_CANDIDATE_PATH="$resolved"
+    CLAUDE_LOCATOR_CANDIDATE_SOURCE="path"
+    return 0
+  fi
+
+  remaining="${PATH-}:"
+  while [ -n "$remaining" ]; do
+    entry="${remaining%%:*}"
+    remaining="${remaining#*:}"
+    if [ -z "$entry" ]; then
+      entry="$invocation_cwd"
+    fi
+    case "$entry" in
+      /*)
+        candidate="$entry/claude"
+        ;;
+      *)
+        candidate="$invocation_cwd/$entry/claude"
+        ;;
+    esac
+    if [ -e "$candidate" ] || [ -L "$candidate" ]; then
+      CLAUDE_LOCATOR_CANDIDATE_PATH="$candidate"
+      CLAUDE_LOCATOR_CANDIDATE_SOURCE="path"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+claude_locator_native_path() {
+  CLAUDE_LOCATOR_CANDIDATE_PATH=""
+  CLAUDE_LOCATOR_CANDIDATE_SOURCE="missing"
+
+  claude_locator_native_supported "${OSTYPE:-}" || return 1
+  case "${HOME:-}" in
+    /*)
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  if [ -e "$HOME/.local/bin/claude" ] || [ -L "$HOME/.local/bin/claude" ]; then
+    CLAUDE_LOCATOR_CANDIDATE_PATH="$HOME/.local/bin/claude"
+    CLAUDE_LOCATOR_CANDIDATE_SOURCE="native_user"
+    return 0
+  fi
+  return 1
+}
+
+claude_locator_first_present_fallback() {
+  local candidate=""
+  local source=""
+
+  CLAUDE_LOCATOR_CANDIDATE_PATH=""
+  CLAUDE_LOCATOR_CANDIDATE_SOURCE="missing"
+  CLAUDE_LOCATOR_DEFERRED_SOURCE="none"
+  CLAUDE_LOCATOR_DEFERRED_PATH="none"
+  CLAUDE_LOCATOR_DEFERRED_STATUS="none"
+
+  if claude_locator_native_path; then
+    candidate="$CLAUDE_LOCATOR_CANDIDATE_PATH"
+    source="$CLAUDE_LOCATOR_CANDIDATE_SOURCE"
+    if [ -L "$candidate" ] && [ ! -e "$candidate" ]; then
+      CLAUDE_LOCATOR_DEFERRED_SOURCE="$source"
+      CLAUDE_LOCATOR_DEFERRED_PATH="$candidate"
+      CLAUDE_LOCATOR_DEFERRED_STATUS="dangling_symlink"
+    else
+      return 0
+    fi
+  fi
+
+  claude_locator_homebrew_paths "${OSTYPE:-}" "${MACHTYPE:-}"
+  for candidate in "${CLAUDE_LOCATOR_HOMEBREW_PATHS[@]}"; do
+    if [ ! -e "$candidate" ] && [ ! -L "$candidate" ]; then
+      continue
+    fi
+    source="homebrew_default"
+    if [ -L "$candidate" ] && [ ! -e "$candidate" ]; then
+      if [ "$CLAUDE_LOCATOR_DEFERRED_STATUS" = "none" ]; then
+        CLAUDE_LOCATOR_DEFERRED_SOURCE="$source"
+        CLAUDE_LOCATOR_DEFERRED_PATH="$candidate"
+        CLAUDE_LOCATOR_DEFERRED_STATUS="dangling_symlink"
+      fi
+      continue
+    fi
+    CLAUDE_LOCATOR_CANDIDATE_PATH="$candidate"
+    CLAUDE_LOCATOR_CANDIDATE_SOURCE="$source"
+    return 0
+  done
+
+  if [ "$CLAUDE_LOCATOR_DEFERRED_STATUS" = "dangling_symlink" ]; then
+    CLAUDE_LOCATOR_CANDIDATE_PATH="$CLAUDE_LOCATOR_DEFERRED_PATH"
+    CLAUDE_LOCATOR_CANDIDATE_SOURCE="$CLAUDE_LOCATOR_DEFERRED_SOURCE"
+    CLAUDE_LOCATOR_DEFERRED_SOURCE="none"
+    CLAUDE_LOCATOR_DEFERRED_PATH="none"
+    CLAUDE_LOCATOR_DEFERRED_STATUS="none"
+    return 0
+  fi
+
+  CLAUDE_LOCATOR_CANDIDATE_PATH=""
+  CLAUDE_LOCATOR_CANDIDATE_SOURCE="missing"
+  return 1
+}
+
+claude_locator_physical_launch_path() {
+  local raw_path="$1"
+  local invocation_cwd="$2"
+  local joined=""
+  local parent=""
+  local basename_part=""
+  local physical_parent=""
+
+  case "$raw_path" in
+    /*)
+      joined="$raw_path"
+      ;;
+    *)
+      joined="$invocation_cwd/$raw_path"
+      ;;
+  esac
+
+  basename_part="${joined##*/}"
+  parent="${joined%/*}"
+  [ -n "$parent" ] || parent="/"
+  physical_parent="$(CDPATH=; cd -P -- "$parent" 2>/dev/null && pwd -P)" || return 1
+  if [ "$physical_parent" = "/" ]; then
+    printf '/%s' "$basename_part"
+  else
+    printf '%s/%s' "$physical_parent" "$basename_part"
+  fi
+}
+
+claude_locator_resolve_trusted_utility() {
+  local utility="${1:-}"
+  local trusted_store_root="$CLAUDE_LOCATOR_TRUSTED_STORE_ROOT"
+  local candidate=""
+  local physical_candidate=""
+  local physical_store_root=""
+  local store_parent=""
+
+  [ -n "$utility" ] || return 1
+  shift
+  if [ "$#" -gt 0 ]; then
+    trusted_store_root="$1"
+    shift
+  fi
+  if [ "$#" -eq 0 ]; then
+    set -- "/usr/bin/$utility" "/bin/$utility"
+  fi
+
+  for candidate in "$@"; do
+    physical_candidate="$(claude_locator_physical_launch_path "$candidate" "${PWD:-/}" 2>/dev/null || true)"
+    if [ -n "$physical_candidate" ] && [ -f "$physical_candidate" ] && [ -x "$physical_candidate" ] && [ ! -L "$physical_candidate" ]; then
+      printf '%s' "$physical_candidate"
+      return 0
+    fi
+  done
+
+  candidate="$(type -P "$utility" 2>/dev/null || true)"
+  [ -n "$candidate" ] || return 1
+  physical_candidate="$(claude_locator_physical_launch_path "$candidate" "${PWD:-/}" 2>/dev/null || true)"
+  [ -n "$physical_candidate" ] || return 1
+  [ -f "$physical_candidate" ] && [ -x "$physical_candidate" ] && [ ! -L "$physical_candidate" ] || return 1
+
+  physical_store_root="$(claude_locator_physical_launch_path "$trusted_store_root/.claude-review-store-root" "/" 2>/dev/null || true)"
+  physical_store_root="${physical_store_root%/.claude-review-store-root}"
+  [ -n "$physical_store_root" ] || return 1
+  case "$physical_candidate" in
+    "$physical_store_root"/*)
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+  [ ! -w "$physical_candidate" ] || return 1
+  store_parent="${physical_candidate%/*}"
+  while :; do
+    [ ! -w "$store_parent" ] || return 1
+    [ "$store_parent" = "$physical_store_root" ] && break
+    case "$store_parent" in
+      "$physical_store_root"/*)
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+    store_parent="${store_parent%/*}"
+    [ -n "$store_parent" ] || return 1
+  done
+  printf '%s' "$physical_candidate"
+  return 0
+}
+
+claude_locator_canonical_target() {
+  local current="$1"
+  local repo_root="${2:-}"
+  local invocation_cwd="${3:-}"
+  local link_target=""
+  local readlink_bin=""
+  local parent=""
+  local physical_parent=""
+  local basename_part=""
+  local depth=0
+
+  while [ -L "$current" ]; do
+    depth=$((depth + 1))
+    [ "$depth" -le 40 ] || return 2
+    if [ -z "$readlink_bin" ]; then
+      readlink_bin="$(claude_locator_resolve_trusted_utility readlink 2>/dev/null)" || return 2
+    fi
+    link_target="$("$readlink_bin" "$current" 2>/dev/null)" || return 2
+    case "$link_target" in
+      /*)
+        current="$link_target"
+        ;;
+      *)
+        current="${current%/*}/$link_target"
+        ;;
+    esac
+    basename_part="${current##*/}"
+    parent="${current%/*}"
+    [ -n "$parent" ] || parent="/"
+    physical_parent="$(CDPATH=; cd -P -- "$parent" 2>/dev/null && pwd -P)" || return 3
+    if [ "$physical_parent" = "/" ]; then
+      current="/$basename_part"
+    else
+      current="$physical_parent/$basename_part"
+    fi
+
+    if [ -L "$current" ] && ! claude_locator_boundary_status "$current" "$repo_root" "$invocation_cwd"; then
+      case "$CLAUDE_LOCATOR_BOUNDARY_STATUS" in
+        temporary_path)
+          return 20
+          ;;
+        repository_path)
+          return 21
+          ;;
+        invocation_cwd_path)
+          return 22
+          ;;
+        world_writable_parent)
+          return 23
+          ;;
+        validation_unavailable)
+          return 24
+          ;;
+        *)
+          return 2
+          ;;
+      esac
+    fi
+  done
+
+  basename_part="${current##*/}"
+  parent="${current%/*}"
+  [ -n "$parent" ] || parent="/"
+  physical_parent="$(CDPATH=; cd -P -- "$parent" 2>/dev/null && pwd -P)" || return 3
+  if [ "$physical_parent" = "/" ]; then
+    printf '/%s' "$basename_part"
+  else
+    printf '%s/%s' "$physical_parent" "$basename_part"
+  fi
+}
+
+claude_locator_path_within() {
+  local path="$1"
+  local boundary="$2"
+  local boundary_physical=""
+
+  [ -n "$boundary" ] || return 1
+  boundary_physical="$(claude_locator_physical_launch_path "$boundary/.claude-review-boundary" "/" 2>/dev/null)" || return 1
+  boundary_physical="${boundary_physical%/.claude-review-boundary}"
+  case "$path" in
+    "$boundary_physical"|"$boundary_physical"/*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+claude_locator_parent_world_writable() {
+  local path="$1"
+  local parent="${path%/*}"
+  local stat_bin=""
+  local mode=""
+  local last_digit=""
+
+  [ -n "$parent" ] || parent="/"
+  stat_bin="$(claude_locator_resolve_trusted_utility stat 2>/dev/null)" || return 2
+  while :; do
+    mode="$("$stat_bin" -f '%Lp' "$parent" 2>/dev/null || "$stat_bin" -c '%a' "$parent" 2>/dev/null || true)"
+    case "$mode" in
+      ''|*[!0-7]*)
+        return 2
+        ;;
+    esac
+    last_digit="${mode#${mode%?}}"
+    case "$last_digit" in
+      2|3|6|7)
+        return 0
+        ;;
+    esac
+    [ "$parent" = "/" ] && break
+    parent="${parent%/*}"
+    [ -n "$parent" ] || parent="/"
+  done
+  return 1
+}
+
+claude_locator_boundary_status() {
+  local path="$1"
+  local repo_root="$2"
+  local invocation_cwd="$3"
+  local writable_status=0
+
+  if claude_locator_path_within "$path" "/tmp" || claude_locator_path_within "$path" "/private/tmp"; then
+    CLAUDE_LOCATOR_BOUNDARY_STATUS="temporary_path"
+    return 1
+  fi
+  if [ -n "$repo_root" ] && claude_locator_path_within "$path" "$repo_root"; then
+    CLAUDE_LOCATOR_BOUNDARY_STATUS="repository_path"
+    return 1
+  fi
+  if [ -n "$invocation_cwd" ] && claude_locator_path_within "$path" "$invocation_cwd"; then
+    CLAUDE_LOCATOR_BOUNDARY_STATUS="invocation_cwd_path"
+    return 1
+  fi
+  if claude_locator_parent_world_writable "$path"; then
+    CLAUDE_LOCATOR_BOUNDARY_STATUS="world_writable_parent"
+    return 1
+  else
+    writable_status=$?
+    if [ "$writable_status" -eq 2 ]; then
+      CLAUDE_LOCATOR_BOUNDARY_STATUS="validation_unavailable"
+      return 1
+    fi
+  fi
+  CLAUDE_LOCATOR_BOUNDARY_STATUS="safe"
+  return 0
+}
+
+claude_locator_validate_candidate() {
+  local raw_path="${1:-}"
+  local repo_root="${2:-}"
+  local invocation_cwd="${3:-}"
+  local launch_path=""
+  local canonical_target=""
+  local canonical_status=0
+
+  CLAUDE_LOCATOR_LAUNCH_PATH=""
+  CLAUDE_LOCATOR_CANONICAL_TARGET=""
+  CLAUDE_LOCATOR_VALIDATION_SCOPE="launch"
+  CLAUDE_LOCATOR_VALIDATION_STATUS="missing"
+
+  [ -n "$raw_path" ] || return 1
+  launch_path="$(claude_locator_physical_launch_path "$raw_path" "$invocation_cwd" 2>/dev/null)" || return 1
+  CLAUDE_LOCATOR_LAUNCH_PATH="$launch_path"
+
+  if [ -L "$launch_path" ] && [ ! -e "$launch_path" ]; then
+    CLAUDE_LOCATOR_VALIDATION_SCOPE="target"
+    CLAUDE_LOCATOR_VALIDATION_STATUS="dangling_symlink"
+    return 1
+  fi
+  if [ ! -e "$launch_path" ]; then
+    CLAUDE_LOCATOR_VALIDATION_STATUS="missing"
+    return 1
+  fi
+
+  if ! claude_locator_boundary_status "$launch_path" "$repo_root" "$invocation_cwd"; then
+    CLAUDE_LOCATOR_VALIDATION_SCOPE="launch"
+    CLAUDE_LOCATOR_VALIDATION_STATUS="$CLAUDE_LOCATOR_BOUNDARY_STATUS"
+    return 1
+  fi
+
+  if canonical_target="$(claude_locator_canonical_target "$launch_path" "$repo_root" "$invocation_cwd" 2>/dev/null)"; then
+    :
+  else
+    canonical_status=$?
+    CLAUDE_LOCATOR_VALIDATION_SCOPE="target"
+    case "$canonical_status" in
+      3)
+        CLAUDE_LOCATOR_VALIDATION_STATUS="dangling_symlink"
+        ;;
+      20)
+        CLAUDE_LOCATOR_VALIDATION_STATUS="temporary_path"
+        ;;
+      21)
+        CLAUDE_LOCATOR_VALIDATION_STATUS="repository_path"
+        ;;
+      22)
+        CLAUDE_LOCATOR_VALIDATION_STATUS="invocation_cwd_path"
+        ;;
+      23)
+        CLAUDE_LOCATOR_VALIDATION_STATUS="world_writable_parent"
+        ;;
+      24|*)
+        CLAUDE_LOCATOR_VALIDATION_STATUS="validation_unavailable"
+        ;;
+    esac
+    return 1
+  fi
+  CLAUDE_LOCATOR_CANONICAL_TARGET="$canonical_target"
+
+  if [ ! -f "$canonical_target" ]; then
+    CLAUDE_LOCATOR_VALIDATION_SCOPE="target"
+    CLAUDE_LOCATOR_VALIDATION_STATUS="not_regular"
+    return 1
+  fi
+  if [ ! -x "$canonical_target" ]; then
+    CLAUDE_LOCATOR_VALIDATION_SCOPE="target"
+    CLAUDE_LOCATOR_VALIDATION_STATUS="not_executable"
+    return 1
+  fi
+  if ! claude_locator_boundary_status "$canonical_target" "$repo_root" "$invocation_cwd"; then
+    CLAUDE_LOCATOR_VALIDATION_SCOPE="target"
+    CLAUDE_LOCATOR_VALIDATION_STATUS="$CLAUDE_LOCATOR_BOUNDARY_STATUS"
+    return 1
+  fi
+
+  CLAUDE_LOCATOR_VALIDATION_SCOPE=""
+  CLAUDE_LOCATOR_VALIDATION_STATUS="safe"
+  return 0
+}
+
+# claude-review-helper-complete: locator_v1

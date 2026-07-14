@@ -17,7 +17,9 @@ REVIEW_INSTRUCTIONS=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG_HELPER="$SCRIPT_DIR/claude-config.sh"
-CLAUDE_SUBSCRIPTION_HELPER="$SCRIPT_DIR/claude-subscription-env.sh"
+CLAUDE_LOCATOR_HELPER="$SCRIPT_DIR/claude-locator.sh"
+CLAUDE_RUNTIME_HELPER="$SCRIPT_DIR/claude-runtime.sh"
+CLAUDE_INVOCATION_CWD="$(pwd -P)"
 MAX_ARTIFACT_BYTES=""
 # shellcheck source=/dev/null
 source "$CONFIG_HELPER"
@@ -28,12 +30,11 @@ EFFORT="$CLAUDE_CONFIG_DEFAULT_EFFORT"
 MODEL="$CLAUDE_CONFIG_DEFAULT_MODEL"
 MAX_BUDGET_USD="$CLAUDE_CONFIG_DEFAULT_MAX_BUDGET_USD"
 REVIEW_TIMEOUT_SECONDS="$CLAUDE_CONFIG_DEFAULT_REVIEW_TIMEOUT_SECONDS"
-CLAUDE_RUNTIME_CWD="$(mktemp -d /tmp/claude-review-runtime-XXXXXX)"
-trap 'rm -rf "$CLAUDE_RUNTIME_CWD"' EXIT
+CLAUDE_RUNTIME_CWD=""
 
-CLAUDE_RUNNER_KIND=""
-CLAUDE_RUNNER_SHELL=""
 CLAUDE_BIN=""
+CLAUDE_TARGET=""
+CLAUDE_DISCOVERY_SOURCE="missing"
 CLAUDE_RUNNER_DESC=""
 CLAUDE_PRECHECK_MODE=""
 
@@ -41,7 +42,6 @@ CLAUDE_FAILURE_CODE=""
 CLAUDE_FAILURE_SUMMARY=""
 CLAUDE_FAILURE_QUESTION=""
 CLAUDE_FOUND_ANY="false"
-TRIED_CANDIDATE_KEYS="|"
 SELECTED_CLAUDE_CMD=()
 REVIEW_EFFECTIVE_TIMEOUT_SECONDS=""
 REVIEW_RETRY_TIMEOUT_SECONDS=""
@@ -214,6 +214,88 @@ emit_json() {
   printf '}\n'
 }
 
+helper_has_final_marker() {
+  local helper_file="$1"
+  local expected_marker="$2"
+  local line=""
+  local final_line=""
+
+  while IFS= read -r line || [ -n "$line" ]; do
+    final_line="$line"
+  done < "$helper_file"
+  [ "$final_line" = "$expected_marker" ]
+}
+
+load_required_claude_helper() {
+  local helper_file="$1"
+  local expected_marker="$2"
+  shift 2
+  local required_symbol=""
+
+  [ -r "$helper_file" ] && [ -f "$helper_file" ] || return 1
+  case "${BASH:-}" in
+    /*)
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+  [ -f "$BASH" ] && [ -x "$BASH" ] || return 1
+  /usr/bin/env -u BASH_ENV -u ENV -- "$BASH" --noprofile --norc -n "$helper_file" >/dev/null 2>&1 || return 1
+  helper_has_final_marker "$helper_file" "$expected_marker" || return 1
+  # shellcheck source=/dev/null
+  if source "$helper_file" >/dev/null 2>&1; then
+    :
+  else
+    return 1
+  fi
+  for required_symbol in "$@"; do
+    declare -F "$required_symbol" >/dev/null 2>&1 || return 1
+  done
+  return 0
+}
+
+emit_bridge_installation_incomplete() {
+  local component="$1"
+
+  emit_json \
+    "blocked" \
+    "The Claude review bridge installation is incomplete: required helper ${component} could not be loaded safely." \
+    "Reinstall or update the complete claude-review skill, then retry."
+}
+
+if ! load_required_claude_helper \
+  "$CLAUDE_LOCATOR_HELPER" \
+  "# claude-review-helper-complete: locator_v1" \
+  claude_locator_path_candidate \
+  claude_locator_native_supported \
+  claude_locator_native_path \
+  claude_locator_homebrew_paths \
+  claude_locator_first_present_fallback \
+  claude_locator_validate_candidate; then
+  emit_bridge_installation_incomplete "claude-locator.sh"
+  exit 0
+fi
+
+if ! load_required_claude_helper \
+  "$CLAUDE_RUNTIME_HELPER" \
+  "# claude-review-helper-complete: runtime_v1" \
+  claude_runtime_check_launcher_dependency \
+  claude_runtime_build_command \
+  claude_runtime_scrub_environment; then
+  emit_bridge_installation_incomplete "claude-runtime.sh"
+  exit 0
+fi
+
+if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v1" ]; then
+  emit_bridge_installation_incomplete "claude-runtime.sh"
+  exit 0
+fi
+
+CLAUDE_RUNTIME_CWD="$(mktemp -d /tmp/claude-review-runtime-XXXXXX)"
+chmod 700 "$CLAUDE_RUNTIME_CWD"
+trap 'rm -rf "$CLAUDE_RUNTIME_CWD"' EXIT
+
 load_artifact_limits_or_emit_json() {
   local limits_error_file limits_error
 
@@ -280,62 +362,6 @@ path_within() {
       return 1
       ;;
   esac
-}
-
-path_has_world_writable_parent() {
-  local path="$1"
-
-  if ! command -v python3 >/dev/null 2>&1; then
-    return 0
-  fi
-
-  python3 - "$path" <<'PY'
-from pathlib import Path
-import os
-import stat
-import sys
-
-path = Path(sys.argv[1]).expanduser().resolve(strict=False)
-for parent in [path.parent, *path.parents]:
-    try:
-        mode = os.stat(parent).st_mode
-    except OSError:
-        continue
-    if mode & stat.S_IWOTH:
-        sys.exit(0)
-sys.exit(1)
-PY
-}
-
-claude_bin_allowed() {
-  local claude_path="$1"
-
-  [ -n "$claude_path" ] || return 1
-  [ -x "$claude_path" ] || return 1
-
-  if path_within "$claude_path" "/tmp"; then
-    return 1
-  fi
-  if [ -n "$REPO_ROOT" ] && path_within "$claude_path" "$REPO_ROOT"; then
-    return 1
-  fi
-  if path_within "$claude_path" "$PWD"; then
-    return 1
-  fi
-  if path_has_world_writable_parent "$claude_path"; then
-    return 1
-  fi
-
-  return 0
-}
-
-record_unsafe_claude_candidate() {
-  local claude_path="$1"
-
-  record_failure \
-    "unusable_runner" \
-    "Claude Code was found at an unsafe path for unsandboxed execution." \
-    "Rejecting claude binary at $claude_path. Ensure the real Claude CLI is installed in a trusted, non-world-writable location outside the repo and temp directories."
 }
 
 config_repo_root() {
@@ -443,7 +469,7 @@ failure_priority() {
     missing_binary)
       printf '1'
       ;;
-    unusable_runner)
+    unusable_runner|launcher_dependency_missing)
       printf '2'
       ;;
     subscription_auth_unavailable)
@@ -481,6 +507,9 @@ record_failure() {
   local summary="$2"
   local question="$3"
 
+  if failure_offers_doctor "$code"; then
+    question="$(append_doctor_offer "$question")"
+  fi
   if [ "$(failure_priority "$code")" -ge "$(failure_priority "$CLAUDE_FAILURE_CODE")" ]; then
     CLAUDE_FAILURE_CODE="$code"
     CLAUDE_FAILURE_SUMMARY="$summary"
@@ -488,10 +517,9 @@ record_failure() {
   fi
 }
 
-candidate_key_seen() {
-  local key="$1"
-  case "$TRIED_CANDIDATE_KEYS" in
-    *"|$key|"*)
+failure_offers_doctor() {
+  case "${1:-}" in
+    missing_binary|unusable_runner|launcher_dependency_missing|subscription_auth_unavailable|ambiguous_auth|probe_timed_out|invocation_failed)
       return 0
       ;;
     *)
@@ -500,52 +528,35 @@ candidate_key_seen() {
   esac
 }
 
-mark_candidate_key() {
-  local key="$1"
-  TRIED_CANDIDATE_KEYS="${TRIED_CANDIDATE_KEYS}${key}|"
+append_doctor_offer() {
+  local existing_guidance="$1"
+
+  printf '%s\n\nRun /claude-review doctor now?\nReply Y to run diagnostics, or N to stop.' "$existing_guidance"
 }
 
-build_candidate_claude_cmd() {
-  local kind="$1"
-  local shell_bin="$2"
-  local claude_bin="$3"
-  local runner_shell="bash"
-  shift 3
+build_claude_cmd() {
+  local claude_bin="$1"
+  shift
 
-  if [ "$kind" = "shell" ]; then
-    runner_shell="$shell_bin"
-  fi
-
-  SELECTED_CLAUDE_CMD=()
-  SELECTED_CLAUDE_CMD=(
-    "$runner_shell"
-    -lc
-    'cd "$1" && shift && exec "$@"'
-    bash
-    "$CLAUDE_RUNTIME_CWD"
-    bash
-    "$CLAUDE_SUBSCRIPTION_HELPER"
-    "$claude_bin"
-  )
-
-  while [ "$#" -gt 0 ]; do
-    SELECTED_CLAUDE_CMD+=("$1")
-    shift
-  done
+  claude_runtime_build_command "$claude_bin" "$@"
+  SELECTED_CLAUDE_CMD=("${CLAUDE_RUNTIME_COMMAND[@]}")
 }
 
 run_candidate_claude() {
-  local kind="$1"
-  local shell_bin="$2"
-  local claude_bin="$3"
-  shift 3
+  local claude_bin="$1"
+  shift
 
-  build_candidate_claude_cmd "$kind" "$shell_bin" "$claude_bin" "$@"
-  "${SELECTED_CLAUDE_CMD[@]}"
+  build_claude_cmd "$claude_bin" "$@"
+  (
+    claude_runtime_scrub_environment
+    CDPATH=
+    cd -P -- "$CLAUDE_RUNTIME_CWD" || exit 1
+    "${SELECTED_CLAUDE_CMD[@]}"
+  )
 }
 
 run_selected_claude() {
-  run_candidate_claude "$CLAUDE_RUNNER_KIND" "$CLAUDE_RUNNER_SHELL" "$CLAUDE_BIN" "$@"
+  run_candidate_claude "$CLAUDE_BIN" "$@"
 }
 
 run_built_claude_cmd_with_timeout() {
@@ -553,11 +564,21 @@ run_built_claude_cmd_with_timeout() {
   shift
 
   if [ -z "$timeout_seconds" ] || [ "${timeout_seconds:-0}" -le 0 ] || ! command -v python3 >/dev/null 2>&1; then
-    "$@"
+    (
+      claude_runtime_scrub_environment
+      CDPATH=
+      cd -P -- "$CLAUDE_RUNTIME_CWD" || exit 1
+      "$@"
+    )
     return
   fi
 
-  python3 - "$timeout_seconds" "$@" <<'PY'
+  (
+    claude_runtime_scrub_environment
+    CDPATH=
+    cd -P -- "$CLAUDE_RUNTIME_CWD" || exit 1
+    python3 - "$timeout_seconds" "$@" <<'PY'
+import os
 import subprocess
 import sys
 
@@ -571,6 +592,8 @@ try:
         text=True,
         timeout=timeout,
         stdin=subprocess.DEVNULL,
+        cwd=os.getcwd(),
+        shell=False,
     )
 except subprocess.TimeoutExpired as exc:
     if exc.stdout:
@@ -583,16 +606,15 @@ sys.stdout.write(completed.stdout)
 sys.stderr.write(completed.stderr)
 sys.exit(completed.returncode)
 PY
+  )
 }
 
 run_candidate_claude_with_timeout() {
   local timeout_seconds="$1"
-  local kind="$2"
-  local shell_bin="$3"
-  local claude_bin="$4"
-  shift 4
+  local claude_bin="$2"
+  shift 2
 
-  build_candidate_claude_cmd "$kind" "$shell_bin" "$claude_bin" "$@"
+  build_claude_cmd "$claude_bin" "$@"
   run_built_claude_cmd_with_timeout "$timeout_seconds" "${SELECTED_CLAUDE_CMD[@]}"
 }
 
@@ -600,7 +622,7 @@ run_selected_claude_with_timeout() {
   local timeout_seconds="$1"
   shift
 
-  run_candidate_claude_with_timeout "$timeout_seconds" "$CLAUDE_RUNNER_KIND" "$CLAUDE_RUNNER_SHELL" "$CLAUDE_BIN" "$@"
+  run_candidate_claude_with_timeout "$timeout_seconds" "$CLAUDE_BIN" "$@"
 }
 
 review_timeout_model_is_opus() {
@@ -911,18 +933,14 @@ record_claude_state_write_denied_failure() {
 }
 
 select_runner() {
-  CLAUDE_RUNNER_KIND="$1"
-  CLAUDE_RUNNER_SHELL="$2"
-  CLAUDE_BIN="$3"
-  CLAUDE_RUNNER_DESC="$4"
-  CLAUDE_PRECHECK_MODE="$5"
+  CLAUDE_BIN="$1"
+  CLAUDE_RUNNER_DESC="$2"
+  CLAUDE_PRECHECK_MODE="$3"
 }
 
 probe_runner_usability() {
-  local kind="$1"
-  local shell_bin="$2"
-  local claude_bin="$3"
-  local description="$4"
+  local claude_bin="$1"
+  local description="$2"
   local auth_status=""
   local probe_output=""
   local probe_status=0
@@ -936,15 +954,23 @@ probe_runner_usability() {
       ;;
   esac
 
-  if ! run_candidate_claude "$kind" "$shell_bin" "$claude_bin" -v >/dev/null 2>&1; then
+  if ! claude_runtime_check_launcher_dependency "$CLAUDE_TARGET"; then
     record_failure \
-      "unusable_runner" \
-      "Claude Code was found but could not run from the current Codex PATH." \
-      "Check PATH and Claude CLI permissions, then retry."
+      "launcher_dependency_missing" \
+      "Claude Code was found, but its launcher interpreter is unavailable from Codex's inherited PATH." \
+      "Make the '${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY}' interpreter available in the environment that launches Codex, or install the recommended native Claude with curl -fsSL https://claude.ai/install.sh | bash. Then run /claude-review doctor."
     return 1
   fi
 
-  auth_status="$(run_candidate_claude "$kind" "$shell_bin" "$claude_bin" auth status 2>/dev/null || true)"
+  if ! run_candidate_claude "$claude_bin" -v >/dev/null 2>&1; then
+    record_failure \
+      "unusable_runner" \
+      "Claude Code was found but could not run with Codex's inherited environment." \
+      "Check Claude CLI permissions and ensure any required launcher or runtime executable is present in Codex's inherited PATH, then retry."
+    return 1
+  fi
+
+  auth_status="$(run_candidate_claude "$claude_bin" auth status 2>/dev/null || true)"
   if non_first_party_state "$auth_status"; then
     record_failure \
       "subscription_auth_unavailable" \
@@ -983,7 +1009,7 @@ probe_runner_usability() {
   fi
 
   set +e
-  probe_output="$(run_candidate_claude_with_timeout "$probe_timeout_seconds" "$kind" "$shell_bin" "$claude_bin" "${probe_args[@]}" 2>&1)"
+  probe_output="$(run_candidate_claude_with_timeout "$probe_timeout_seconds" "$claude_bin" "${probe_args[@]}" 2>&1)"
   probe_status=$?
   set -e
 
@@ -1011,7 +1037,7 @@ probe_runner_usability() {
     fi
 
     if live_probe_ok "$probe_output"; then
-      select_runner "$kind" "$shell_bin" "$claude_bin" "$description" "live_probe"
+      select_runner "$claude_bin" "$description" "live_probe"
       return 0
     fi
 
@@ -1049,39 +1075,110 @@ probe_runner_usability() {
   return 1
 }
 
-try_direct_candidate() {
-  local claude_path=""
-  local candidate_key=""
+record_invalid_claude_candidate() {
+  local source="$1"
+  local launch_path="$2"
+  local scope="$3"
+  local status="$4"
 
-  claude_path="$(command -v claude 2>/dev/null || true)"
-  [ -n "$claude_path" ] || return 1
+  case "$status" in
+    not_executable)
+      record_failure \
+        "unusable_runner" \
+        "Claude Code was found, but the selected launcher target is not executable." \
+        "Fix or reinstall the Claude launcher at $launch_path, then retry."
+      ;;
+    not_regular)
+      record_failure \
+        "unusable_runner" \
+        "Claude Code was found, but the selected launcher target is not a regular file." \
+        "Remove the conflicting entry at $launch_path and reinstall Claude Code, then retry."
+      ;;
+    dangling_symlink)
+      record_failure \
+        "unusable_runner" \
+        "Claude Code was found, but the selected launcher is a dangling symlink." \
+        "Remove or reinstall the stale Claude launcher at $launch_path, then retry."
+      ;;
+    *)
+      record_failure \
+        "unusable_runner" \
+        "Claude Code was found at an unsafe path for unsandboxed execution." \
+        "Rejecting the $source Claude candidate at $launch_path ($scope:$status). Ensure the real Claude CLI is in a trusted, non-world-writable location outside the repo, invocation directory, and temp directories."
+      ;;
+  esac
+}
 
-  if ! claude_bin_allowed "$claude_path"; then
-    record_unsafe_claude_candidate "$claude_path"
+checked_claude_locations() {
+  local locations="PATH"
+  local homebrew_path=""
+
+  if claude_locator_native_supported "${OSTYPE:-}"; then
+    case "${HOME:-}" in
+      /*)
+        locations="$locations, $HOME/.local/bin/claude"
+        ;;
+    esac
+  fi
+  claude_locator_homebrew_paths "${OSTYPE:-}" "${MACHTYPE:-}"
+  for homebrew_path in "${CLAUDE_LOCATOR_HOMEBREW_PATHS[@]}"; do
+    locations="$locations, $homebrew_path"
+  done
+  printf '%s' "$locations"
+}
+
+try_selected_candidate() {
+  local raw_path="$1"
+  local source="$2"
+  local description=""
+
+  CLAUDE_FOUND_ANY="true"
+  CLAUDE_DISCOVERY_SOURCE="$source"
+  if ! claude_locator_validate_candidate "$raw_path" "$REPO_ROOT" "$CLAUDE_INVOCATION_CWD"; then
+    record_invalid_claude_candidate \
+      "$source" \
+      "${CLAUDE_LOCATOR_LAUNCH_PATH:-$raw_path}" \
+      "${CLAUDE_LOCATOR_VALIDATION_SCOPE:-launch}" \
+      "${CLAUDE_LOCATOR_VALIDATION_STATUS:-missing}"
     return 1
   fi
 
-  candidate_key="direct::$claude_path"
-  candidate_key_seen "$candidate_key" && return 1
-  mark_candidate_key "$candidate_key"
-
-  CLAUDE_FOUND_ANY="true"
-  probe_runner_usability "direct" "" "$claude_path" "current shell"
+  CLAUDE_BIN="$CLAUDE_LOCATOR_LAUNCH_PATH"
+  CLAUDE_TARGET="$CLAUDE_LOCATOR_CANONICAL_TARGET"
+  case "$source" in
+    path)
+      description="inherited PATH install"
+      ;;
+    native_user)
+      description="official native user install"
+      ;;
+    homebrew_default)
+      description="default Homebrew install"
+      ;;
+    *)
+      description="Claude install"
+      ;;
+  esac
+  probe_runner_usability "$CLAUDE_BIN" "$description"
 }
 
 resolve_claude_runner() {
-  try_direct_candidate && return 0
+  if claude_locator_path_candidate "$CLAUDE_INVOCATION_CWD"; then
+    try_selected_candidate "$CLAUDE_LOCATOR_CANDIDATE_PATH" "path" && return 0
+  elif claude_locator_first_present_fallback; then
+    try_selected_candidate "$CLAUDE_LOCATOR_CANDIDATE_PATH" "$CLAUDE_LOCATOR_CANDIDATE_SOURCE" && return 0
+  fi
 
   if [ "$CLAUDE_FOUND_ANY" != "true" ]; then
     record_failure \
       "missing_binary" \
-      "Claude Code CLI was not found from this Codex environment." \
-      "Install Claude Code and ensure claude is on PATH for Codex without relying on shell startup files, then retry."
+      "Claude Code CLI was not found in PATH or any checked official/default install location." \
+      "Checked $(checked_claude_locations). This does not prove Claude is uninstalled; custom Homebrew/npm prefixes remain PATH-only. Install the recommended native Claude or expose an existing launcher to Codex's inherited PATH, then retry."
   elif [ -z "$CLAUDE_FAILURE_CODE" ]; then
     record_failure \
       "ambiguous_auth" \
       "Claude Code was found, but no usable subscription-authenticated Claude runner could be selected." \
-      "Check PATH and the Claude subscription session visible to Codex, then retry."
+      "Check the selected Claude installation and the subscription session visible to Codex, then retry."
   fi
 
   return 1

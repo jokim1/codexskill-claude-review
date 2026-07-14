@@ -64,6 +64,8 @@ Resolve these relative to the current repo and this skill's directory:
 - Command router: `scripts/claude-command-router.sh`
 - Doctor helper: `scripts/claude-doctor.sh`
 - Native Claude helper: `scripts/run-review.sh`
+- Claude locator helper: `scripts/claude-locator.sh`
+- Claude runtime helper: `scripts/claude-runtime.sh`
 - Artifact builder: `scripts/build-review-artifact.sh`
 - Update helper: `scripts/claude-update.sh`
 - Update check helper: `scripts/claude-update-check.sh`
@@ -666,8 +668,13 @@ bash <skill-dir>/scripts/claude-doctor.sh \
 
 Render the command output directly. Use this command to diagnose stale skill
 checkouts, stale Codex thread routing, missing safe-mode runner flags, Claude CLI
-auth/config problems, and update state. Do not replace it with a hand-written
-`claude -p` probe.
+discovery/trust/runtime/auth/config problems, inherited environment, and update
+state. Doctor is diagnostic and report-only: it must not install Claude, edit PATH
+or shell configuration, create a symlink, or otherwise mutate the user's system.
+Treat `claude_trust_reason=validation_unavailable` as a fail-closed unsafe-candidate
+diagnosis; do not recommend bypassing trust validation or using a mutable PATH
+utility in order to continue.
+Do not replace it with a hand-written `claude -p` probe.
 
 ### `/claude-review update`
 
@@ -761,6 +768,35 @@ Do not include budget or timeout on every successful review result. Show them on
 - the user asks for config with `/claude-review show`
 - the bridge blocks on budget or timeout
 - the user explicitly asks for diagnostics
+
+## Blocked Review Recovery
+
+When a rendered blocked result ends with this exact offer, preserve it verbatim:
+
+```text
+Run /claude-review doctor now?
+Reply Y to run diagnostics, or N to stop.
+```
+
+The recognized immediate-response vocabulary is `Y`, `yes`, and `run doctor`.
+If the immediately following user response is exactly one of those affirmatives,
+run the canonical `/claude-review doctor` flow with the same repo root and config
+file, render doctor output directly, and stop. Do not run the update preflight for
+this doctor continuation. Do not retry the failed review automatically.
+
+If the immediate response is `N` or otherwise declines, stop cleanly. A later or
+unrelated `Y`, `yes`, or `run doctor` is not authorization: this convenience applies
+only to the response immediately following the bridge's explicit doctor offer.
+The full `/claude-review doctor` command remains the deterministic fallback if the
+host does not interpret a short reply.
+
+Doctor-eligible blockers are bounded to candidate-not-found, unusable or unsafe
+Claude, launcher-dependency, subscription-auth, preflight timeout/failure, and
+ambiguous invocation failures. Budget caps, review timeouts, artifacts, missing
+context, command/config boundaries, helper-integrity failures, and Claude
+state-write denial retain their direct remediation without this offer. Doctor is
+diagnostic only: never modify PATH, install Claude, create symlinks, edit profiles,
+or make other system changes in response to the offer.
 
 Each finding should include:
 
