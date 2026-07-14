@@ -12,6 +12,14 @@ fail() {
 grep -Fq '/bin/bash scripts/run-review.sh' "$ROOT/tests/windows-transport.sh" || fail "Windows test lacks production runner coverage"
 grep -Fq 'shim_root/claude' "$ROOT/tests/windows-transport.sh" || fail "Windows test lacks extensionless shim coverage"
 grep -Fq 'runs-on: windows-latest' "$ROOT/.github/workflows/ci.yml" || fail "Windows Git Bash CI job missing"
+grep -Fq 'if os.name == "nt"' "$ROOT/scripts/claude-doctor.sh" || fail "doctor lacks Windows timeout termination"
+if grep -Fq 'start_new_session=True' "$ROOT/scripts/claude-doctor.sh"; then
+  fail "doctor unconditionally requests a Unix process session"
+fi
+grep -Fq 'subprocess.CREATE_NEW_PROCESS_GROUP' "$ROOT/scripts/run-review.sh" || fail "runner lacks Windows timeout process-group creation"
+if grep -Fq 'start_new_session=True' "$ROOT/scripts/run-review.sh"; then
+  fail "runner unconditionally requests a Unix process session"
+fi
 
 case "${OSTYPE:-}" in
   msys*|mingw*|cygwin*)
@@ -26,11 +34,6 @@ esac
 source "$ROOT/scripts/claude-locator.sh"
 # shellcheck source=/dev/null
 source "$ROOT/scripts/claude-runtime.sh"
-
-grep -Fq 'if os.name == "nt"' "$ROOT/scripts/claude-doctor.sh" || fail "doctor lacks Windows timeout termination"
-if grep -Fq 'start_new_session=True' "$ROOT/scripts/claude-doctor.sh"; then
-  fail "doctor unconditionally requests a Unix process session"
-fi
 
 for platform in msys mingw64_nt cygwin; do
   if claude_locator_native_supported "$platform"; then

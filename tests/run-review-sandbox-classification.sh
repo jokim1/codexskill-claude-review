@@ -703,6 +703,82 @@ EOF
   printf 'ok: probe timeout\n'
 }
 
+run_timeout_process_group_case() {
+  case "${OSTYPE:-}" in
+    msys*|mingw*|cygwin*)
+      printf 'ok: timeout process group skipped on Windows\n'
+      return 0
+      ;;
+  esac
+
+  local fake_root tmpdir output child_pid
+
+  fake_root="$(make_fake_claude_root)"
+  tmpdir="$(mktemp -d /tmp/claude-review-test-XXXXXX)"
+  mkdir -p "$fake_root/bin"
+  printf 'review artifact\n' > "$tmpdir/claude-review-artifact.txt"
+
+  cat > "$fake_root/bin/claude" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [ "${1:-}" = "-v" ] || [ "${1:-}" = "--version" ]; then
+  (
+    trap '' TERM
+    while :; do sleep 1; done
+  ) &
+  child_pid="$!"
+  printf '%s\n' "$child_pid" > "${FAKE_CLAUDE_CHILD_PID_FILE:?}"
+  wait "$child_pid"
+fi
+
+printf 'unexpected fake claude args: %s\n' "$*" >&2
+exit 2
+EOF
+  chmod +x "$fake_root/bin/claude"
+
+  output="$(
+    cd "$REPO_ROOT"
+    PATH="$fake_root/bin:$PATH" \
+      LIVE_PROBE_TIMEOUT_SECONDS=1 \
+      FAKE_CLAUDE_CHILD_PID_FILE="$tmpdir/child.pid" \
+      bash scripts/run-review.sh \
+        --mode code \
+        --artifact-file "$tmpdir/claude-review-artifact.txt" \
+        --base-prompt prompts/code-review.base.md \
+        --schema-file schemas/review-output.json \
+        --repo-root "$REPO_ROOT" \
+        --branch test \
+        --base-branch main
+  )" || {
+    rm -rf "$fake_root" "$tmpdir"
+    fail "timeout process group case exited non-zero"
+  }
+
+  if ! assert_blocked_result "timeout process group" "$output" "version check timed out after 1s" "LIVE_PROBE_TIMEOUT_SECONDS" ""; then
+    rm -rf "$fake_root" "$tmpdir"
+    fail "timeout process group assertion failed"
+  fi
+  [ -s "$tmpdir/child.pid" ] || {
+    rm -rf "$fake_root" "$tmpdir"
+    fail "timeout process group child PID was not recorded"
+  }
+  child_pid="$(cat "$tmpdir/child.pid")"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 "$child_pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  if kill -0 "$child_pid" 2>/dev/null; then
+    kill -KILL "$child_pid" 2>/dev/null || true
+    rm -rf "$fake_root" "$tmpdir"
+    fail "timeout left descendant process $child_pid running"
+  fi
+
+  rm -rf "$fake_root" "$tmpdir"
+  printf 'ok: timeout terminates the Claude process group\n'
+}
+
 run_safe_mode_args_case() {
   local fake_root tmpdir output arg_log
 
@@ -1078,6 +1154,7 @@ run_config_boundary_case
 run_unsafe_claude_candidate_case
 run_timeout_wrapper_closes_stdin_case
 run_probe_timeout_case
+run_timeout_process_group_case
 run_safe_mode_args_case
 bash "$REPO_ROOT/tests/run-review-discovery-runtime.sh"
 rm -f "$evil_shell"

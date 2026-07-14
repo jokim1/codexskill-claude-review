@@ -580,6 +580,7 @@ run_built_claude_cmd_with_timeout() {
       "$msys_arg_conv_value" \
       "${CLAUDE_RUNTIME_PYTHON_ARGV[@]}" <<'PY'
 import os
+import signal
 import subprocess
 import sys
 
@@ -593,27 +594,51 @@ if msys_arg_conv_present:
 else:
     child_env.pop("MSYS2_ARG_CONV_EXCL", None)
 
+process_options = {}
+if os.name == "nt":
+    process_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+else:
+    process_options["start_new_session"] = True
+
+proc = subprocess.Popen(
+    cmd,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    stdin=subprocess.DEVNULL,
+    cwd=os.getcwd(),
+    shell=False,
+    env=child_env,
+    **process_options,
+)
 try:
-    completed = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        stdin=subprocess.DEVNULL,
-        cwd=os.getcwd(),
-        shell=False,
-        env=child_env,
-    )
-except subprocess.TimeoutExpired as exc:
-    if exc.stdout:
-        sys.stdout.write(exc.stdout if isinstance(exc.stdout, str) else exc.stdout.decode())
-    if exc.stderr:
-        sys.stderr.write(exc.stderr if isinstance(exc.stderr, str) else exc.stderr.decode())
+    out, err = proc.communicate(timeout=timeout)
+except subprocess.TimeoutExpired:
+    try:
+        if os.name == "nt":
+            proc.terminate()
+        else:
+            os.killpg(proc.pid, signal.SIGTERM)
+    except OSError:
+        pass
+    try:
+        out, err = proc.communicate(timeout=3)
+    except subprocess.TimeoutExpired:
+        try:
+            if os.name == "nt":
+                proc.kill()
+            else:
+                os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        out, err = proc.communicate()
+    sys.stdout.write(out or "")
+    sys.stderr.write(err or "")
     sys.exit(124)
 
-sys.stdout.write(completed.stdout)
-sys.stderr.write(completed.stderr)
-sys.exit(completed.returncode)
+sys.stdout.write(out)
+sys.stderr.write(err)
+sys.exit(proc.returncode)
 PY
   )
 }
