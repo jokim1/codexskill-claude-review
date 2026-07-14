@@ -578,6 +578,7 @@ printf 'LC_ALL=%s\n' "${LC_ALL:-}" >> "$ENV_LOG"
 printf 'HTTPS_PROXY=%s\n' "${HTTPS_PROXY:-}" >> "$ENV_LOG"
 printf 'NO_PROXY=%s\n' "${NO_PROXY:-}" >> "$ENV_LOG"
 printf 'NODE_EXTRA_CA_CERTS=%s\n' "${NODE_EXTRA_CA_CERTS:-}" >> "$ENV_LOG"
+printf 'CDPATH=%s\n' "${CDPATH-}" >> "$ENV_LOG"
 printf '%s\n' "$@" > "$ARGV_LOG"
 pwd -P > "$CWD_LOG"
 SH
@@ -594,7 +595,8 @@ original_path="$PATH"
   HTTPS_PROXY="https://runtime-proxy"
   NO_PROXY="runtime-no-proxy"
   NODE_EXTRA_CA_CERTS="$TEST_ROOT/runtime-ca"
-  export HOME TMPDIR LC_ALL HTTPS_PROXY NO_PROXY NODE_EXTRA_CA_CERTS
+  CDPATH="$TEST_ROOT/runtime-cdpath-one:$TEST_ROOT/runtime-cdpath-two"
+  export HOME TMPDIR LC_ALL HTTPS_PROXY NO_PROXY NODE_EXTRA_CA_CERTS CDPATH
   claude_runtime_run_direct "$TEST_ROOT/work" "$TEST_ROOT/trusted/bin/claude-env" "space arg" "" "equals=value"
 )
 assert_eq "$original_path" "$(cat "$ENV_LOG.path")" "PATH preserved byte-for-byte"
@@ -609,10 +611,27 @@ grep -Fq 'LC_ALL=C' "$ENV_LOG" || fail "locale preserved"
 grep -Fq 'HTTPS_PROXY=https://runtime-proxy' "$ENV_LOG" || fail "proxy preserved"
 grep -Fq 'NO_PROXY=runtime-no-proxy' "$ENV_LOG" || fail "NO_PROXY preserved"
 grep -Fq "NODE_EXTRA_CA_CERTS=$TEST_ROOT/runtime-ca" "$ENV_LOG" || fail "custom CA preserved"
+grep -Fq "CDPATH=$TEST_ROOT/runtime-cdpath-one:$TEST_ROOT/runtime-cdpath-two" "$ENV_LOG" || fail "direct runtime changed exported CDPATH"
 [ "$(sed -n '1p' "$ARGV_LOG")" = "space arg" ] || fail "space argv preserved"
 [ "$(sed -n '2p' "$ARGV_LOG")" = "" ] || fail "empty argv preserved"
 [ "$(sed -n '3p' "$ARGV_LOG")" = "equals=value" ] || fail "equals argv preserved"
 pass "direct runtime preserves PATH/argv/env and scrubs only pinned variables"
+
+timeout_cdpath="$TEST_ROOT/timeout-cdpath-one:$TEST_ROOT/timeout-cdpath-two"
+claude_runtime_resolve_trusted_python "$ROOT" "$TEST_ROOT/work" "$TEST_ROOT/work" || fail "trusted Python CDPATH transport resolution"
+timeout_cdpath_output="$(
+  CDPATH="$timeout_cdpath"
+  export CDPATH
+  claude_runtime_run_with_timeout \
+    "$CLAUDE_RUNTIME_PYTHON_BIN" \
+    "$python_driver" \
+    "$TEST_ROOT/work" \
+    5 \
+    - \
+    /bin/bash -c 'printf "%s" "${CDPATH-}"'
+)"
+assert_eq "$timeout_cdpath" "$timeout_cdpath_output" "timeout runtime preserves exported CDPATH"
+pass "direct and timeout transports preserve exported CDPATH"
 
 cat > "$TEST_ROOT/trusted/bin/missing-env-interpreter" <<'SH'
 #!/usr/bin/env definitely-missing-claude-interpreter

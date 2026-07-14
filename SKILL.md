@@ -705,7 +705,9 @@ checkouts, stale Codex thread routing, missing safe-mode runner flags, Claude CL
 discovery/trust/runtime/auth/config problems and inherited environment. Doctor
 always skips the mutating update helper. It is diagnostic and report-only: it must
 not install Claude, edit PATH
-or shell configuration, create a symlink, or otherwise mutate the user's system.
+or shell configuration, create a symlink, refresh a Git index, execute a Git
+fsmonitor hook, or otherwise mutate the user's system. Checkout diagnostics must
+disable optional locks and ignore inherited Git repository/config routing overrides.
 Treat `claude_trust_reason=validation_unavailable` as a fail-closed unsafe-candidate
 diagnosis; do not recommend bypassing trust validation or using a mutable PATH
 utility in order to continue.

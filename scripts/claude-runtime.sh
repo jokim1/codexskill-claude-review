@@ -506,7 +506,6 @@ claude_runtime_invoke_python_driver() {
     PATH="$inherited_path"
     export PATH
     unset CLAUDE_RUNTIME_INHERITED_PATH
-    CDPATH=
     cd -P -- "$runtime_cwd" || exit 1
     MSYS2_ARG_CONV_EXCL='*' "$python_bin" -I "$driver_transport" \
       "$mode" \
@@ -547,7 +546,6 @@ claude_runtime_run_direct() {
     PATH="$inherited_path"
     export PATH
     unset CLAUDE_RUNTIME_INHERITED_PATH
-    CDPATH=
     cd -P -- "$runtime_cwd" || exit 1
     exec "${CLAUDE_RUNTIME_COMMAND[@]}"
   )
@@ -579,8 +577,7 @@ claude_runtime_resolve_path_dependency() {
   fi
 
   (
-    CDPATH=
-    cd -P -- "$execution_cwd" 2>/dev/null || exit 1
+    builtin cd -P -- "$execution_cwd" 2>/dev/null || exit 1
     resolved_dependency="$(PATH="$inherited_path" type -P "$dependency" 2>/dev/null || true)"
     [ -n "$resolved_dependency" ] || exit 0
     case "$resolved_dependency" in

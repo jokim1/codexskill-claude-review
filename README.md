@@ -592,7 +592,9 @@ Doctor's main discovery states are `available`, `installed_not_on_path`,
 `not_found`. `not_found` means only that PATH and the bounded official/default
 locations did not contain a candidate; it does not prove Claude is uninstalled.
 Doctor is report-only and will not edit PATH or shell files, install Claude, or
-create symlinks. Its auth diagnostics explicitly use the same
+create symlinks. Its checkout diagnostics disable fsmonitor and optional Git
+locks, ignore inherited Git repository/config routing overrides, and do not
+refresh the index. Its auth diagnostics explicitly use the same
 `subscription_only_credentials_scrubbed` context as review, so an API-key-only
 ordinary Claude setup may work even when bridge subscription auth is unavailable.
 Runner and doctor bound their version, auth-status, and live-probe calls with the

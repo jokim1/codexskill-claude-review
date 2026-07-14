@@ -666,18 +666,41 @@ run_probe() {
   fi
 }
 
+doctor_git_report_only() {
+  (
+    unset GIT_DIR
+    unset GIT_WORK_TREE
+    unset GIT_COMMON_DIR
+    unset GIT_INDEX_FILE
+    unset GIT_OBJECT_DIRECTORY
+    unset GIT_ALTERNATE_OBJECT_DIRECTORIES
+    unset GIT_CEILING_DIRECTORIES
+    unset GIT_DISCOVERY_ACROSS_FILESYSTEM
+    unset GIT_CONFIG_PARAMETERS
+    GIT_OPTIONAL_LOCKS=0
+    GIT_CONFIG_COUNT=0
+    GIT_CONFIG_NOSYSTEM=1
+    GIT_CONFIG_SYSTEM=/dev/null
+    GIT_CONFIG_GLOBAL=/dev/null
+    GIT_ATTR_NOSYSTEM=1
+    export GIT_OPTIONAL_LOCKS GIT_CONFIG_COUNT GIT_CONFIG_NOSYSTEM
+    export GIT_CONFIG_SYSTEM GIT_CONFIG_GLOBAL GIT_ATTR_NOSYSTEM
+    command git -c core.fsmonitor=false -c core.untrackedCache=false "$@"
+  )
+}
+
 print_kv "doctor_status" "ok"
 print_kv "run_review" "$RUN_REVIEW"
 print_kv "router" "$ROUTER"
 
-if git -C "$SKILL_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  print_kv "skill_git_head" "$(git -C "$SKILL_ROOT" rev-parse --short=12 HEAD)"
-  skill_git_branch="$(git -C "$SKILL_ROOT" branch --show-current 2>/dev/null || true)"
+if doctor_git_report_only -C "$SKILL_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  print_kv "skill_git_head" "$(doctor_git_report_only -C "$SKILL_ROOT" rev-parse --short=12 HEAD)"
+  skill_git_branch="$(doctor_git_report_only -C "$SKILL_ROOT" branch --show-current 2>/dev/null || true)"
   if [ -z "$skill_git_branch" ]; then
     skill_git_branch="detached"
   fi
   print_kv "skill_git_branch" "$skill_git_branch"
-  if [ -n "$(git -C "$SKILL_ROOT" status --porcelain --untracked-files=no 2>/dev/null || true)" ]; then
+  if [ -n "$(doctor_git_report_only -C "$SKILL_ROOT" status --porcelain --untracked-files=no 2>/dev/null || true)" ]; then
     print_kv "skill_git_tracked_changes" "yes"
   else
     print_kv "skill_git_tracked_changes" "no"

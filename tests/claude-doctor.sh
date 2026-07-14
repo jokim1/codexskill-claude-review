@@ -269,6 +269,76 @@ assert_line "$report_only_output" "update_check=skipped" "report-only update sta
 [ ! -e "$doctor_update_marker" ] || fail "doctor default executed the mutating update helper"
 pass "doctor skips update mutation by default"
 
+git_diagnostic_skill="$TEST_ROOT/git-diagnostic-skill"
+git_fsmonitor_hook="$TEST_ROOT/git-fsmonitor-hook"
+git_fsmonitor_marker="$TEST_ROOT/git-fsmonitor-ran"
+copy_fixture_skill "$git_diagnostic_skill"
+git -C "$git_diagnostic_skill" init -q
+git -C "$git_diagnostic_skill" config user.name "Claude Doctor Test"
+git -C "$git_diagnostic_skill" config user.email "claude-doctor@example.invalid"
+git -C "$git_diagnostic_skill" add scripts
+git -C "$git_diagnostic_skill" commit -qm "fixture"
+cat > "$git_fsmonitor_hook" <<SH
+#!/bin/bash
+printf ran > "$git_fsmonitor_marker"
+printf 'fixture-token\n'
+SH
+chmod 755 "$git_fsmonitor_hook"
+git -C "$git_diagnostic_skill" config core.fsmonitor "$git_fsmonitor_hook"
+git -C "$git_diagnostic_skill" status --porcelain --untracked-files=no >/dev/null 2>&1 || true
+[ -e "$git_fsmonitor_marker" ] || fail "fsmonitor fixture did not execute before the report-only test"
+rm "$git_fsmonitor_marker"
+python3 - "$git_diagnostic_skill/scripts/run-review.sh" <<'PY'
+import os
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+stat = path.stat()
+os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+PY
+git_index_path="$(git -C "$git_diagnostic_skill" rev-parse --absolute-git-dir)/index"
+git_index_before="$(python3 - "$git_index_path" <<'PY'
+from hashlib import sha256
+from pathlib import Path
+import sys
+
+print(sha256(Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+)"
+git_expected_head="$(git -C "$git_diagnostic_skill" rev-parse --short=12 HEAD)"
+git_diagnostic_output="$(
+  export GIT_DIR="$TEST_ROOT/injected-git-dir"
+  export GIT_WORK_TREE="$TEST_ROOT/injected-git-work-tree"
+  export GIT_INDEX_FILE="$TEST_ROOT/injected-git-index"
+  export GIT_CONFIG_COUNT=1
+  export GIT_CONFIG_KEY_0=core.fsmonitor
+  export GIT_CONFIG_VALUE_0="$git_fsmonitor_hook"
+  export GIT_OPTIONAL_LOCKS=1
+  run_doctor \
+    "$git_diagnostic_skill" \
+    "$REPO_ROOT" \
+    "$REPO_ROOT" \
+    "$passwd_home" \
+    "$path_value" \
+    "$TEST_ROOT/git-diagnostic.log" \
+    --skip-probes
+)"
+git_index_after="$(python3 - "$git_index_path" <<'PY'
+from hashlib import sha256
+from pathlib import Path
+import sys
+
+print(sha256(Path(sys.argv[1]).read_bytes()).hexdigest())
+PY
+)"
+assert_line "$git_diagnostic_output" "skill_git_head=$git_expected_head" "report-only Git environment isolation"
+assert_line "$git_diagnostic_output" "skill_git_tracked_changes=no" "report-only Git status"
+[ ! -e "$git_fsmonitor_marker" ] || fail "doctor executed the repository fsmonitor hook"
+[ "$git_index_before" = "$git_index_after" ] || fail "doctor refreshed the repository index"
+grep -Fq 'GIT_OPTIONAL_LOCKS=0' "$git_diagnostic_skill/scripts/claude-doctor.sh" || fail "doctor does not disable optional Git locks"
+pass "doctor Git diagnostics disable hooks, locks, index writes, and inherited routing"
+
 unsafe_python_root="$TEST_ROOT/unsafe-python"
 unsafe_python_marker="$TEST_ROOT/unsafe-python-executed"
 mkdir -p "$unsafe_python_root/bin"
