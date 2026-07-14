@@ -40,6 +40,13 @@ if "subprocess.CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED" not in run_block:
 if run_block.index("AssignProcessToJobObject") > run_block.index("_resume_suspended_process(proc)"):
     raise SystemExit("Windows child resumes before Job Object assignment")
 PY
+for script in "$ROOT/scripts/run-review.sh" "$ROOT/scripts/claude-doctor.sh"; do
+  grep -Fq 'CLAUDE_PROCESS_DRIVER_TRANSPORT="$(claude_runtime_python_transport_path "$CLAUDE_PROCESS_DRIVER")"' "$script" || \
+    fail "$(basename "$script") does not explicitly convert the early driver pathname"
+  if grep -Fq '"$CLAUDE_RUNTIME_PYTHON_BIN" -I - "$CLAUDE_PROCESS_DRIVER"' "$script"; then
+    fail "$(basename "$script") retains an unconverted early native-Python path"
+  fi
+done
 
 case "${OSTYPE:-}" in
   msys*|mingw*|cygwin*)
@@ -263,7 +270,7 @@ cat > "$shim_root/claude" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [ "${MSYS2_ARG_CONV_EXCL-}" = "*" ]; then
+if [ "${MSYS2_ARG_CONV_EXCL-}" = "*" ] && [ "${EXPECT_INHERITED_MSYS:-}" != "1" ]; then
   printf 'internal MSYS conversion override leaked to Claude\n' >&2
   exit 91
 fi
@@ -380,5 +387,47 @@ printf '%s\n' "$doctor_output" | grep -Fqx 'safe_mode_print_probe_status=complet
 if grep -Fq 'msys=*' "$shim_log"; then
   fail "doctor transport leaked its internal MSYS conversion override"
 fi
+
+rm -f "$shim_log"
+inherited_msys_runner_output="$({
+  cd "$ROOT"
+  PATH="$shim_root:$PATH" \
+  WINDOWS_SHIM_LOG="$shim_log" \
+  EXPECT_INHERITED_MSYS=1 \
+  MSYS2_ARG_CONV_EXCL='*' \
+  BASH_ENV= ENV= /bin/bash --noprofile --norc scripts/run-review.sh \
+    --mode code \
+    --artifact-file "$artifact_file" \
+    --base-prompt "$ROOT/prompts/code-review.base.md" \
+    --schema-file "$ROOT/schemas/review-output.json" \
+    --repo-root "$ROOT" \
+    --branch windows-test \
+    --base-branch main
+})"
+RUNNER_OUTPUT="$inherited_msys_runner_output" "$python_bin" -I - <<'PY'
+import json
+import os
+
+data = json.loads(os.environ["RUNNER_OUTPUT"])
+assert data["status"] == "clean", data
+PY
+grep -Fq 'msys=*' "$shim_log" || fail "runner did not restore the inherited MSYS conversion setting"
+
+rm -f "$shim_log"
+inherited_msys_doctor_output="$({
+  cd "$ROOT"
+  PATH="$shim_root:$PATH" \
+  WINDOWS_SHIM_LOG="$shim_log" \
+  EXPECT_INHERITED_MSYS=1 \
+  MSYS2_ARG_CONV_EXCL='*' \
+  BASH_ENV= ENV= /bin/bash --noprofile --norc scripts/claude-doctor.sh \
+    --repo-root "$ROOT" \
+    --skill-root "$ROOT" \
+    --config-file "$ROOT/.codex/claude/config.env" \
+    --probe-timeout 10 \
+    --skip-update-check
+})"
+printf '%s\n' "$inherited_msys_doctor_output" | grep -Fqx 'doctor_status=ok' || fail "doctor failed with inherited MSYS conversion disabled"
+grep -Fq 'msys=*' "$shim_log" || fail "doctor did not restore the inherited MSYS conversion setting"
 
 printf 'ok: Windows Git Bash PATH-only .exe and extensionless-shim runner/doctor transport\n'

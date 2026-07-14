@@ -364,6 +364,37 @@ assert_line "$no_python_output" "inherited_home_status=passwd_unavailable" "pass
 assert_line "$no_python_output" "python_runtime_status=missing" "missing Python runtime status"
 pass "passwd parser unavailability is diagnostic and non-blocking"
 
+bounded_passwd_skill="$TEST_ROOT/bounded-passwd-skill"
+copy_fixture_skill "$bounded_passwd_skill"
+python3 - "$bounded_passwd_skill/scripts/claude-doctor.sh" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+old = "    passwd_home = pwd.getpwuid(os.getuid()).pw_dir"
+new = "    import time\n    time.sleep(60)\n" + old
+if old not in text:
+    raise SystemExit("passwd lookup fixture point not found")
+path.write_text(text.replace(old, new, 1))
+PY
+bounded_passwd_started="$SECONDS"
+bounded_passwd_output="$(
+  run_doctor \
+    "$bounded_passwd_skill" \
+    "$REPO_ROOT" \
+    "$REPO_ROOT" \
+    "$HOME" \
+    "$path_value" \
+    "$TEST_ROOT/bounded-passwd.log" \
+    --probe-timeout 1 \
+    --skip-probes
+)"
+bounded_passwd_elapsed=$((SECONDS - bounded_passwd_started))
+assert_line "$bounded_passwd_output" "inherited_home_status=passwd_unavailable" "timed-out passwd status"
+[ "$bounded_passwd_elapsed" -lt 8 ] || fail "passwd lookup exceeded its bounded timeout: ${bounded_passwd_elapsed}s"
+pass "doctor bounds inherited-HOME passwd lookup"
+
 # Missing is explicitly inconclusive.
 missing_output="$(run_doctor "$missing_skill" "$REPO_ROOT" "$REPO_ROOT" "$missing_home" "$SYSTEM_PATH" "$TEST_ROOT/missing.log" --skip-probes)"
 assert_line "$missing_output" "claude_discovery=missing" "missing source"

@@ -8,16 +8,84 @@ fi
 CLAUDE_RUNTIME_INHERITED_PATH="${PATH-}"
 export CLAUDE_RUNTIME_INHERITED_PATH
 
+claude_bootstrap_fhs_symlink_safe() {
+  local current="$1"
+  local trusted_readlink="$2"
+  local fhs_usr_bin="$3"
+  local fhs_bin="$4"
+  local alternatives_root="$5"
+  local link_output=""
+  local link_target=""
+  local parent=""
+  local physical_parent=""
+  local basename_part=""
+  local depth=0
+
+  [ -x "$trusted_readlink" ] || return 1
+  fhs_usr_bin="$(CDPATH=; cd -P -- "$fhs_usr_bin" 2>/dev/null && pwd -P)" || return 1
+  fhs_bin="$(CDPATH=; cd -P -- "$fhs_bin" 2>/dev/null && pwd -P)" || return 1
+  if [ -d "$alternatives_root" ]; then
+    alternatives_root="$(CDPATH=; cd -P -- "$alternatives_root" 2>/dev/null && pwd -P)" || return 1
+  else
+    alternatives_root=""
+  fi
+  basename_part="${current##*/}"
+  parent="${current%/*}"
+  [ -n "$parent" ] || parent="/"
+  physical_parent="$(CDPATH=; cd -P -- "$parent" 2>/dev/null && pwd -P)" || return 1
+  if [ "$physical_parent" = "/" ]; then
+    current="/$basename_part"
+  else
+    current="$physical_parent/$basename_part"
+  fi
+  while [ -L "$current" ]; do
+    depth=$((depth + 1))
+    [ "$depth" -le 8 ] || return 1
+    case "$current" in
+      "$fhs_usr_bin"/*|"$fhs_bin"/*) ;;
+      "$alternatives_root"/*) [ -n "$alternatives_root" ] || return 1 ;;
+      *) return 1 ;;
+    esac
+    link_output="$("$trusted_readlink" -n "$current" 2>/dev/null && printf '\001')" || return 1
+    case "$link_output" in
+      *$'\001') ;;
+      *) return 1 ;;
+    esac
+    link_target="${link_output%$'\001'}"
+    case "$link_target" in
+      /*) current="$link_target" ;;
+      *) current="${current%/*}/$link_target" ;;
+    esac
+    basename_part="${current##*/}"
+    parent="${current%/*}"
+    [ -n "$parent" ] || parent="/"
+    physical_parent="$(CDPATH=; cd -P -- "$parent" 2>/dev/null && pwd -P)" || return 1
+    if [ "$physical_parent" = "/" ]; then
+      current="/$basename_part"
+    else
+      current="$physical_parent/$basename_part"
+    fi
+  done
+
+  [ -f "$current" ] && [ -x "$current" ] && [ ! -L "$current" ] || return 1
+  case "$current" in
+    "$fhs_usr_bin"/*|"$fhs_bin"/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 claude_bootstrap_utility_safe() {
   local utility="$1"
   local candidate_path="$2"
   local trusted_store_root="$3"
   local fhs_usr_bin="$4"
   local fhs_bin="$5"
+  local alternatives_root="$6"
+  local trusted_readlink="$7"
   local trusted_root=""
   local store_entry=""
   local store_target=""
-  shift 5
+  shift 7
 
   case "$candidate_path" in
     "$fhs_usr_bin"/*|"$fhs_bin"/*|"$trusted_store_root"/*)
@@ -41,6 +109,18 @@ claude_bootstrap_utility_safe() {
   if [ -f "$candidate_path" ] && [ -x "$candidate_path" ] && [ ! -L "$candidate_path" ]; then
     return 0
   fi
+
+  case "$candidate_path" in
+    "$fhs_usr_bin"/*|"$fhs_bin"/*)
+      claude_bootstrap_fhs_symlink_safe \
+        "$candidate_path" \
+        "$trusted_readlink" \
+        "$fhs_usr_bin" \
+        "$fhs_bin" \
+        "$alternatives_root"
+      return $?
+      ;;
+  esac
 
   # Nix profiles expose immutable store executables through per-command
   # symlinks. Match the resolved inode to a regular executable target in the
@@ -79,6 +159,7 @@ claude_build_trusted_bootstrap_path() {
   local trusted_path=""
   local required_utility=""
   local optional_utility=""
+  local trusted_readlink=""
   local trusted_windows_roots=()
 
   if [ -d "$trusted_store_root" ]; then
@@ -127,6 +208,19 @@ claude_build_trusted_bootstrap_path() {
 
   [ -n "$trusted_path" ] || return 1
   PATH="$trusted_path"
+  trusted_readlink="$(type -P readlink 2>/dev/null || true)"
+  if ! claude_bootstrap_utility_safe \
+    readlink \
+    "$trusted_readlink" \
+    "$trusted_store_root" \
+    "$fhs_usr_bin" \
+    "$fhs_bin" \
+    "/etc/alternatives" \
+    "" \
+    "${trusted_windows_roots[@]+"${trusted_windows_roots[@]}"}"; then
+    printf 'Unsafe bootstrap utility entry: readlink\n' >&2
+    return 1
+  fi
   for required_utility in awk basename bash cat chmod cut dirname git grep mkdir mktemp readlink rm sed stat tr wc; do
     candidate_path="$(type -P "$required_utility" 2>/dev/null || true)"
     if ! claude_bootstrap_utility_safe \
@@ -135,6 +229,8 @@ claude_build_trusted_bootstrap_path() {
       "$trusted_store_root" \
       "$fhs_usr_bin" \
       "$fhs_bin" \
+      "/etc/alternatives" \
+      "$trusted_readlink" \
       "${trusted_windows_roots[@]+"${trusted_windows_roots[@]}"}"; then
       printf 'Unsafe bootstrap utility entry: %s\n' "$required_utility" >&2
       return 1
@@ -149,6 +245,8 @@ claude_build_trusted_bootstrap_path() {
       "$trusted_store_root" \
       "$fhs_usr_bin" \
       "$fhs_bin" \
+      "/etc/alternatives" \
+      "$trusted_readlink" \
       "${trusted_windows_roots[@]+"${trusted_windows_roots[@]}"}"; then
       printf 'Unsafe optional bootstrap utility entry: %s\n' "$optional_utility" >&2
       return 1
@@ -164,6 +262,7 @@ PATH="$(claude_build_trusted_bootstrap_path "$CLAUDE_RUNTIME_INHERITED_PATH" "/n
 export PATH
 unset -f claude_build_trusted_bootstrap_path
 unset -f claude_bootstrap_utility_safe
+unset -f claude_bootstrap_fhs_symlink_safe
 unset BASH_ENV ENV
 
 set -euo pipefail
@@ -196,6 +295,7 @@ MAX_BUDGET_USD=""
 REVIEW_TIMEOUT_SECONDS=""
 CLAUDE_RUNTIME_CWD=""
 CLAUDE_PROCESS_DRIVER=""
+CLAUDE_PROCESS_DRIVER_TRANSPORT=""
 
 CLAUDE_BIN=""
 CLAUDE_TARGET=""
@@ -515,7 +615,8 @@ trap 'rm -rf "$CLAUDE_RUNTIME_CWD"' EXIT
 CLAUDE_PROCESS_DRIVER="$CLAUDE_RUNTIME_CWD/process-driver.py"
 if claude_runtime_resolve_trusted_python "$REPO_ROOT" "$CLAUDE_INVOCATION_CWD" "$CLAUDE_RUNTIME_CWD"; then
   if ! claude_runtime_write_python_driver "$CLAUDE_PROCESS_DRIVER" || \
-    ! "$CLAUDE_RUNTIME_PYTHON_BIN" -I - "$CLAUDE_PROCESS_DRIVER" <<'PY' >/dev/null 2>&1
+    ! CLAUDE_PROCESS_DRIVER_TRANSPORT="$(claude_runtime_python_transport_path "$CLAUDE_PROCESS_DRIVER")" || \
+    ! MSYS2_ARG_CONV_EXCL='*' "$CLAUDE_RUNTIME_PYTHON_BIN" -I - "$CLAUDE_PROCESS_DRIVER_TRANSPORT" <<'PY' >/dev/null 2>&1
 from pathlib import Path
 import sys
 
@@ -1005,6 +1106,7 @@ result_is_error() {
 stamp_review_output_mode() {
   local output="$1"
   local tmp_output=""
+  local tmp_output_transport=""
 
   if [ -z "$output" ]; then
     return 1
@@ -1027,7 +1129,8 @@ stamp_review_output_mode() {
   if [ -n "${CLAUDE_RUNTIME_PYTHON_BIN:-}" ]; then
     tmp_output="$(mktemp /tmp/claude-review-output-XXXXXX)"
     printf '%s\n' "$output" > "$tmp_output"
-    if "$CLAUDE_RUNTIME_PYTHON_BIN" -I - "$MODE" "$tmp_output" <<'PY' 2>/dev/null
+    if tmp_output_transport="$(claude_runtime_python_transport_path "$tmp_output")" && \
+      MSYS2_ARG_CONV_EXCL='*' "$CLAUDE_RUNTIME_PYTHON_BIN" -I - "$MODE" "$tmp_output_transport" <<'PY' 2>/dev/null
 import json
 from pathlib import Path
 import sys

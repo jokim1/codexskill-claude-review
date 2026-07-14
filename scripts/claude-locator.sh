@@ -372,6 +372,7 @@ claude_locator_canonical_target() {
   local repo_root="${2:-}"
   local invocation_cwd="${3:-}"
   local link_target=""
+  local link_output=""
   local readlink_bin=""
   local parent=""
   local physical_parent=""
@@ -384,7 +385,12 @@ claude_locator_canonical_target() {
     if [ -z "$readlink_bin" ]; then
       readlink_bin="$(claude_locator_resolve_trusted_utility readlink 2>/dev/null)" || return 2
     fi
-    link_target="$("$readlink_bin" "$current" 2>/dev/null)" || return 2
+    link_output="$("$readlink_bin" -n "$current" 2>/dev/null && printf '\001')" || return 2
+    case "$link_output" in
+      *$'\001') ;;
+      *) return 2 ;;
+    esac
+    link_target="${link_output%$'\001'}"
     case "$link_target" in
       /*)
         current="$link_target"
@@ -616,7 +622,11 @@ claude_locator_validate_candidate() {
   CLAUDE_LOCATOR_VALIDATION_STATUS="missing"
 
   [ -n "$raw_path" ] || return 1
-  launch_path="$(claude_locator_physical_launch_path "$raw_path" "$invocation_cwd" 2>/dev/null)" || return 1
+  launch_path="$(claude_locator_physical_launch_path "$raw_path" "$invocation_cwd" 2>/dev/null && printf '\001')" || return 1
+  case "$launch_path" in
+    *$'\001') launch_path="${launch_path%$'\001'}" ;;
+    *) return 1 ;;
+  esac
   CLAUDE_LOCATOR_LAUNCH_PATH="$launch_path"
 
   if [ ! -e "$launch_path" ] && [ ! -L "$launch_path" ]; then
@@ -630,8 +640,11 @@ claude_locator_validate_candidate() {
     return 1
   fi
 
-  if canonical_target="$(claude_locator_canonical_target "$launch_path" "$repo_root" "$invocation_cwd" 2>/dev/null)"; then
-    :
+  if canonical_target="$(claude_locator_canonical_target "$launch_path" "$repo_root" "$invocation_cwd" 2>/dev/null && printf '\001')"; then
+    case "$canonical_target" in
+      *$'\001') canonical_target="${canonical_target%$'\001'}" ;;
+      *) return 1 ;;
+    esac
   else
     canonical_status=$?
     CLAUDE_LOCATOR_VALIDATION_SCOPE="target"

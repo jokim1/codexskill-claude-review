@@ -136,7 +136,9 @@ The bridge keeps a strict division of labor:
    PATH only from fixed FHS directories, fixed Git-for-Windows roots on Git Bash,
    and physically resolved immutable-store directories. Nix profile links are
    accepted only when their final inode matches a regular executable target in
-   the immutable store.
+   the immutable store. FHS utility links may traverse only a bounded fixed-FHS
+   or `/etc/alternatives` chain whose final executable remains in `/usr/bin` or
+   `/bin`.
 4. The runner selects Claude from inherited PATH, the official native-user
    launcher, or the documented platform-default Homebrew launcher and validates
    both its launch path and canonical target.
@@ -510,10 +512,13 @@ Trust validation prefers the fixed `/usr/bin` or `/bin` `stat` and `readlink`
 utilities. On NixOS it searches the captured inherited PATH and accepts a Nix
 profile symlink only after matching its final inode to a regular executable target
 inside the immutable `/nix/store` boundary. The bootstrap applies the same proof to
-all required utilities. Git Bash additionally admits Git for Windows utilities only
-from its fixed `/mingw64/bin` or `/mingw32/bin` installation roots. Every intermediate
-launcher symlink hop receives the same boundary validation as the launch and final
-target. If no trusted validation utility is available, the bridge fails closed with
+all required utilities. Standard FHS alternatives are resolved with an already
+trusted `readlink`; every hop must stay under `/usr/bin`, `/bin`, or
+`/etc/alternatives`, and the final regular executable must be in `/usr/bin` or
+`/bin`. Git Bash additionally admits Git for Windows utilities only from its fixed
+`/mingw64/bin` or `/mingw32/bin` installation roots. Every intermediate launcher
+symlink hop receives the same boundary validation as the launch and final target.
+If no trusted validation utility is available, the bridge fails closed with
 `claude_path_status=unsafe_candidate` and
 `claude_trust_reason=validation_unavailable`; it never substitutes an arbitrary
 PATH utility or misreports the candidate as world-writable/dangling.

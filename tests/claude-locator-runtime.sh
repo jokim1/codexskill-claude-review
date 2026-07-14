@@ -309,6 +309,17 @@ assert_eq "$TEST_ROOT/trusted/bin/claude-link" "$CLAUDE_LOCATOR_LAUNCH_PATH" "la
 assert_eq "$TEST_ROOT/trusted/bin/claude" "$CLAUDE_LOCATOR_CANONICAL_TARGET" "canonical target separated"
 pass "launch identity and canonical trust identity remain separate"
 
+newline_target="$TEST_ROOT/trusted/bin/claude"$'\n'
+cp "$TEST_ROOT/trusted/bin/claude" "$newline_target"
+chmod 777 "$newline_target"
+ln -s $'claude\n' "$TEST_ROOT/trusted/bin/claude-newline-link"
+if claude_locator_validate_candidate "$TEST_ROOT/trusted/bin/claude-newline-link" "$ROOT" "$TEST_ROOT/work"; then
+  fail "newline-bearing symlink target was validated as a different path"
+fi
+assert_eq "$newline_target" "$CLAUDE_LOCATOR_CANONICAL_TARGET" "trailing newline remains part of canonical target"
+assert_eq "world_writable_file" "$CLAUDE_LOCATOR_VALIDATION_STATUS" "newline-bearing target receives its own trust result"
+pass "canonical symlink resolution preserves trailing newlines exactly"
+
 mkdir -p "$TEST_ROOT/intermediate-world"
 chmod 777 "$TEST_ROOT/intermediate-world"
 ln -s "$TEST_ROOT/trusted/bin/claude" "$TEST_ROOT/intermediate-world/claude-hop"

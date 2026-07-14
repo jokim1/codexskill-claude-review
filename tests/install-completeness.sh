@@ -126,6 +126,54 @@ assert "installation is incomplete" not in data["summary"]
 PY
 pass "runner and doctor bootstrap both helpers from the tested checkout"
 
+# Validate the standard Debian/Ubuntu alternatives shape without admitting an
+# arbitrary symlink target: FHS entry -> /etc/alternatives entry -> FHS binary.
+alternatives_root="$TEST_ROOT/fhs-alternatives"
+alternatives_usr_bin="$alternatives_root/usr/bin"
+alternatives_bin="$alternatives_root/bin"
+alternatives_etc="$alternatives_root/etc/alternatives"
+alternatives_external="$alternatives_root/external-awk"
+trusted_readlink="$(type -P readlink 2>/dev/null || true)"
+[ -n "$trusted_readlink" ] || fail "trusted readlink unavailable for alternatives fixture"
+mkdir -p "$alternatives_usr_bin" "$alternatives_bin" "$alternatives_etc"
+cp "$(type -P awk)" "$alternatives_usr_bin/mawk"
+chmod 755 "$alternatives_usr_bin/mawk"
+ln -s ../../usr/bin/mawk "$alternatives_etc/awk"
+ln -s ../../etc/alternatives/awk "$alternatives_usr_bin/awk"
+for bootstrap_script in "$ROOT/scripts/run-review.sh" "$ROOT/scripts/claude-doctor.sh"; do
+  (
+    eval "$(sed -n '/^claude_bootstrap_fhs_symlink_safe() {$/,/^claude_build_trusted_bootstrap_path() {$/p' "$bootstrap_script" | sed '$d')"
+    claude_bootstrap_utility_safe \
+      awk \
+      "$alternatives_usr_bin/awk" \
+      "$TEST_ROOT/missing-store" \
+      "$alternatives_usr_bin" \
+      "$alternatives_bin" \
+      "$alternatives_etc" \
+      "$trusted_readlink"
+  ) || fail "$(basename "$bootstrap_script") rejected a bounded FHS alternatives chain"
+
+  cp "$alternatives_usr_bin/mawk" "$alternatives_external"
+  rm "$alternatives_etc/awk"
+  ln -s "$alternatives_external" "$alternatives_etc/awk"
+  if (
+    eval "$(sed -n '/^claude_bootstrap_fhs_symlink_safe() {$/,/^claude_build_trusted_bootstrap_path() {$/p' "$bootstrap_script" | sed '$d')"
+    claude_bootstrap_utility_safe \
+      awk \
+      "$alternatives_usr_bin/awk" \
+      "$TEST_ROOT/missing-store" \
+      "$alternatives_usr_bin" \
+      "$alternatives_bin" \
+      "$alternatives_etc" \
+      "$trusted_readlink"
+  ); then
+    fail "$(basename "$bootstrap_script") accepted an alternatives chain outside fixed FHS roots"
+  fi
+  rm "$alternatives_etc/awk"
+  ln -s ../../usr/bin/mawk "$alternatives_etc/awk"
+done
+pass "runner and doctor admit only bounded FHS alternatives chains"
+
 # Simulate a non-FHS Nix host end to end. The fixture rewires only the fixed
 # production trust roots in a copied doctor, then launches that doctor with no
 # FHS utility directories available. macOS may kill relocated system Bash
