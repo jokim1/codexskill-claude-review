@@ -193,6 +193,13 @@ PY
 path_root="$TEST_ROOT/path install=one"
 path_bin="$path_root/bin"
 path_log="$TEST_ROOT/path.log"
+passwd_home="$(python3 - <<'PY'
+import os
+import pwd
+
+print(pwd.getpwuid(os.getuid()).pw_dir)
+PY
+)"
 write_fake_claude "$path_bin/claude"
 path_value="$path_bin:$SYSTEM_PATH"
 basic_output="$({
@@ -205,7 +212,7 @@ basic_output="$({
   CLAUDE_CODE_CLIENT_CERT="doctor-cert-secret" \
   CLAUDE_CODE_CLIENT_KEY="doctor-key-secret" \
   CLAUDE_CODE_CLIENT_KEY_PASSPHRASE="doctor-passphrase-secret" \
-  run_doctor "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$HOME" "$path_value" "$path_log"
+  run_doctor "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$passwd_home" "$path_value" "$path_log"
 })"
 
 assert_line "$basic_output" "CLAUDE_REVIEW_DOCTOR" "doctor header"

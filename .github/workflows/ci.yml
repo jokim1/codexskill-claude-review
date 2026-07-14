@@ -29,6 +29,9 @@ jobs:
       - name: Runner classification tests
         run: bash tests/run-review-sandbox-classification.sh
 
+      - name: Runner discovery and runtime tests
+        run: bash tests/run-review-discovery-runtime.sh
+
       - name: Challenge prompt fixture tests
         run: bash tests/challenge-prompt-fixtures.sh
 

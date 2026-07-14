@@ -751,6 +751,7 @@ bash tests/claude-command-router.sh
 bash tests/claude-doctor.sh
 bash tests/claude-locator-runtime.sh
 bash tests/run-review-sandbox-classification.sh
+bash tests/run-review-discovery-runtime.sh
 bash tests/claude-router-guard-docs.sh
 bash tests/install-completeness.sh
 ```

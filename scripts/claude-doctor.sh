@@ -708,7 +708,8 @@ import json
 import os
 
 try:
-    data = json.loads(os.environ.get("AUTH_STATUS", ""))
+    raw = os.environ.get("AUTH_STATUS", "")
+    data = json.loads(raw)
 except Exception:
     print("claude_auth_status=present_unparsed")
 else:

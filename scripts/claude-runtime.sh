@@ -19,13 +19,7 @@ claude_runtime_build_command() {
   local launch_path="${1:-}"
   shift || true
 
-  CLAUDE_RUNTIME_COMMAND=(
-    "$launch_path"
-  )
-  while [ "$#" -gt 0 ]; do
-    CLAUDE_RUNTIME_COMMAND+=("$1")
-    shift
-  done
+  CLAUDE_RUNTIME_COMMAND=("$launch_path" "$@")
 }
 
 claude_runtime_prepare_python_argv() {

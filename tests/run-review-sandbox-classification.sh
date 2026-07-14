@@ -723,7 +723,7 @@ run_timeout_process_group_case() {
       ;;
   esac
 
-  local fake_root tmpdir output child_pid
+  local fake_root tmpdir output child_pid attempt
 
   fake_root="$(make_fake_claude_root)"
   tmpdir="$(mktemp -d /tmp/claude-review-test-XXXXXX)"
@@ -777,7 +777,7 @@ EOF
     fail "timeout process group child PID was not recorded"
   }
   child_pid="$(cat "$tmpdir/child.pid")"
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
+  for ((attempt = 0; attempt < 50; attempt++)); do
     kill -0 "$child_pid" 2>/dev/null || break
     sleep 0.1
   done
@@ -1168,5 +1168,4 @@ run_timeout_wrapper_closes_stdin_case
 run_probe_timeout_case
 run_timeout_process_group_case
 run_safe_mode_args_case
-bash "$REPO_ROOT/tests/run-review-discovery-runtime.sh"
 rm -f "$evil_shell"

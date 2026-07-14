@@ -79,9 +79,7 @@ claude_locator_materialize_windows_executable_path() {
       return 0
       ;;
   esac
-  if claude_locator_exact_entry_exists "$candidate"; then
-    printf '%s' "$candidate"
-  elif claude_locator_exact_entry_exists "${candidate}.exe"; then
+  if ! claude_locator_exact_entry_exists "$candidate" && claude_locator_exact_entry_exists "${candidate}.exe"; then
     printf '%s.exe' "$candidate"
   else
     printf '%s' "$candidate"
