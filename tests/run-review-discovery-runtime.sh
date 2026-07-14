@@ -223,8 +223,10 @@ native_output="$(run_runner "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$native_home
 assert_json_status "$native_output" clean ok
 grep -Fq "executable=$native_home/.local/bin/claude" "$native_log" || fail "native launch path not executed"
 [ "$(grep '^call=' "$native_log" | wc -l | tr -d ' ')" = "4" ] || fail "runner did not execute version/auth/preflight/review"
-grep -q '^ANTHROPIC_API_KEY=absent$' "$native_log" || fail "runner API credential scrub"
-grep -q '^ENV=absent$' "$native_log" || fail "runner ENV scrub"
+for scrubbed_name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV; do
+  grep -q "^${scrubbed_name}=absent$" "$native_log" || fail "runner did not scrub $scrubbed_name"
+done
+grep -q '^preserved=runner-preserved$' "$native_log" || fail "runner dropped non-sensitive inherited environment"
 [ "$(grep '^path=' "$native_log" | sort -u)" = "path=$SYSTEM_PATH" ] || fail "runner PATH changed"
 [ "$(grep '^cwd=' "$native_log" | sort -u | wc -l | tr -d ' ')" = "1" ] || fail "runner CWD drifted across call sites"
 grep -Eq '^cwd=/(private/)?tmp/claude-review-runtime-' "$native_log" || fail "runner did not use isolated runtime CWD"
