@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
 
+if [ -n "${BASH_ENV-}" ] || [ -n "${ENV-}" ]; then
+  printf '%s\n' 'claude-doctor.sh requires BASH_ENV and ENV to be empty before Bash starts; invoke it with: BASH_ENV= ENV= /bin/bash --noprofile --norc <installed-doctor>' >&2
+  exit 2
+fi
+
+CLAUDE_RUNTIME_INHERITED_PATH="${PATH-}"
+export CLAUDE_RUNTIME_INHERITED_PATH
+PATH="/usr/bin:/bin"
+export PATH
+unset BASH_ENV ENV
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,7 +20,7 @@ REPO_ROOT="$INVOCATION_CWD"
 CONFIG_FILE=""
 PROBE_TIMEOUT_SECONDS="${CLAUDE_DOCTOR_PROBE_TIMEOUT_SECONDS:-12}"
 SKIP_PROBES="false"
-SKIP_UPDATE_CHECK="${CLAUDE_DOCTOR_SKIP_UPDATE_CHECK:-false}"
+SKIP_UPDATE_CHECK="true"
 LOCATOR_HELPER="$SCRIPT_DIR/claude-locator.sh"
 RUNTIME_HELPER="$SCRIPT_DIR/claude-runtime.sh"
 CONFIG_HELPER="$SCRIPT_DIR/claude-config.sh"
@@ -350,12 +361,7 @@ print_kv "runner_strict_mcp_config" "$(flag_state "$RUN_REVIEW" "--strict-mcp-co
 print_kv "runner_disable_slash_commands" "$(flag_state "$RUN_REVIEW" "--disable-slash-commands")"
 print_kv "router_present" "$([ -f "$ROUTER" ] && printf 'ok' || printf 'missing')"
 
-if [ "$SKIP_UPDATE_CHECK" = "true" ]; then
-  print_kv "update_check" "skipped"
-elif [ -x "$UPDATE_CHECK" ]; then
-  update_output="$(CLAUDE_UPDATE_CHECK_TIMEOUT_SECONDS=5 bash "$UPDATE_CHECK" --show-up-to-date 2>&1 || true)"
-  print_kv "update_check" "$(printf '%s' "$update_output" | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
-fi
+print_kv "update_check" "skipped"
 
 if [ -f "$CONFIG_HELPER" ]; then
   printf 'effective_config_begin\n'
@@ -560,13 +566,13 @@ if [ "$version_status" -eq 124 ]; then
   print_kv "claude_version" "unknown"
   print_kv "claude_runtime_status" "timeout"
   print_kv "claude_runtime_guidance" "The version check timed out; inspect the launcher/interpreter chain or increase --probe-timeout."
-elif [ -n "$version_output" ]; then
+elif [ "$version_status" -eq 0 ] && [ -n "$version_output" ]; then
   print_kv "claude_version" "$version_output"
   print_kv "claude_runtime_status" "available"
 else
   print_kv "claude_version" "unknown"
   print_kv "claude_runtime_status" "unusable_runner"
-  print_kv "claude_runtime_guidance" "Check launcher permissions and required runtime executables in Codex's inherited PATH; no login profile is loaded."
+  print_kv "claude_runtime_guidance" "The version command failed or returned no version. Check launcher permissions and required runtime executables in Codex's inherited PATH; no login profile is loaded."
 fi
 
 auth_status_code=0

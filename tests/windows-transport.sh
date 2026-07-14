@@ -10,6 +10,7 @@ fail() {
 }
 
 grep -Fq 'runs-on: windows-latest' "$ROOT/.github/workflows/ci.yml" || fail "Windows Git Bash CI job missing"
+grep -Fq 'pythonLocation/python3.exe' "$ROOT/.github/workflows/ci.yml" || fail "Windows CI does not materialize production python3.exe"
 python3 - "$ROOT/scripts/claude-runtime.sh" <<'PY'
 from pathlib import Path
 import sys
@@ -71,6 +72,15 @@ esac
 if ! claude_locator_validate_candidate "$CLAUDE_LOCATOR_CANDIDATE_PATH" "$ROOT" "$PWD"; then
   fail "Windows .exe trust validation: $CLAUDE_LOCATOR_VALIDATION_SCOPE:$CLAUDE_LOCATOR_VALIDATION_STATUS"
 fi
+
+cygpath_bin="$(type -P cygpath 2>/dev/null || true)"
+[ -n "$cygpath_bin" ] || fail "trusted cygpath unavailable"
+windows_temp_root="$("$cygpath_bin" -aw "$fixture_root")"
+if TEMP="$windows_temp_root" claude_locator_validate_candidate "$CLAUDE_LOCATOR_CANDIDATE_PATH" "$ROOT" "$PWD"; then
+  fail "Windows-form TEMP root passed trust validation"
+fi
+[ "$CLAUDE_LOCATOR_VALIDATION_STATUS" = "temporary_path" ] || fail "Windows-form TEMP trust reason"
+claude_locator_validate_candidate "$CLAUDE_LOCATOR_CANDIDATE_PATH" "$ROOT" "$PWD" || fail "Windows candidate did not recover after scoped TEMP test"
 
 export ANTHROPIC_API_KEY=secret
 export ANTHROPIC_AUTH_TOKEN=secret
@@ -242,7 +252,7 @@ runner_output="$({
   WINDOWS_SHIM_LOG="$shim_log" \
   ANTHROPIC_API_KEY=runner-secret \
   ANTHROPIC_AUTH_TOKEN=runner-secret \
-  /bin/bash scripts/run-review.sh \
+  BASH_ENV= ENV= /bin/bash --noprofile --norc scripts/run-review.sh \
     --mode code \
     --artifact-file "$artifact_file" \
     --base-prompt "$ROOT/prompts/code-review.base.md" \
@@ -277,7 +287,7 @@ near_limit_output="$({
   cd "$ROOT"
   PATH="$shim_root:$PATH" \
   WINDOWS_SHIM_LOG="$shim_log" \
-  /bin/bash scripts/run-review.sh \
+  BASH_ENV= ENV= /bin/bash --noprofile --norc scripts/run-review.sh \
     --mode code \
     --artifact-file "$artifact_file" \
     --base-prompt "$ROOT/prompts/code-review.base.md" \
@@ -302,7 +312,7 @@ doctor_output="$({
   WINDOWS_SHIM_LOG="$shim_log" \
   ANTHROPIC_API_KEY=doctor-secret \
   ANTHROPIC_AUTH_TOKEN=doctor-secret \
-  /bin/bash scripts/claude-doctor.sh \
+  BASH_ENV= ENV= /bin/bash --noprofile --norc scripts/claude-doctor.sh \
     --repo-root "$ROOT" \
     --skill-root "$ROOT" \
     --config-file "$ROOT/.codex/claude/config.env" \

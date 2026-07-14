@@ -129,8 +129,9 @@ run_runner() {
     ANTHROPIC_BEARER_TOKEN="bearer-secret" \
     ANTHROPIC_CONSOLE_API_KEY="console-secret" \
     ANTHROPIC_CONSOLE_AUTH_TOKEN="console-auth-secret" \
-    ENV="$TEST_ROOT/never-source-env" \
-    /bin/bash "$skill_root/scripts/run-review.sh" \
+    BASH_ENV= \
+    ENV= \
+    /bin/bash --noprofile --norc "$skill_root/scripts/run-review.sh" \
       --mode code \
       --artifact-file "$artifact_file" \
       --base-prompt "$skill_root/prompts/code-review.base.md" \
@@ -155,7 +156,7 @@ run_runner_without_home() {
       PATH="$path_value" \
       FAKE_CLAUDE_LOG="$fake_log" \
       PRESERVED_SENTINEL="runner-preserved" \
-      /bin/bash "$skill_root/scripts/run-review.sh" \
+      BASH_ENV= ENV= /bin/bash --noprofile --norc "$skill_root/scripts/run-review.sh" \
         --mode code \
         --artifact-file "$ARTIFACT_ROOT/claude-review-artifact.txt" \
         --base-prompt "$skill_root/prompts/code-review.base.md" \
@@ -235,6 +236,34 @@ grep -q '^preserved=runner-preserved$' "$native_log" || fail "runner dropped non
 grep -Eq '^cwd=/(private/)?tmp/claude-review-runtime-' "$native_log" || fail "runner did not use isolated runtime CWD"
 grep -q '^arg=\[\]$' "$native_log" || fail "runner lost empty --tools argv"
 pass "runner native fallback and direct-runtime call-site parity"
+
+# The canonical fixed-shell entry must suppress startup hooks before Bash starts,
+# and bridge utilities must not resolve from the caller's PATH. The original PATH
+# still reaches the validated Claude child as runtime data.
+bootstrap_hostile_bin="$TEST_ROOT/bootstrap-hostile/bin"
+bootstrap_hook="$TEST_ROOT/bootstrap-hook.sh"
+bootstrap_hook_marker="$TEST_ROOT/bootstrap-hook-loaded"
+bootstrap_tool_marker="$TEST_ROOT/bootstrap-path-tool-loaded"
+bootstrap_log="$TEST_ROOT/bootstrap.log"
+mkdir -p "$bootstrap_hostile_bin"
+cat > "$bootstrap_hook" <<SH
+printf loaded > "$bootstrap_hook_marker"
+SH
+cat > "$bootstrap_hostile_bin/dirname" <<SH
+#!/bin/bash
+printf loaded > "$bootstrap_tool_marker"
+exit 99
+SH
+chmod 755 "$bootstrap_hostile_bin/dirname"
+bootstrap_output="$({
+  export BASH_ENV="$bootstrap_hook" ENV="$bootstrap_hook"
+  run_runner "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$native_home" "$bootstrap_hostile_bin:$SYSTEM_PATH" "$bootstrap_log"
+})"
+assert_json_status "$bootstrap_output" clean ok
+[ ! -e "$bootstrap_hook_marker" ] || fail "canonical runner invocation sourced BASH_ENV or ENV"
+[ ! -e "$bootstrap_tool_marker" ] || fail "runner bootstrap executed a caller-PATH utility"
+[ "$(grep '^path=' "$bootstrap_log" | sort -u)" = "path=$bootstrap_hostile_bin:$SYSTEM_PATH" ] || fail "runner did not restore inherited PATH for Claude"
+pass "fixed-shell bootstrap rejects startup hooks and caller-PATH utilities"
 
 near_limit_artifact="$ARTIFACT_ROOT/claude-review-near-argv-limit.txt"
 near_limit_log="$TEST_ROOT/near-limit.log"

@@ -233,7 +233,7 @@ private process group. Do not replace either path with direct-process-only
 Review flows may need to run `scripts/run-review.sh` outside the Codex filesystem
 sandbox when the command tool supports that choice. The bridge eventually shells out
 to `claude -p`, and Claude Code may need to create lock or refresh files under
-`~/.claude` even for report-only review. A sandboxed parent `bash` process causes the
+`~/.claude` even for report-only review. A sandboxed parent Bash process causes the
 child `claude` process to inherit the same write restrictions, which can fail with
 `EPERM` on paths such as `~/.claude/.oauth_refresh.lock`.
 
@@ -243,12 +243,16 @@ whether the review bridge itself was sandboxed. Only the review bridge may need 
 boundary:
 
 ```text
-approved prefix: ["bash", "<skill-dir>/scripts/run-review.sh"]
+approved prefix: ["/bin/bash", "--noprofile", "--norc", "<skill-dir>/scripts/run-review.sh"]
 ```
 
-Approving that prefix grants unsandboxed execution to the installed skill script, so
-only approve the exact installed skill path you trust. Do not approve broad prefixes
-such as `["bash"]`, and do not approve repo-local or unreviewed copies of the helper.
+Every runner and doctor invocation must set `BASH_ENV=` and `ENV=` before starting
+fixed `/bin/bash --noprofile --norc`. The bridge captures the caller's PATH as data,
+then uses only `/usr/bin:/bin` for its own bootstrap utilities; the validated Claude
+child still receives the original inherited PATH. Approving the prefix above grants
+unsandboxed execution to the installed skill script, so only approve the exact
+installed skill path you trust. Do not approve broad shell prefixes, and do not
+approve repo-local or unreviewed copies of the helper.
 
 If the command tool cannot request unsandboxed execution and this prefix is not
 already approved, surface the blocked result from `run-review.sh` and tell the user
@@ -348,7 +352,7 @@ RECOMMENDATION: Create or paste a plan, or run /claude-review plan <path-to-plan
 6. Invoke:
 
 ```bash
-bash <skill-dir>/scripts/run-review.sh \
+BASH_ENV= ENV= /bin/bash --noprofile --norc <skill-dir>/scripts/run-review.sh \
   --mode plan \
   --artifact-file <temp-plan-file> \
   --base-prompt <skill-dir>/prompts/plan-review.base.md \
@@ -397,7 +401,7 @@ RECOMMENDATION: Ensure the repo has a reachable base branch or use /claude-revie
    base branch, and inline instructions for every listed part. Otherwise invoke:
 
 ```bash
-bash <skill-dir>/scripts/run-review.sh \
+BASH_ENV= ENV= /bin/bash --noprofile --norc <skill-dir>/scripts/run-review.sh \
   --mode code \
   --artifact-file <temp-artifact-file> \
   --base-prompt <skill-dir>/prompts/code-review.base.md \
@@ -431,7 +435,7 @@ Equivalent to `/claude-review challenge code [inline challenge focus]`.
    part. Otherwise invoke:
 
 ```bash
-bash <skill-dir>/scripts/run-review.sh \
+BASH_ENV= ENV= /bin/bash --noprofile --norc <skill-dir>/scripts/run-review.sh \
   --mode challenge_code \
   --artifact-file <temp-artifact-file> \
   --base-prompt <skill-dir>/prompts/challenge-code.base.md \
@@ -457,7 +461,7 @@ bash <skill-dir>/scripts/run-review.sh \
 3. Invoke:
 
 ```bash
-bash <skill-dir>/scripts/run-review.sh \
+BASH_ENV= ENV= /bin/bash --noprofile --norc <skill-dir>/scripts/run-review.sh \
   --mode challenge_plan \
   --artifact-file <temp-plan-file> \
   --base-prompt <skill-dir>/prompts/challenge-plan.base.md \
@@ -679,7 +683,7 @@ Print the returned effective values.
 Run:
 
 ```bash
-bash <skill-dir>/scripts/claude-doctor.sh \
+BASH_ENV= ENV= /bin/bash --noprofile --norc <skill-dir>/scripts/claude-doctor.sh \
   --repo-root <repo-root> \
   --skill-root <skill-dir> \
   --config-file <repo>/.codex/claude/config.env
@@ -687,8 +691,9 @@ bash <skill-dir>/scripts/claude-doctor.sh \
 
 Render the command output directly. Use this command to diagnose stale skill
 checkouts, stale Codex thread routing, missing safe-mode runner flags, Claude CLI
-discovery/trust/runtime/auth/config problems, inherited environment, and update
-state. Doctor is diagnostic and report-only: it must not install Claude, edit PATH
+discovery/trust/runtime/auth/config problems and inherited environment. Doctor
+always skips the mutating update helper. It is diagnostic and report-only: it must
+not install Claude, edit PATH
 or shell configuration, create a symlink, or otherwise mutate the user's system.
 Treat `claude_trust_reason=validation_unavailable` as a fail-closed unsafe-candidate
 diagnosis; do not recommend bypassing trust validation or using a mutable PATH

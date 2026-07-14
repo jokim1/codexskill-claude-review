@@ -58,8 +58,14 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Verify native Python is available to Git Bash
-        run: python3 --version
+      - name: Materialize the production python3 basename
+        run: |
+          test -n "${pythonLocation:-}"
+          if [ ! -e "$pythonLocation/python3.exe" ]; then
+            cp "$pythonLocation/python.exe" "$pythonLocation/python3.exe"
+          fi
+          "$pythonLocation/python3.exe" --version
+          type -P python3
 
       - name: Windows Git Bash transport
         run: bash tests/windows-transport.sh

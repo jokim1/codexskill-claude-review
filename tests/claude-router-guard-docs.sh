@@ -34,6 +34,9 @@ grep -Fq 'A later or' "$SKILL_FILE" || fail "SKILL.md stale affirmative guard mi
 grep -Fq 'diagnostic only: never modify PATH' "$SKILL_FILE" || fail "SKILL.md doctor mutation prohibition missing"
 grep -Fq 'Budget caps, review timeouts, artifacts, missing' "$SKILL_FILE" || fail "SKILL.md direct-remediation exclusions missing"
 grep -Fq 'state-write denial retain their direct remediation' "$SKILL_FILE" || fail "SKILL.md state-write exclusion missing"
+grep -Fq 'BASH_ENV= ENV= /bin/bash --noprofile --norc <skill-dir>/scripts/run-review.sh' "$SKILL_FILE" || fail "SKILL.md fixed-shell runner invocation missing"
+grep -Fq 'BASH_ENV= ENV= /bin/bash --noprofile --norc <skill-dir>/scripts/claude-doctor.sh' "$SKILL_FILE" || fail "SKILL.md fixed-shell doctor invocation missing"
+grep -Fq 'PATH="/usr/bin:/bin"' "$RUNNER_FILE" || fail "runner fixed bootstrap PATH missing"
 
 python3 - "$RUNNER_FILE" "$SKILL_FILE" <<'PY'
 from pathlib import Path

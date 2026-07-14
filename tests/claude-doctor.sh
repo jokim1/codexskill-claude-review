@@ -62,7 +62,7 @@ if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-v" ]; then
     while :; do :; done
   fi
   printf '2.test.0 (Claude Code fake)\n'
-  exit 0
+  exit "${FAKE_CLAUDE_VERSION_EXIT:-0}"
 fi
 if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
   if [ "${FAKE_CLAUDE_HANG_STAGE:-}" = "auth" ]; then
@@ -101,14 +101,13 @@ run_doctor() {
     ANTHROPIC_BEARER_TOKEN="bearer-secret" \
     ANTHROPIC_CONSOLE_API_KEY="console-secret" \
     ANTHROPIC_CONSOLE_AUTH_TOKEN="console-auth-secret" \
-    BASH_ENV="$TEST_ROOT/nonexistent-bash-env" \
-    ENV="$TEST_ROOT/nonexistent-env" \
-    /bin/bash "$skill_root/scripts/claude-doctor.sh" \
+    BASH_ENV= \
+    ENV= \
+    /bin/bash --noprofile --norc "$skill_root/scripts/claude-doctor.sh" \
       --repo-root "$repo_root" \
       --skill-root "$skill_root" \
       --config-file "$repo_root/.codex/claude/config.env" \
       --probe-timeout 5 \
-      --skip-update-check \
       "$@"
   )
 }
@@ -127,12 +126,11 @@ run_doctor_without_home() {
       PATH="$path_value" \
       FAKE_CLAUDE_LOG="$fake_log" \
       PRESERVED_SENTINEL="preserved-value" \
-      /bin/bash "$skill_root/scripts/claude-doctor.sh" \
+      BASH_ENV= ENV= /bin/bash --noprofile --norc "$skill_root/scripts/claude-doctor.sh" \
         --repo-root "$repo_root" \
         --skill-root "$skill_root" \
         --config-file "$repo_root/.codex/claude/config.env" \
         --probe-timeout 5 \
-        --skip-update-check \
         "$@"
   )
 }
@@ -258,6 +256,19 @@ grep -Eq '^cwd=/(private/)?tmp/claude-review-runtime-' "$path_log" || fail "doct
 grep -q '^arg=\[\]$' "$path_log" || fail "doctor safe probe preserves empty --tools value"
 pass "doctor PATH discovery, runtime parity, env presence, argv, and redaction"
 
+report_only_skill="$TEST_ROOT/report-only-skill"
+doctor_update_marker="$TEST_ROOT/doctor-update-helper-ran"
+copy_fixture_skill "$report_only_skill"
+cat > "$report_only_skill/scripts/claude-update-check.sh" <<SH
+#!/bin/bash
+printf ran > "$doctor_update_marker"
+SH
+chmod 755 "$report_only_skill/scripts/claude-update-check.sh"
+report_only_output="$(run_doctor "$report_only_skill" "$REPO_ROOT" "$REPO_ROOT" "$passwd_home" "$path_value" "$TEST_ROOT/report-only.log" --skip-probes)"
+assert_line "$report_only_output" "update_check=skipped" "report-only update status"
+[ ! -e "$doctor_update_marker" ] || fail "doctor default executed the mutating update helper"
+pass "doctor skips update mutation by default"
+
 unsafe_python_root="$TEST_ROOT/unsafe-python"
 unsafe_python_marker="$TEST_ROOT/unsafe-python-executed"
 mkdir -p "$unsafe_python_root/bin"
@@ -280,6 +291,15 @@ version_timeout_output="$({
       --skip-probes
 })"
 assert_line "$version_timeout_output" "claude_runtime_status=timeout" "bounded version timeout"
+
+version_failure_output="$({
+  FAKE_CLAUDE_VERSION_EXIT=7 \
+    run_doctor "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$HOME" "$path_value" "$path_log" \
+      --skip-probes
+})"
+assert_line "$version_failure_output" "claude_version=unknown" "failed version output is discarded"
+assert_line "$version_failure_output" "claude_runtime_status=unusable_runner" "failed version command is unusable"
+pass "doctor requires a successful version command"
 
 auth_timeout_output="$({
   FAKE_CLAUDE_HANG_STAGE="auth" \

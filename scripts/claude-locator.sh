@@ -88,6 +88,7 @@ claude_locator_materialize_windows_executable_path() {
 
 claude_locator_path_candidate() {
   local invocation_cwd="${1:-$PWD}"
+  local inherited_path="${2:-${CLAUDE_RUNTIME_INHERITED_PATH:-${PATH-}}}"
   local resolved=""
   local remaining=""
   local entry=""
@@ -96,7 +97,7 @@ claude_locator_path_candidate() {
   CLAUDE_LOCATOR_CANDIDATE_PATH=""
   CLAUDE_LOCATOR_CANDIDATE_SOURCE="missing"
 
-  resolved="$(type -P claude 2>/dev/null || true)"
+  resolved="$(PATH="$inherited_path" type -P claude 2>/dev/null || true)"
   if [ -n "$resolved" ]; then
     resolved="$(claude_locator_materialize_windows_executable_path "$resolved")"
     CLAUDE_LOCATOR_CANDIDATE_PATH="$resolved"
@@ -104,7 +105,7 @@ claude_locator_path_candidate() {
     return 0
   fi
 
-  remaining="${PATH-}:"
+  remaining="${inherited_path}:"
   while [ -n "$remaining" ]; do
     entry="${remaining%%:*}"
     remaining="${remaining#*:}"
@@ -488,6 +489,18 @@ claude_locator_boundary_status() {
       ;;
   esac
   for temporary_root in "${temporary_roots[@]}"; do
+    case "${OSTYPE:-}:$temporary_root" in
+      msys*:[A-Za-z]:[\\/]*|mingw*:[A-Za-z]:[\\/]*|cygwin*:[A-Za-z]:[\\/]*)
+        if [ -x /usr/bin/cygpath ]; then
+          temporary_root="$(/usr/bin/cygpath -au "$temporary_root" 2>/dev/null || true)"
+        elif [ -x /usr/bin/cygpath.exe ]; then
+          temporary_root="$(/usr/bin/cygpath.exe -au "$temporary_root" 2>/dev/null || true)"
+        else
+          CLAUDE_LOCATOR_BOUNDARY_STATUS="validation_unavailable"
+          return 1
+        fi
+        ;;
+    esac
     case "$temporary_root" in
       /*)
         ;;

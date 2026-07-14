@@ -129,7 +129,9 @@ The bridge keeps a strict division of labor:
    If `CLAUDE_REVIEW_MAX_ARTIFACT_BYTES` is overridden, use the same value for the
    build step and every review call; the runner never raises its cap from artifact
    headers.
-3. Codex calls `scripts/run-review.sh`.
+3. Codex starts `scripts/run-review.sh` with fixed `/bin/bash --noprofile --norc`
+   while setting `BASH_ENV=` and `ENV=` before Bash starts. The bridge captures the
+   caller's PATH as data and uses `/usr/bin:/bin` for bootstrap utilities.
 4. The runner selects Claude from inherited PATH, the official native-user
    launcher, or the documented platform-default Homebrew launcher and validates
    both its launch path and canonical target.
@@ -593,11 +595,12 @@ with paths like:
 If that happens, approve only the exact installed helper path:
 
 ```text
-["bash", "/Users/<you>/.codex/skills/claude-review/scripts/run-review.sh"]
+["/bin/bash", "--noprofile", "--norc", "/Users/<you>/.codex/skills/claude-review/scripts/run-review.sh"]
 ```
 
-Do not approve broad prefixes such as `["bash"]`, and do not approve repo-local or
-unreviewed copies of the helper.
+Start that command with `BASH_ENV=` and `ENV=` so Bash cannot load startup code
+before the runner's trust bootstrap. Do not approve broad shell prefixes, and do not
+approve repo-local or unreviewed copies of the helper.
 
 Artifact builders, config helpers, and update checks do not need that approval.
 

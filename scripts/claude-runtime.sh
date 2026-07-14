@@ -87,6 +87,7 @@ claude_runtime_resolve_trusted_python() {
   local execution_cwd="${3:-${PWD:-/}}"
   local python_path=""
   local dependency_path=""
+  local inherited_path="${CLAUDE_RUNTIME_INHERITED_PATH:-${PATH-}}"
 
   CLAUDE_RUNTIME_PYTHON_BIN=""
   CLAUDE_RUNTIME_PYTHON_CANONICAL_TARGET=""
@@ -103,7 +104,7 @@ claude_runtime_resolve_trusted_python() {
     return 1
   }
 
-  python_path="$(type -P python3 2>/dev/null || true)"
+  python_path="$(PATH="$inherited_path" type -P python3 2>/dev/null || true)"
   [ -n "$python_path" ] || return 1
   if ! claude_locator_validate_candidate "$python_path" "$repo_root" "$invocation_cwd"; then
     CLAUDE_RUNTIME_PYTHON_STATUS="unsafe"
@@ -447,6 +448,9 @@ claude_runtime_invoke_python_driver() {
 
   (
     claude_runtime_scrub_environment
+    PATH="${CLAUDE_RUNTIME_INHERITED_PATH:-${PATH-}}"
+    export PATH
+    unset CLAUDE_RUNTIME_INHERITED_PATH
     CDPATH=
     cd -P -- "$runtime_cwd" || exit 1
     MSYS2_ARG_CONV_EXCL='*' "$python_bin" -I "$driver_transport" \
@@ -478,6 +482,9 @@ claude_runtime_run_direct() {
   claude_runtime_build_command "$launch_path" "$@"
   (
     claude_runtime_scrub_environment
+    PATH="${CLAUDE_RUNTIME_INHERITED_PATH:-${PATH-}}"
+    export PATH
+    unset CLAUDE_RUNTIME_INHERITED_PATH
     CDPATH=
     cd -P -- "$runtime_cwd" || exit 1
     exec "${CLAUDE_RUNTIME_COMMAND[@]}"
@@ -505,7 +512,7 @@ claude_runtime_resolve_path_dependency() {
   (
     CDPATH=
     cd -P -- "$execution_cwd" 2>/dev/null || exit 1
-    resolved_dependency="$(type -P "$dependency" 2>/dev/null || true)"
+    resolved_dependency="$(PATH="${CLAUDE_RUNTIME_INHERITED_PATH:-${PATH-}}" type -P "$dependency" 2>/dev/null || true)"
     [ -n "$resolved_dependency" ] || exit 0
     case "$resolved_dependency" in
       /*)

@@ -1,5 +1,16 @@
 #!/usr/bin/env bash
 
+if [ -n "${BASH_ENV-}" ] || [ -n "${ENV-}" ]; then
+  printf '%s\n' 'run-review.sh requires BASH_ENV and ENV to be empty before Bash starts; invoke it with: BASH_ENV= ENV= /bin/bash --noprofile --norc <installed-runner>' >&2
+  exit 2
+fi
+
+CLAUDE_RUNTIME_INHERITED_PATH="${PATH-}"
+export CLAUDE_RUNTIME_INHERITED_PATH
+PATH="/usr/bin:/bin"
+export PATH
+unset BASH_ENV ENV
+
 set -euo pipefail
 
 MODE=""
@@ -463,7 +474,7 @@ trusted_review_bridge_guidance() {
     return 0
   fi
 
-  printf 'If this review bridge is running inside the Codex filesystem sandbox, run it outside that sandbox or approve only the exact installed skill run-review.sh path you trust. Do not approve repo-local worktree copies or broad prefixes such as ["bash"]. If it still fails outside the sandbox, check ownership and permissions for ~/.claude or CLAUDE_CONFIG_DIR.'
+  printf 'If this review bridge is running inside the Codex filesystem sandbox, run the fixed-shell command outside that sandbox or approve only ["/bin/bash", "--noprofile", "--norc", "<installed-skill>/scripts/run-review.sh"]. Start it with BASH_ENV and ENV empty. Do not approve repo-local worktree copies or broad shell prefixes. If it still fails outside the sandbox, check ownership and permissions for ~/.claude or CLAUDE_CONFIG_DIR.'
 }
 
 validate_readable_inputs() {

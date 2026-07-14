@@ -93,7 +93,7 @@ ln -s "$python_path" "$TRUSTED_PYTHON_TOOLS/python3"
 doctor_output="$({
   cd "$ROOT"
   HOME="$TEST_ROOT/home" PATH="$TRUSTED_PYTHON_TOOLS:$bootstrap_tools" \
-    /bin/bash "$bootstrap_skill/scripts/claude-doctor.sh" \
+    BASH_ENV= ENV= /bin/bash --noprofile --norc "$bootstrap_skill/scripts/claude-doctor.sh" \
       --repo-root "$ROOT" \
       --skill-root "$bootstrap_skill" \
       --config-file "$ROOT/.codex/claude/config.env" \
@@ -108,7 +108,7 @@ printf 'artifact\n' > "$TEST_ROOT/claude-review-artifact.txt"
 runner_output="$({
   cd "$ROOT"
   HOME="$TEST_ROOT/home" PATH="$TRUSTED_PYTHON_TOOLS:$bootstrap_tools" \
-    /bin/bash "$bootstrap_skill/scripts/run-review.sh" \
+    BASH_ENV= ENV= /bin/bash --noprofile --norc "$bootstrap_skill/scripts/run-review.sh" \
       --mode code \
       --artifact-file "$TEST_ROOT/claude-review-artifact.txt" \
       --base-prompt "$ROOT/prompts/code-review.base.md" \
