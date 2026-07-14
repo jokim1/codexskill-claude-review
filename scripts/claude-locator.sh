@@ -176,7 +176,7 @@ claude_locator_first_present_fallback() {
   fi
 
   claude_locator_homebrew_paths "${OSTYPE:-}" "${MACHTYPE:-}"
-  for candidate in "${CLAUDE_LOCATOR_HOMEBREW_PATHS[@]}"; do
+  for candidate in "${CLAUDE_LOCATOR_HOMEBREW_PATHS[@]+"${CLAUDE_LOCATOR_HOMEBREW_PATHS[@]}"}"; do
     if [ ! -e "$candidate" ] && [ ! -L "$candidate" ]; then
       continue
     fi

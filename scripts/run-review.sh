@@ -546,17 +546,6 @@ build_claude_cmd() {
   SELECTED_CLAUDE_CMD=("${CLAUDE_RUNTIME_COMMAND[@]}")
 }
 
-run_candidate_claude() {
-  local claude_bin="$1"
-  shift
-
-  claude_runtime_run_direct "$CLAUDE_RUNTIME_CWD" "$claude_bin" "$@"
-}
-
-run_selected_claude() {
-  run_candidate_claude "$CLAUDE_BIN" "$@"
-}
-
 run_built_claude_cmd_with_timeout() {
   local timeout_seconds="$1"
   local msys_arg_conv_present="${MSYS2_ARG_CONV_EXCL+x}"
@@ -1222,7 +1211,7 @@ checked_claude_locations() {
     esac
   fi
   claude_locator_homebrew_paths "${OSTYPE:-}" "${MACHTYPE:-}"
-  for homebrew_path in "${CLAUDE_LOCATOR_HOMEBREW_PATHS[@]}"; do
+  for homebrew_path in "${CLAUDE_LOCATOR_HOMEBREW_PATHS[@]+"${CLAUDE_LOCATOR_HOMEBREW_PATHS[@]}"}"; do
     locations="$locations, $homebrew_path"
   done
   printf '%s' "$locations"

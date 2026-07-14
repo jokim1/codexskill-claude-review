@@ -244,13 +244,6 @@ else:
 PY
 }
 
-run_doctor_claude() {
-  local claude_bin="$1"
-  shift
-
-  claude_runtime_run_direct "$CLAUDE_RUNTIME_CWD" "$claude_bin" "$@"
-}
-
 run_doctor_claude_with_timeout() {
   local timeout_seconds="$1"
   local claude_bin="$2"

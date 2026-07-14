@@ -51,6 +51,20 @@ claude_locator_homebrew_paths linux-gnu aarch64-unknown-linux-gnu
 assert_eq "0" "${#CLAUDE_LOCATOR_HOMEBREW_PATHS[@]}" "linux arm excluded"
 pass "documented Homebrew mapping"
 
+/bin/bash -u - "$LOCATOR" "$ROOT/scripts/run-review.sh" <<'BASH'
+locator="$1"
+runner="$2"
+source "$locator"
+claude_locator_native_path() { return 1; }
+claude_locator_native_supported() { return 1; }
+claude_locator_homebrew_paths() { CLAUDE_LOCATOR_HOMEBREW_PATHS=(); }
+claude_locator_first_present_fallback
+[ "$CLAUDE_LOCATOR_CANDIDATE_SOURCE" = "missing" ]
+eval "$(sed -n '/^checked_claude_locations() {$/,/^}$/p' "$runner")"
+[ "$(checked_claude_locations)" = "PATH" ]
+BASH
+pass "empty Homebrew discovery remains nounset-safe on legacy Bash"
+
 windows_identity_root="$TEST_ROOT/windows identity"
 mkdir -p "$windows_identity_root"
 printf 'native exe\n' > "$windows_identity_root/claude.exe"
