@@ -187,15 +187,13 @@ CLAUDE_LOCATOR_HELPER="$SCRIPT_DIR/claude-locator.sh"
 CLAUDE_RUNTIME_HELPER="$SCRIPT_DIR/claude-runtime.sh"
 CLAUDE_INVOCATION_CWD="$(pwd -P)"
 MAX_ARTIFACT_BYTES=""
-# shellcheck source=/dev/null
-source "$CONFIG_HELPER"
 
-LIVE_PROBE_BUDGET_USD="$CLAUDE_CONFIG_DEFAULT_LIVE_PROBE_BUDGET_USD"
-LIVE_PROBE_MODEL="$CLAUDE_CONFIG_DEFAULT_LIVE_PROBE_MODEL"
-EFFORT="$CLAUDE_CONFIG_DEFAULT_EFFORT"
-MODEL="$CLAUDE_CONFIG_DEFAULT_MODEL"
-MAX_BUDGET_USD="$CLAUDE_CONFIG_DEFAULT_MAX_BUDGET_USD"
-REVIEW_TIMEOUT_SECONDS="$CLAUDE_CONFIG_DEFAULT_REVIEW_TIMEOUT_SECONDS"
+LIVE_PROBE_BUDGET_USD=""
+LIVE_PROBE_MODEL=""
+EFFORT=""
+MODEL=""
+MAX_BUDGET_USD=""
+REVIEW_TIMEOUT_SECONDS=""
 CLAUDE_RUNTIME_CWD=""
 CLAUDE_PROCESS_DRIVER=""
 
@@ -435,6 +433,37 @@ emit_bridge_installation_incomplete() {
     "The Claude review bridge installation is incomplete: required helper ${component} could not be loaded safely." \
     "Reinstall or update the complete claude-review skill, then retry."
 }
+
+config_helper_contract_valid() {
+  local required_variable=""
+
+  [ "${CLAUDE_CONFIG_CONTRACT:-}" = "config_v1" ] || return 1
+  for required_variable in \
+    CLAUDE_CONFIG_DEFAULT_EFFORT \
+    CLAUDE_CONFIG_DEFAULT_MODEL \
+    CLAUDE_CONFIG_DEFAULT_MAX_BUDGET_USD \
+    CLAUDE_CONFIG_DEFAULT_REVIEW_TIMEOUT_SECONDS \
+    CLAUDE_CONFIG_DEFAULT_LIVE_PROBE_BUDGET_USD \
+    CLAUDE_CONFIG_DEFAULT_LIVE_PROBE_MODEL; do
+    [ "${!required_variable+x}" = "x" ] && [ -n "${!required_variable}" ] || return 1
+  done
+}
+
+if ! load_required_claude_helper \
+  "$CONFIG_HELPER" \
+  "# claude-review-helper-complete: config_v1" \
+  claude_config_load_file \
+  claude_config_main || ! config_helper_contract_valid; then
+  emit_bridge_installation_incomplete "claude-config.sh"
+  exit 0
+fi
+
+LIVE_PROBE_BUDGET_USD="$CLAUDE_CONFIG_DEFAULT_LIVE_PROBE_BUDGET_USD"
+LIVE_PROBE_MODEL="$CLAUDE_CONFIG_DEFAULT_LIVE_PROBE_MODEL"
+EFFORT="$CLAUDE_CONFIG_DEFAULT_EFFORT"
+MODEL="$CLAUDE_CONFIG_DEFAULT_MODEL"
+MAX_BUDGET_USD="$CLAUDE_CONFIG_DEFAULT_MAX_BUDGET_USD"
+REVIEW_TIMEOUT_SECONDS="$CLAUDE_CONFIG_DEFAULT_REVIEW_TIMEOUT_SECONDS"
 
 if ! load_required_claude_helper \
   "$CLAUDE_LOCATOR_HELPER" \

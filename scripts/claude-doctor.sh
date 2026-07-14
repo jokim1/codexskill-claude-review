@@ -304,10 +304,36 @@ load_required_claude_helper() {
   return 0
 }
 
+config_helper_contract_valid() {
+  local required_variable=""
+
+  [ "${CLAUDE_CONFIG_CONTRACT:-}" = "config_v1" ] || return 1
+  for required_variable in \
+    CLAUDE_CONFIG_DEFAULT_EFFORT \
+    CLAUDE_CONFIG_DEFAULT_MODEL \
+    CLAUDE_CONFIG_DEFAULT_MAX_BUDGET_USD \
+    CLAUDE_CONFIG_DEFAULT_REVIEW_TIMEOUT_SECONDS \
+    CLAUDE_CONFIG_DEFAULT_LIVE_PROBE_BUDGET_USD \
+    CLAUDE_CONFIG_DEFAULT_LIVE_PROBE_MODEL; do
+    [ "${!required_variable+x}" = "x" ] && [ -n "${!required_variable}" ] || return 1
+  done
+}
+
 printf 'CLAUDE_REVIEW_DOCTOR\n'
 print_kv "repo_root" "$REPO_ROOT"
 print_kv "skill_root" "$SKILL_ROOT"
 print_kv "config_file" "$CONFIG_FILE"
+
+if ! load_required_claude_helper \
+  "$CONFIG_HELPER" \
+  "# claude-review-helper-complete: config_v1" \
+  claude_config_load_file \
+  claude_config_main || ! config_helper_contract_valid; then
+  print_kv "doctor_status" "bridge_installation_incomplete"
+  print_kv "bridge_component" "claude-config.sh"
+  print_kv "bridge_guidance" "Reinstall or update the complete claude-review skill, then retry."
+  exit 0
+fi
 
 if ! load_required_claude_helper \
   "$LOCATOR_HELPER" \
@@ -518,7 +544,7 @@ print_kv "update_check" "skipped"
 
 if [ -f "$CONFIG_HELPER" ]; then
   printf 'effective_config_begin\n'
-  bash "$CONFIG_HELPER" show --config-file "$CONFIG_FILE" 2>/dev/null || true
+  "$BASH" --noprofile --norc "$CONFIG_HELPER" show --config-file "$CONFIG_FILE" 2>/dev/null || true
   printf 'effective_config_end\n'
 fi
 

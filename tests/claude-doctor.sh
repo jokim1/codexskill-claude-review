@@ -355,7 +355,6 @@ no_python_skill="$TEST_ROOT/no-python-skill"
 no_python_tools="$TEST_ROOT/no-python-tools"
 copy_fixture_skill "$no_python_skill"
 disable_homebrew_paths "$no_python_skill" "$TEST_ROOT/disabled-no-python-homebrew/claude"
-rm -f "$no_python_skill/scripts/claude-config.sh"
 mkdir -p "$no_python_tools"
 for tool_name in dirname mktemp chmod rm grep; do
   ln -s "$(command -v "$tool_name")" "$no_python_tools/$tool_name"
@@ -676,11 +675,15 @@ run_bootstrap_case() {
 
   copy_fixture_skill "$skill"
   case "$tamper" in
+    missing_config) rm -f "$skill/scripts/claude-config.sh" ;;
     missing_locator) rm -f "$skill/scripts/claude-locator.sh" ;;
     missing_runtime) rm -f "$skill/scripts/claude-runtime.sh" ;;
+    invalid_config) printf 'if then\n# claude-review-helper-complete: config_v1\n' > "$skill/scripts/claude-config.sh" ;;
     invalid_locator) printf 'if then\n# claude-review-helper-complete: locator_v1\n' > "$skill/scripts/claude-locator.sh" ;;
     empty_runtime) : > "$skill/scripts/claude-runtime.sh" ;;
+    no_marker_config) printf 'readonly CLAUDE_CONFIG_CONTRACT="config_v1"\nclaude_config_load_file() { :; }\nclaude_config_main() { :; }\n' > "$skill/scripts/claude-config.sh" ;;
     no_marker_runtime) printf 'claude_runtime_build_command() { :; }\nclaude_runtime_check_launcher_dependency() { :; }\n' > "$skill/scripts/claude-runtime.sh" ;;
+    missing_symbol_config) sed 's/^claude_config_load_file()/claude_config_load_file_missing()/' "$REPO_ROOT/scripts/claude-config.sh" > "$skill/scripts/claude-config.sh" ;;
     missing_symbol_locator) sed 's/^claude_locator_validate_candidate()/claude_locator_validate_candidate_missing()/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
   esac
   output="$(run_doctor "$skill" "$REPO_ROOT" "$REPO_ROOT" "$HOME" "$path_value" "$candidate_log" --skip-probes 2>&1)"
@@ -692,11 +695,15 @@ run_bootstrap_case() {
   pass "doctor bootstrap $case_name"
 }
 
+run_bootstrap_case missing-config missing_config claude-config.sh
 run_bootstrap_case missing-locator missing_locator claude-locator.sh
 run_bootstrap_case missing-runtime missing_runtime claude-runtime.sh
+run_bootstrap_case invalid-config invalid_config claude-config.sh
 run_bootstrap_case invalid-locator invalid_locator claude-locator.sh
 run_bootstrap_case empty-runtime empty_runtime claude-runtime.sh
+run_bootstrap_case no-marker-config no_marker_config claude-config.sh
 run_bootstrap_case no-marker-runtime no_marker_runtime claude-runtime.sh
+run_bootstrap_case missing-symbol-config missing_symbol_config claude-config.sh
 run_bootstrap_case missing-symbol-locator missing_symbol_locator claude-locator.sh
 
 pass "claude doctor diagnostics"

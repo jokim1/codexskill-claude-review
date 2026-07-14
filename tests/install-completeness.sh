@@ -36,10 +36,11 @@ path.write_text(text)
 PY
 }
 
-for helper in scripts/claude-locator.sh scripts/claude-runtime.sh; do
+for helper in scripts/claude-config.sh scripts/claude-locator.sh scripts/claude-runtime.sh; do
   [ -r "$ROOT/$helper" ] || fail "$helper is not readable"
   [ -x "$ROOT/$helper" ] || fail "$helper is not executable"
   case "$helper" in
+    *config*) tail -n 1 "$ROOT/$helper" | grep -Fqx '# claude-review-helper-complete: config_v1' || fail "$helper marker" ;;
     *locator*) tail -n 1 "$ROOT/$helper" | grep -Fqx '# claude-review-helper-complete: locator_v1' || fail "$helper marker" ;;
     *runtime*) tail -n 1 "$ROOT/$helper" | grep -Fqx '# claude-review-helper-complete: runtime_v1' || fail "$helper marker" ;;
   esac
