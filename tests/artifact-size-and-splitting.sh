@@ -265,7 +265,7 @@ PY
 
   output="$(
     cd "$REPO_ROOT"
-    bash scripts/run-review.sh \
+    bash --noprofile --norc -p scripts/run-review.sh \
       --mode code \
       --artifact-file "$tmpdir/claude-review-large.txt" \
       --base-prompt prompts/code-review.base.md \
@@ -288,7 +288,7 @@ run_runner_invalid_limit_case() {
 
   output="$(
     cd "$REPO_ROOT"
-    CLAUDE_REVIEW_MAX_ARTIFACT_BYTES=00 bash scripts/run-review.sh \
+    CLAUDE_REVIEW_MAX_ARTIFACT_BYTES=00 bash --noprofile --norc -p scripts/run-review.sh \
       --mode code \
       --artifact-file "$tmpdir/claude-review-small.txt" \
       --base-prompt prompts/code-review.base.md \
@@ -327,7 +327,7 @@ PY
 
   output="$(
     cd "$REPO_ROOT"
-    bash scripts/run-review.sh \
+    bash --noprofile --norc -p scripts/run-review.sh \
       --mode code \
       --artifact-file "$artifact_file" \
       --base-prompt prompts/code-review.base.md \
@@ -368,7 +368,7 @@ PY
 
   output="$(
     cd "$REPO_ROOT"
-    bash scripts/run-review.sh \
+    bash --noprofile --norc -p scripts/run-review.sh \
       --mode code \
       --artifact-file "$artifact_file" \
       --base-prompt prompts/code-review.base.md \

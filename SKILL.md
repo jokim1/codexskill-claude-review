@@ -244,11 +244,12 @@ whether the review bridge itself was sandboxed. Only the review bridge may need 
 boundary:
 
 ```text
-approved prefix: ["<trusted-bash>", "--noprofile", "--norc", "<skill-dir>/scripts/run-review.sh"]
+approved prefix: ["<trusted-bash>", "--noprofile", "--norc", "-p", "<skill-dir>/scripts/run-review.sh"]
 ```
 
 Every runner and doctor invocation must set `BASH_ENV=` and `ENV=` before starting
-an exact trusted Bash with `--noprofile --norc`. Use `/bin/bash` when present; on
+an exact trusted Bash with `--noprofile --norc -p`. Privileged mode prevents Bash
+from importing exported functions before the bridge bootstrap. Use `/bin/bash` when present; on
 NixOS use an absolute, non-symlink Bash whose physical path is inside `/nix/store`.
 Never use a bare `bash` or a mutable custom PATH result. The bridge captures the
 caller's PATH as data, then builds its utility PATH only from fixed `/usr/bin` and
@@ -360,7 +361,7 @@ RECOMMENDATION: Create or paste a plan, or run /claude-review plan <path-to-plan
 6. Invoke:
 
 ```bash
-BASH_ENV= ENV= <trusted-bash> --noprofile --norc <skill-dir>/scripts/run-review.sh \
+BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/run-review.sh \
   --mode plan \
   --artifact-file <temp-plan-file> \
   --base-prompt <skill-dir>/prompts/plan-review.base.md \
@@ -409,7 +410,7 @@ RECOMMENDATION: Ensure the repo has a reachable base branch or use /claude-revie
    base branch, and inline instructions for every listed part. Otherwise invoke:
 
 ```bash
-BASH_ENV= ENV= <trusted-bash> --noprofile --norc <skill-dir>/scripts/run-review.sh \
+BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/run-review.sh \
   --mode code \
   --artifact-file <temp-artifact-file> \
   --base-prompt <skill-dir>/prompts/code-review.base.md \
@@ -443,7 +444,7 @@ Equivalent to `/claude-review challenge code [inline challenge focus]`.
    part. Otherwise invoke:
 
 ```bash
-BASH_ENV= ENV= <trusted-bash> --noprofile --norc <skill-dir>/scripts/run-review.sh \
+BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/run-review.sh \
   --mode challenge_code \
   --artifact-file <temp-artifact-file> \
   --base-prompt <skill-dir>/prompts/challenge-code.base.md \
@@ -469,7 +470,7 @@ BASH_ENV= ENV= <trusted-bash> --noprofile --norc <skill-dir>/scripts/run-review.
 3. Invoke:
 
 ```bash
-BASH_ENV= ENV= <trusted-bash> --noprofile --norc <skill-dir>/scripts/run-review.sh \
+BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/run-review.sh \
   --mode challenge_plan \
   --artifact-file <temp-plan-file> \
   --base-prompt <skill-dir>/prompts/challenge-plan.base.md \
@@ -691,7 +692,7 @@ Print the returned effective values.
 Run:
 
 ```bash
-BASH_ENV= ENV= <trusted-bash> --noprofile --norc <skill-dir>/scripts/claude-doctor.sh \
+BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/claude-doctor.sh \
   --repo-root <repo-root> \
   --skill-root <skill-dir> \
   --config-file <repo>/.codex/claude/config.env

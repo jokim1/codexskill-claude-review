@@ -130,7 +130,7 @@ The bridge keeps a strict division of labor:
    build step and every review call; the runner never raises its cap from artifact
    headers.
 3. Codex starts `scripts/run-review.sh` with an exact trusted Bash and
-   `--noprofile --norc` while setting `BASH_ENV=` and `ENV=` before Bash starts.
+   `--noprofile --norc -p` while setting `BASH_ENV=` and `ENV=` before Bash starts.
    Use `/bin/bash` on FHS systems or an absolute non-symlink `/nix/store` Bash on
    NixOS. The bridge captures the caller's PATH as data and builds its bootstrap
    PATH only from fixed FHS directories, fixed Git-for-Windows roots on Git Bash,
@@ -609,12 +609,13 @@ with paths like:
 If that happens, approve only the exact installed helper path:
 
 ```text
-["<trusted-bash>", "--noprofile", "--norc", "/Users/<you>/.codex/skills/claude-review/scripts/run-review.sh"]
+["<trusted-bash>", "--noprofile", "--norc", "-p", "/Users/<you>/.codex/skills/claude-review/scripts/run-review.sh"]
 ```
 
 Replace `<trusted-bash>` with exact `/bin/bash`, or on NixOS an absolute non-symlink
 Bash physically inside `/nix/store`. Start that command with `BASH_ENV=` and `ENV=`
-so Bash cannot load startup code before the runner's trust bootstrap. Do not approve broad shell prefixes, and do not
+and retain `-p` in the shown position so Bash cannot load startup code or exported
+functions before the runner's trust bootstrap. Do not approve broad shell prefixes, and do not
 approve repo-local or unreviewed copies of the helper.
 
 Artifact builders, config helpers, and update checks do not need that approval.

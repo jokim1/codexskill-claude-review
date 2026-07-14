@@ -313,7 +313,7 @@ runner_output="$({
   WINDOWS_SHIM_LOG="$shim_log" \
   ANTHROPIC_API_KEY=runner-secret \
   ANTHROPIC_AUTH_TOKEN=runner-secret \
-  BASH_ENV= ENV= /bin/bash --noprofile --norc scripts/run-review.sh \
+  BASH_ENV= ENV= /bin/bash --noprofile --norc -p scripts/run-review.sh \
     --mode code \
     --artifact-file "$artifact_file" \
     --base-prompt "$ROOT/prompts/code-review.base.md" \
@@ -348,7 +348,7 @@ near_limit_output="$({
   cd "$ROOT"
   PATH="$shim_root:$PATH" \
   WINDOWS_SHIM_LOG="$shim_log" \
-  BASH_ENV= ENV= /bin/bash --noprofile --norc scripts/run-review.sh \
+  BASH_ENV= ENV= /bin/bash --noprofile --norc -p scripts/run-review.sh \
     --mode code \
     --artifact-file "$artifact_file" \
     --base-prompt "$ROOT/prompts/code-review.base.md" \
@@ -373,7 +373,7 @@ doctor_output="$({
   WINDOWS_SHIM_LOG="$shim_log" \
   ANTHROPIC_API_KEY=doctor-secret \
   ANTHROPIC_AUTH_TOKEN=doctor-secret \
-  BASH_ENV= ENV= /bin/bash --noprofile --norc scripts/claude-doctor.sh \
+  BASH_ENV= ENV= /bin/bash --noprofile --norc -p scripts/claude-doctor.sh \
     --repo-root "$ROOT" \
     --skill-root "$ROOT" \
     --config-file "$ROOT/.codex/claude/config.env" \
@@ -395,7 +395,7 @@ inherited_msys_runner_output="$({
   WINDOWS_SHIM_LOG="$shim_log" \
   EXPECT_INHERITED_MSYS=1 \
   MSYS2_ARG_CONV_EXCL='*' \
-  BASH_ENV= ENV= /bin/bash --noprofile --norc scripts/run-review.sh \
+  BASH_ENV= ENV= /bin/bash --noprofile --norc -p scripts/run-review.sh \
     --mode code \
     --artifact-file "$artifact_file" \
     --base-prompt "$ROOT/prompts/code-review.base.md" \
@@ -420,7 +420,7 @@ inherited_msys_doctor_output="$({
   WINDOWS_SHIM_LOG="$shim_log" \
   EXPECT_INHERITED_MSYS=1 \
   MSYS2_ARG_CONV_EXCL='*' \
-  BASH_ENV= ENV= /bin/bash --noprofile --norc scripts/claude-doctor.sh \
+  BASH_ENV= ENV= /bin/bash --noprofile --norc -p scripts/claude-doctor.sh \
     --repo-root "$ROOT" \
     --skill-root "$ROOT" \
     --config-file "$ROOT/.codex/claude/config.env" \

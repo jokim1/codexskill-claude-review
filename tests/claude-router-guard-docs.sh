@@ -36,9 +36,11 @@ grep -Fq 'A later or' "$SKILL_FILE" || fail "SKILL.md stale affirmative guard mi
 grep -Fq 'diagnostic only: never modify PATH' "$SKILL_FILE" || fail "SKILL.md doctor mutation prohibition missing"
 grep -Fq 'Budget caps, review timeouts, artifacts, missing' "$SKILL_FILE" || fail "SKILL.md direct-remediation exclusions missing"
 grep -Fq 'state-write denial retain their direct remediation' "$SKILL_FILE" || fail "SKILL.md state-write exclusion missing"
-grep -Fq 'BASH_ENV= ENV= <trusted-bash> --noprofile --norc <skill-dir>/scripts/run-review.sh' "$SKILL_FILE" || fail "SKILL.md trusted-shell runner invocation missing"
-grep -Fq 'BASH_ENV= ENV= <trusted-bash> --noprofile --norc <skill-dir>/scripts/claude-doctor.sh' "$SKILL_FILE" || fail "SKILL.md trusted-shell doctor invocation missing"
+grep -Fq 'BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/run-review.sh' "$SKILL_FILE" || fail "SKILL.md trusted-shell runner invocation missing"
+grep -Fq 'BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/claude-doctor.sh' "$SKILL_FILE" || fail "SKILL.md trusted-shell doctor invocation missing"
 grep -Fq 'claude_build_trusted_bootstrap_path' "$RUNNER_FILE" || fail "runner trusted bootstrap PATH missing"
+grep -Fq 'requires Bash privileged mode before line 1' "$RUNNER_FILE" || fail "runner privileged-Bash guard missing"
+grep -Fq 'requires Bash privileged mode before line 1' "$REPO_ROOT/scripts/claude-doctor.sh" || fail "doctor privileged-Bash guard missing"
 grep -Fq '"/mingw64/bin" "/mingw32/bin"' "$RUNNER_FILE" || fail "runner fixed Git-for-Windows roots missing"
 grep -Fq '"$candidate_path" -ef "$store_entry"' "$RUNNER_FILE" || fail "runner Nix profile entry validation missing"
 grep -Fq '"$candidate_path" -ef "$store_target"' "$RUNNER_FILE" || fail "runner Nix profile final-target validation missing"
@@ -50,12 +52,12 @@ mkdir -p "$GUIDANCE_HOME/.codex/skills/claude-review/scripts"
 touch "$GUIDANCE_HOME/.codex/skills/claude-review/scripts/run-review.sh"
 installed_guidance="$({
   HOME="$GUIDANCE_HOME" RUNNER_FILE="$RUNNER_FILE" \
-    BASH_ENV= ENV= /bin/bash --noprofile --norc <<'BASH'
+    BASH_ENV= ENV= /bin/bash --noprofile --norc -p <<'BASH'
 eval "$(sed -n '/^trusted_review_bridge_guidance() {$/,/^}$/p' "$RUNNER_FILE")"
 trusted_review_bridge_guidance
 BASH
 })"
-printf '%s\n' "$installed_guidance" | grep -Fq '["/bin/bash", "--noprofile", "--norc",' || fail "installed-runner guidance lacks exact trusted Bash prefix"
+printf '%s\n' "$installed_guidance" | grep -Fq '["/bin/bash", "--noprofile", "--norc", "-p",' || fail "installed-runner guidance lacks exact trusted Bash prefix"
 printf '%s\n' "$installed_guidance" | grep -Fq 'start it with BASH_ENV= and ENV= empty' || fail "installed-runner guidance lacks startup-environment safeguard"
 if printf '%s\n' "$installed_guidance" | grep -Fq '["bash",'; then
   fail "installed-runner guidance retains bare Bash prefix"

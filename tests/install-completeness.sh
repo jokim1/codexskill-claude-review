@@ -75,6 +75,27 @@ fi
 [ -x "$ROOT/scripts/claude-subscription-env.sh" ] || fail "compatibility helper missing"
 pass "production callers migrated while compatibility entry point remains"
 
+for guarded_script in "$ROOT/scripts/run-review.sh" "$ROOT/scripts/claude-doctor.sh"; do
+  set +e
+  unprivileged_output="$(BASH_ENV= ENV= /bin/bash --noprofile --norc "$guarded_script" --help 2>&1)"
+  unprivileged_status=$?
+  set -e
+  [ "$unprivileged_status" -eq 2 ] || fail "$(basename "$guarded_script") accepted non-privileged Bash"
+  printf '%s\n' "$unprivileged_output" | grep -Fq 'requires Bash privileged mode before line 1' || \
+    fail "$(basename "$guarded_script") omitted privileged-mode guidance"
+
+  function_marker="$TEST_ROOT/$(basename "$guarded_script").imported-function"
+  GUARDED_SCRIPT="$guarded_script" FUNCTION_MARKER="$function_marker" \
+    /bin/bash --noprofile --norc -c '
+cat() { builtin printf cat > "$FUNCTION_MARKER"; }
+type() { builtin printf type > "$FUNCTION_MARKER"; builtin type "$@"; }
+export -f cat type
+BASH_ENV= ENV= /bin/bash --noprofile --norc -p "$GUARDED_SCRIPT" --help >/dev/null
+'
+  [ ! -e "$function_marker" ] || fail "$(basename "$guarded_script") imported an exported Bash function"
+done
+pass "runner and doctor require privileged Bash and ignore exported functions"
+
 # Exercise runner and doctor bootstrap from the tested checkout without executing
 # a real Claude installation.
 bootstrap_skill="$TEST_ROOT/bootstrap-skill"
@@ -94,7 +115,7 @@ ln -s "$python_path" "$TRUSTED_PYTHON_TOOLS/python3"
 doctor_output="$({
   cd "$ROOT"
   HOME="$TEST_ROOT/home" PATH="$TRUSTED_PYTHON_TOOLS:$bootstrap_tools" \
-    BASH_ENV= ENV= /bin/bash --noprofile --norc "$bootstrap_skill/scripts/claude-doctor.sh" \
+    BASH_ENV= ENV= /bin/bash --noprofile --norc -p "$bootstrap_skill/scripts/claude-doctor.sh" \
       --repo-root "$ROOT" \
       --skill-root "$bootstrap_skill" \
       --config-file "$ROOT/.codex/claude/config.env" \
@@ -109,7 +130,7 @@ printf 'artifact\n' > "$TEST_ROOT/claude-review-artifact.txt"
 runner_output="$({
   cd "$ROOT"
   HOME="$TEST_ROOT/home" PATH="$TRUSTED_PYTHON_TOOLS:$bootstrap_tools" \
-    BASH_ENV= ENV= /bin/bash --noprofile --norc "$bootstrap_skill/scripts/run-review.sh" \
+    BASH_ENV= ENV= /bin/bash --noprofile --norc -p "$bootstrap_skill/scripts/run-review.sh" \
       --mode code \
       --artifact-file "$TEST_ROOT/claude-review-artifact.txt" \
       --base-prompt "$ROOT/prompts/code-review.base.md" \
@@ -230,7 +251,7 @@ rm "$non_fhs_profile_bin/git"
 ln -s "$untrusted_nix_git" "$non_fhs_profile_bin/git"
 set +e
 HOME="$TEST_ROOT/home" PATH="$non_fhs_profile_bin" \
-  BASH_ENV= ENV= /bin/bash --noprofile --norc "$non_fhs_skill/scripts/claude-doctor.sh" \
+  BASH_ENV= ENV= /bin/bash --noprofile --norc -p "$non_fhs_skill/scripts/claude-doctor.sh" \
     --repo-root "$ROOT" \
     --skill-root "$non_fhs_skill" \
     --config-file "$ROOT/.codex/claude/config.env" \
@@ -243,7 +264,7 @@ ln -s "$non_fhs_bin/git" "$non_fhs_profile_bin/git"
 non_fhs_output="$({
   cd "$ROOT"
   HOME="$TEST_ROOT/home" PATH="$non_fhs_profile_bin" \
-    BASH_ENV= ENV= /bin/bash --noprofile --norc "$non_fhs_skill/scripts/claude-doctor.sh" \
+    BASH_ENV= ENV= /bin/bash --noprofile --norc -p "$non_fhs_skill/scripts/claude-doctor.sh" \
       --repo-root "$ROOT" \
       --skill-root "$non_fhs_skill" \
       --config-file "$ROOT/.codex/claude/config.env" \
@@ -298,7 +319,7 @@ if old not in text:
 path.write_text(text.replace(old, new, 1))
 PY
 HOME="$TEST_ROOT/home" PATH="$windows_bootstrap_usr:$windows_git_bin" \
-  BASH_ENV= ENV= /bin/bash --noprofile --norc \
+  BASH_ENV= ENV= /bin/bash --noprofile --norc -p \
   "$windows_bootstrap_skill/scripts/run-review.sh" --help >/dev/null
 pass "runner admits git only from the fixed Git-for-Windows root"
 

@@ -131,7 +131,7 @@ run_runner() {
     ANTHROPIC_CONSOLE_AUTH_TOKEN="console-auth-secret" \
     BASH_ENV= \
     ENV= \
-    /bin/bash --noprofile --norc "$skill_root/scripts/run-review.sh" \
+    /bin/bash --noprofile --norc -p "$skill_root/scripts/run-review.sh" \
       --mode code \
       --artifact-file "$artifact_file" \
       --base-prompt "$skill_root/prompts/code-review.base.md" \
@@ -156,7 +156,7 @@ run_runner_without_home() {
       PATH="$path_value" \
       FAKE_CLAUDE_LOG="$fake_log" \
       PRESERVED_SENTINEL="runner-preserved" \
-      BASH_ENV= ENV= /bin/bash --noprofile --norc "$skill_root/scripts/run-review.sh" \
+      BASH_ENV= ENV= /bin/bash --noprofile --norc -p "$skill_root/scripts/run-review.sh" \
         --mode code \
         --artifact-file "$ARTIFACT_ROOT/claude-review-artifact.txt" \
         --base-prompt "$skill_root/prompts/code-review.base.md" \

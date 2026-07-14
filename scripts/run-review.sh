@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 
-if [ -n "${BASH_ENV-}" ] || [ -n "${ENV-}" ]; then
-  printf '%s\n' 'run-review.sh requires BASH_ENV and ENV to be empty before Bash starts; invoke it with: BASH_ENV= ENV= <trusted-bash> --noprofile --norc <installed-runner>' >&2
-  exit 2
+case "$-" in
+  *p*) ;;
+  *)
+    builtin printf '%s\n' 'run-review.sh requires Bash privileged mode before line 1; invoke it with: BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <installed-runner>' >&2
+    builtin exit 2
+    ;;
+esac
+if [[ -n "${BASH_ENV-}" || -n "${ENV-}" ]]; then
+  builtin printf '%s\n' 'run-review.sh requires BASH_ENV and ENV to be empty before Bash starts; invoke it with: BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <installed-runner>' >&2
+  builtin exit 2
 fi
 
 CLAUDE_RUNTIME_INHERITED_PATH="${PATH-}"
@@ -511,7 +518,7 @@ load_required_claude_helper() {
       ;;
   esac
   [ -f "$BASH" ] && [ -x "$BASH" ] || return 1
-  "$BASH" --noprofile --norc -n "$helper_file" >/dev/null 2>&1 || return 1
+  "$BASH" --noprofile --norc -p -n "$helper_file" >/dev/null 2>&1 || return 1
   helper_has_final_marker "$helper_file" "$expected_marker" || return 1
   # shellcheck source=/dev/null
   if source "$helper_file" >/dev/null 2>&1; then
@@ -756,11 +763,11 @@ trusted_review_bridge_guidance() {
   esac
 
   if [ -n "$installed_run_review" ] && [ -e "$installed_run_review" ]; then
-    printf 'If this review bridge is running inside the Codex filesystem sandbox, start it with BASH_ENV= and ENV= empty, run it outside that sandbox, or approve this exact trusted installed-skill command prefix: ["%s", "--noprofile", "--norc", "%s"]. Do not approve repo-local worktree copies or broad shell prefixes. If it still fails outside the sandbox, check ownership and permissions for ~/.claude or CLAUDE_CONFIG_DIR.' "$trusted_bash" "$installed_run_review"
+    printf 'If this review bridge is running inside the Codex filesystem sandbox, start it with BASH_ENV= and ENV= empty, run it outside that sandbox, or approve this exact trusted installed-skill command prefix: ["%s", "--noprofile", "--norc", "-p", "%s"]. Do not approve repo-local worktree copies or broad shell prefixes. If it still fails outside the sandbox, check ownership and permissions for ~/.claude or CLAUDE_CONFIG_DIR.' "$trusted_bash" "$installed_run_review"
     return 0
   fi
 
-  printf 'If this review bridge is running inside the Codex filesystem sandbox, run the fixed-shell command outside that sandbox or approve only ["%s", "--noprofile", "--norc", "<installed-skill>/scripts/run-review.sh"]. Start it with BASH_ENV and ENV empty. Do not approve repo-local worktree copies or broad shell prefixes. If it still fails outside the sandbox, check ownership and permissions for ~/.claude or CLAUDE_CONFIG_DIR.' "$trusted_bash"
+  printf 'If this review bridge is running inside the Codex filesystem sandbox, run the fixed-shell command outside that sandbox or approve only ["%s", "--noprofile", "--norc", "-p", "<installed-skill>/scripts/run-review.sh"]. Start it with BASH_ENV and ENV empty. Do not approve repo-local worktree copies or broad shell prefixes. If it still fails outside the sandbox, check ownership and permissions for ~/.claude or CLAUDE_CONFIG_DIR.' "$trusted_bash"
 }
 
 validate_readable_inputs() {

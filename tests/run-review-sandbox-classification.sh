@@ -209,7 +209,7 @@ EOF
       LIVE_PROBE_TIMEOUT_SECONDS=1 \
       CLAUDE_CONFIG_DIR="$claude_config_dir" \
       SHELL="$shell_path" \
-      bash scripts/run-review.sh \
+      bash --noprofile --norc -p scripts/run-review.sh \
         --mode code \
         --artifact-file "$tmpdir/claude-review-artifact.txt" \
         --base-prompt prompts/code-review.base.md \
@@ -326,7 +326,7 @@ EOF
       REAL_JQ_BIN="$REAL_JQ" \
       REAL_PYTHON_BIN="$PYTHON_BIN" \
       FAKE_CLAUDE_REVIEW_OUTPUT="$review_output" \
-      bash scripts/run-review.sh \
+      bash --noprofile --norc -p scripts/run-review.sh \
         --mode "$runner_mode" \
         --artifact-file "$tmpdir/claude-review-artifact.txt" \
         --base-prompt prompts/code-review.base.md \
@@ -392,7 +392,7 @@ EOF
     PATH="$fake_root/bin:$PATH" \
       REAL_JQ_BIN="$REAL_JQ" \
       REAL_PYTHON_BIN="$PYTHON_BIN" \
-      bash scripts/run-review.sh \
+      bash --noprofile --norc -p scripts/run-review.sh \
         --mode challenge_code \
         --artifact-file "$tmpdir/claude-review-artifact.txt" \
         --base-prompt prompts/code-review.base.md \
@@ -422,7 +422,7 @@ run_artifact_boundary_case() {
 
   output="$(
     cd "$REPO_ROOT"
-    bash scripts/run-review.sh \
+    bash --noprofile --norc -p scripts/run-review.sh \
       --mode code \
       --artifact-file "$tmpdir/not-review-artifact.txt" \
       --base-prompt prompts/code-review.base.md \
@@ -458,7 +458,7 @@ run_config_boundary_case() {
 
   output="$(
     cd "$REPO_ROOT"
-    bash scripts/run-review.sh \
+    bash --noprofile --norc -p scripts/run-review.sh \
       --mode code \
       --artifact-file "$tmpdir/claude-review-artifact.txt" \
       --base-prompt prompts/code-review.base.md \
@@ -504,7 +504,7 @@ EOF
     HOME="$tmpdir/home" \
     PATH="$tmpdir/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
       SHELL=/bin/bash \
-      bash scripts/run-review.sh \
+      bash --noprofile --norc -p scripts/run-review.sh \
         --mode code \
         --artifact-file "$tmpdir/claude-review-artifact.txt" \
         --base-prompt prompts/code-review.base.md \
@@ -573,7 +573,7 @@ EOF
   output="$(
     cd "$REPO_ROOT"
     PATH="$fake_root/bin:$PATH" \
-      bash scripts/run-review.sh \
+      bash --noprofile --norc -p scripts/run-review.sh \
         --mode code \
         --artifact-file "$tmpdir/claude-review-artifact.txt" \
         --base-prompt prompts/code-review.base.md \
@@ -645,7 +645,7 @@ EOF
     cd "$REPO_ROOT"
     PATH="$fake_root/bin:$PATH" \
       LIVE_PROBE_TIMEOUT_SECONDS=1 \
-      bash scripts/run-review.sh \
+      bash --noprofile --norc -p scripts/run-review.sh \
         --mode code \
         --artifact-file "$tmpdir/claude-review-artifact.txt" \
         --base-prompt prompts/code-review.base.md \
@@ -711,7 +711,7 @@ EOF
     PATH="$fake_root/bin:$PATH" \
       LIVE_PROBE_TIMEOUT_SECONDS=1 \
       FAKE_CLAUDE_CHILD_PID_FILE="$tmpdir/child.pid" \
-      bash scripts/run-review.sh \
+      bash --noprofile --norc -p scripts/run-review.sh \
         --mode code \
         --artifact-file "$tmpdir/claude-review-artifact.txt" \
         --base-prompt prompts/code-review.base.md \
@@ -799,7 +799,7 @@ EOF
     cd "$REPO_ROOT"
     PATH="$fake_root/bin:$PATH" \
       FAKE_CLAUDE_ARG_LOG="$arg_log" \
-      bash scripts/run-review.sh \
+      bash --noprofile --norc -p scripts/run-review.sh \
         --mode code \
         --artifact-file "$tmpdir/claude-review-artifact.txt" \
         --base-prompt prompts/code-review.base.md \

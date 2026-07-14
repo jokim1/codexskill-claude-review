@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
 
-if [ -n "${BASH_ENV-}" ] || [ -n "${ENV-}" ]; then
-  printf '%s\n' 'claude-doctor.sh requires BASH_ENV and ENV to be empty before Bash starts; invoke it with: BASH_ENV= ENV= <trusted-bash> --noprofile --norc <installed-doctor>' >&2
-  exit 2
+case "$-" in
+  *p*) ;;
+  *)
+    builtin printf '%s\n' 'claude-doctor.sh requires Bash privileged mode before line 1; invoke it with: BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <installed-doctor>' >&2
+    builtin exit 2
+    ;;
+esac
+if [[ -n "${BASH_ENV-}" || -n "${ENV-}" ]]; then
+  builtin printf '%s\n' 'claude-doctor.sh requires BASH_ENV and ENV to be empty before Bash starts; invoke it with: BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <installed-doctor>' >&2
+  builtin exit 2
 fi
 
 CLAUDE_RUNTIME_INHERITED_PATH="${PATH-}"
@@ -390,7 +397,7 @@ load_required_claude_helper() {
       ;;
   esac
   [ -f "$BASH" ] && [ -x "$BASH" ] || return 1
-  "$BASH" --noprofile --norc -n "$helper_file" >/dev/null 2>&1 || return 1
+  "$BASH" --noprofile --norc -p -n "$helper_file" >/dev/null 2>&1 || return 1
   helper_has_final_marker "$helper_file" "$expected_marker" || return 1
   # shellcheck source=/dev/null
   if source "$helper_file" >/dev/null 2>&1; then
@@ -662,7 +669,7 @@ print_kv "update_check" "skipped"
 
 if [ -f "$CONFIG_HELPER" ]; then
   printf 'effective_config_begin\n'
-  "$BASH" --noprofile --norc "$CONFIG_HELPER" show --config-file "$CONFIG_FILE" 2>/dev/null || true
+  "$BASH" --noprofile --norc -p "$CONFIG_HELPER" show --config-file "$CONFIG_FILE" 2>/dev/null || true
   printf 'effective_config_end\n'
 fi
 

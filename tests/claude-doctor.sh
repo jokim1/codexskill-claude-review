@@ -103,7 +103,7 @@ run_doctor() {
     ANTHROPIC_CONSOLE_AUTH_TOKEN="console-auth-secret" \
     BASH_ENV= \
     ENV= \
-    /bin/bash --noprofile --norc "$skill_root/scripts/claude-doctor.sh" \
+    /bin/bash --noprofile --norc -p "$skill_root/scripts/claude-doctor.sh" \
       --repo-root "$repo_root" \
       --skill-root "$skill_root" \
       --config-file "$repo_root/.codex/claude/config.env" \
@@ -126,7 +126,7 @@ run_doctor_without_home() {
       PATH="$path_value" \
       FAKE_CLAUDE_LOG="$fake_log" \
       PRESERVED_SENTINEL="preserved-value" \
-      BASH_ENV= ENV= /bin/bash --noprofile --norc "$skill_root/scripts/claude-doctor.sh" \
+      BASH_ENV= ENV= /bin/bash --noprofile --norc -p "$skill_root/scripts/claude-doctor.sh" \
         --repo-root "$repo_root" \
         --skill-root "$skill_root" \
         --config-file "$repo_root/.codex/claude/config.env" \
