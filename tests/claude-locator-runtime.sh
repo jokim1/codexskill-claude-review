@@ -496,6 +496,43 @@ driver_output="$(
 )"
 assert_eq "driver-ok" "$driver_output" "isolated Python driver output"
 [ ! -e "$python_injection_marker" ] || fail "isolated Python loaded startup code from CWD or PYTHONPATH"
+unicode_stdout="$TEST_ROOT/work/unicode-stdout"
+unicode_stderr="$TEST_ROOT/work/unicode-stderr"
+claude_runtime_run_with_timeout \
+  "$CLAUDE_RUNTIME_PYTHON_BIN" \
+  "$python_driver" \
+  "$TEST_ROOT/work" \
+  5 \
+  - \
+  "$CLAUDE_RUNTIME_PYTHON_BIN" -c \
+  'import sys; sys.stdout.buffer.write(b"out-\xe2\x98\x83\n"); sys.stderr.buffer.write(b"err-\xe6\x9d\xb1\xe4\xba\xac\n")' \
+  >"$unicode_stdout" 2>"$unicode_stderr"
+"$CLAUDE_RUNTIME_PYTHON_BIN" -I - "$unicode_stdout" "$unicode_stderr" <<'PY'
+from pathlib import Path
+import sys
+
+expected_stdout = b"out-\xe2\x98\x83\n"
+expected_stderr = b"err-\xe6\x9d\xb1\xe4\xba\xac\n"
+actual_stdout = Path(sys.argv[1]).read_bytes()
+actual_stderr = Path(sys.argv[2]).read_bytes()
+if actual_stdout != expected_stdout or actual_stderr != expected_stderr:
+    raise SystemExit(
+        f"UTF-8 forwarding changed bytes: stdout={actual_stdout!r} stderr={actual_stderr!r}"
+    )
+PY
+unicode_probe="$(
+  claude_runtime_probe_with_timeout \
+    unicode \
+    "$CLAUDE_RUNTIME_PYTHON_BIN" \
+    "$python_driver" \
+    "$TEST_ROOT/work" \
+    5 \
+    @probe \
+    "$CLAUDE_RUNTIME_PYTHON_BIN" -c \
+    'import sys; sys.stdin.read(); sys.stdout.buffer.write(b"\xe2\x98\x83"); sys.stderr.buffer.write(b"\xe6\x9d\xb1\xe4\xba\xac")'
+)"
+printf '%s\n' "$unicode_probe" | grep -Fqx 'unicode_stdout_bytes=3' || fail "probe stdout count is not UTF-8 bytes"
+printf '%s\n' "$unicode_probe" | grep -Fqx 'unicode_stderr_bytes=6' || fail "probe stderr count is not UTF-8 bytes"
 empty_driver_path="$(
   PATH="${CLAUDE_RUNTIME_PYTHON_BIN%/*}" \
   CLAUDE_RUNTIME_INHERITED_PATH="" \

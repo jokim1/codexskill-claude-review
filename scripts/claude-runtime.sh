@@ -394,6 +394,16 @@ def _classify(out, err, returncode):
     return "ok" if returncode == 0 else "unexpected_failure"
 
 
+def _write_utf8(stream, value):
+    payload = value.encode("utf-8")
+    binary_stream = getattr(stream, "buffer", None)
+    if binary_stream is None:
+        stream.write(value)
+        return
+    binary_stream.write(payload)
+    binary_stream.flush()
+
+
 def main():
     if len(sys.argv) < 8 or sys.argv[1] not in {"run", "probe"}:
         raise SystemExit(2)
@@ -423,13 +433,13 @@ def main():
         print(f"{label}_status={'timeout' if timed_out else 'completed'}")
         print(f"{label}_returncode={returncode}")
         print(f"{label}_elapsed_seconds={elapsed:.2f}")
-        print(f"{label}_stdout_bytes={len(out)}")
-        print(f"{label}_stderr_bytes={len(err)}")
+        print(f"{label}_stdout_bytes={len(out.encode('utf-8'))}")
+        print(f"{label}_stderr_bytes={len(err.encode('utf-8'))}")
         print(f"{label}_classification={_classify(out, err, returncode)}")
         return 0
 
-    sys.stdout.write(out)
-    sys.stderr.write(err)
+    _write_utf8(sys.stdout, out)
+    _write_utf8(sys.stderr, err)
     return 124 if timed_out else returncode
 
 

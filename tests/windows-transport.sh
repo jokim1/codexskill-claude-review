@@ -26,6 +26,10 @@ for token in (
     'process_options["start_new_session"] = True',
     'encoding="utf-8"',
     'errors="replace"',
+    "len(out.encode('utf-8'))",
+    "len(err.encode('utf-8'))",
+    '_write_utf8(sys.stdout, out)',
+    '_write_utf8(sys.stderr, err)',
     'return _as_text(exc.output), _as_text(exc.stderr)',
     "proc.communicate(timeout=3)",
     "proc.wait(timeout=1)",
@@ -169,6 +173,30 @@ if proc.returncode != 0 or out != expected or err or timed_out:
     raise SystemExit(
         f"UTF-8 pipe transport failed: rc={proc.returncode} out={out!r} "
         f"err={err!r} timed_out={timed_out}"
+    )
+PY
+forward_stdout="$runtime_cwd/forward-stdout"
+forward_stderr="$runtime_cwd/forward-stderr"
+claude_runtime_run_with_timeout \
+  "$CLAUDE_RUNTIME_PYTHON_BIN" \
+  "$process_driver" \
+  "$runtime_cwd" \
+  10 \
+  - \
+  "$CLAUDE_RUNTIME_PYTHON_BIN" -c \
+  'import sys; sys.stdout.buffer.write(b"out-\xe2\x98\x83\n"); sys.stderr.buffer.write(b"err-\xe6\x9d\xb1\xe4\xba\xac\n")' \
+  >"$forward_stdout" 2>"$forward_stderr"
+"$python_bin" -I - "$forward_stdout" "$forward_stderr" <<'PY'
+from pathlib import Path
+import sys
+
+expected_stdout = b"out-\xe2\x98\x83\n"
+expected_stderr = b"err-\xe6\x9d\xb1\xe4\xba\xac\n"
+actual_stdout = Path(sys.argv[1]).read_bytes()
+actual_stderr = Path(sys.argv[2]).read_bytes()
+if actual_stdout != expected_stdout or actual_stderr != expected_stderr:
+    raise SystemExit(
+        f"Windows UTF-8 forwarding changed bytes: stdout={actual_stdout!r} stderr={actual_stderr!r}"
     )
 PY
 claude_runtime_check_launcher_dependency "$windows_claude_target" "$runtime_cwd" || fail "native Windows executable classification"
