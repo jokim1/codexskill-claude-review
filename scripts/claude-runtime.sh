@@ -48,11 +48,13 @@ claude_runtime_check_launcher_dependency() {
   local payload=""
   local interpreter=""
   local dependency=""
+  local dependency_path=""
   local remainder=""
   local extra=""
 
   CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unknown"
   CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="none"
+  CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="none"
 
   [ -f "$canonical_target" ] || return 0
   IFS= read -r -n 4096 first_line < "$canonical_target" || true
@@ -76,24 +78,27 @@ claude_runtime_check_launcher_dependency() {
         return 0
         ;;
     esac
-    if type -P "$dependency" >/dev/null 2>&1; then
+    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="$dependency"
+    dependency_path="$(type -P "$dependency" 2>/dev/null || true)"
+    if [ -n "$dependency_path" ]; then
       CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="available"
+      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="$dependency_path"
       return 0
     fi
     CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="missing"
-    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="$dependency"
     return 1
   fi
 
   case "$interpreter" in
     /*)
       dependency="${interpreter##*/}"
+      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="$dependency"
       if [ -x "$interpreter" ]; then
         CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="available"
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="$interpreter"
         return 0
       fi
       CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="missing"
-      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="$dependency"
       return 1
       ;;
   esac

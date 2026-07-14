@@ -188,6 +188,14 @@ if claude_locator_validate_candidate "$TEST_ROOT/world-writable/bin/claude" "$RO
 fi
 assert_eq "world_writable_parent" "$CLAUDE_LOCATOR_VALIDATION_STATUS" "world-writable reason"
 
+cp "$TEST_ROOT/trusted/bin/claude" "$TEST_ROOT/trusted/bin/world-writable-claude"
+chmod 777 "$TEST_ROOT/trusted/bin/world-writable-claude"
+if claude_locator_validate_candidate "$TEST_ROOT/trusted/bin/world-writable-claude" "$ROOT" "$TEST_ROOT/work"; then
+  fail "world-writable executable file rejected"
+fi
+assert_eq "target" "$CLAUDE_LOCATOR_VALIDATION_SCOPE" "world-writable file scope"
+assert_eq "world_writable_file" "$CLAUDE_LOCATOR_VALIDATION_STATUS" "world-writable file reason"
+
 mkdir -p "$TEST_ROOT/not-regular/claude"
 if claude_locator_validate_candidate "$TEST_ROOT/not-regular/claude" "$ROOT" "$TEST_ROOT/work"; then
   fail "non-regular candidate rejected"
@@ -324,7 +332,36 @@ SH
 chmod 755 "$TEST_ROOT/trusted/bin/existing-interpreter-exit"
 claude_runtime_check_launcher_dependency "$TEST_ROOT/trusted/bin/existing-interpreter-exit" || fail "existing interpreter available"
 assert_eq "available" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "exit code never drives dependency classification"
+assert_eq "/bin/bash" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" "absolute interpreter path retained for trust validation"
 pass "unsupported and exit-code-only dependency cases remain unclassified"
+
+dependency_invocation="$TEST_ROOT/dependency-invocation"
+dependency_launcher="$TEST_ROOT/trusted/bin/path-interpreter"
+mkdir -p "$dependency_invocation/bin"
+ln -s /bin/bash "$dependency_invocation/bin/fake-node"
+cat > "$dependency_launcher" <<'SH'
+#!/usr/bin/env fake-node
+exit 0
+SH
+chmod 755 "$dependency_launcher"
+saved_path="$PATH"
+PATH="$dependency_invocation/bin:$PATH"
+export PATH
+claude_runtime_check_launcher_dependency "$dependency_launcher" || fail "PATH interpreter resolved"
+assert_eq "$dependency_invocation/bin/fake-node" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" "PATH interpreter path retained"
+claude_locator_validate_candidate "$dependency_launcher" "$ROOT" "$TEST_ROOT/work" || fail "launcher remains trusted"
+selected_launch="$CLAUDE_LOCATOR_LAUNCH_PATH"
+selected_target="$CLAUDE_LOCATOR_CANONICAL_TARGET"
+if claude_locator_validate_launcher_dependency "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" "$ROOT" "$dependency_invocation"; then
+  fail "interpreter inside invocation CWD rejected"
+fi
+assert_eq "launch" "$CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_SCOPE" "dependency trust scope"
+assert_eq "invocation_cwd_path" "$CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_STATUS" "dependency trust reason"
+assert_eq "$selected_launch" "$CLAUDE_LOCATOR_LAUNCH_PATH" "launcher diagnostic launch path preserved"
+assert_eq "$selected_target" "$CLAUDE_LOCATOR_CANONICAL_TARGET" "launcher diagnostic target preserved"
+PATH="$saved_path"
+export PATH
+pass "launcher interpreters reuse trust validation without clobbering launcher diagnostics"
 
 # A BASH_ENV/ENV set in an already-running shell must not reach or initialize the
 # candidate interpreter.

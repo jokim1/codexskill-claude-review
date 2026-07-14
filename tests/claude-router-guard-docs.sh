@@ -59,6 +59,7 @@ eligible = {
     "missing_binary",
     "unusable_runner",
     "launcher_dependency_missing",
+    "launcher_dependency_unsafe",
     "subscription_auth_unavailable",
     "ambiguous_auth",
     "probe_timed_out",

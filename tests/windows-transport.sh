@@ -59,6 +59,7 @@ export ENV="$fixture_root/never-source-env"
 claude_runtime_build_command "$CLAUDE_LOCATOR_LAUNCH_PATH" /d /c "if defined ANTHROPIC_API_KEY (exit /b 41) else (echo direct-ok)"
 direct_output="$({
   claude_runtime_scrub_environment
+  export MSYS2_ARG_CONV_EXCL='*'
   cd "$runtime_cwd"
   "${CLAUDE_RUNTIME_COMMAND[@]}"
 })"
@@ -67,6 +68,7 @@ printf '%s' "$direct_output" | grep -Fq 'direct-ok' || fail "direct .exe transpo
 claude_runtime_build_command "$CLAUDE_LOCATOR_LAUNCH_PATH" /d /c echo "space arg" "" "equals=value"
 argv_output="$({
   claude_runtime_scrub_environment
+  export MSYS2_ARG_CONV_EXCL='*'
   cd "$runtime_cwd"
   "${CLAUDE_RUNTIME_COMMAND[@]}"
 })"
@@ -78,6 +80,7 @@ python_bin="$(type -P python3 2>/dev/null || type -P python 2>/dev/null || true)
 claude_runtime_build_command "$CLAUDE_LOCATOR_LAUNCH_PATH" /d /c "echo timeout-ok"
 timeout_output="$({
   claude_runtime_scrub_environment
+  export MSYS2_ARG_CONV_EXCL='*'
   cd "$runtime_cwd"
   "$python_bin" - 10 "${CLAUDE_RUNTIME_COMMAND[@]}" <<'PY'
 import os

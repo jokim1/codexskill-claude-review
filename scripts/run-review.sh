@@ -272,7 +272,8 @@ if ! load_required_claude_helper \
   claude_locator_native_path \
   claude_locator_homebrew_paths \
   claude_locator_first_present_fallback \
-  claude_locator_validate_candidate; then
+  claude_locator_validate_candidate \
+  claude_locator_validate_launcher_dependency; then
   emit_bridge_installation_incomplete "claude-locator.sh"
   exit 0
 fi
@@ -469,7 +470,7 @@ failure_priority() {
     missing_binary)
       printf '1'
       ;;
-    unusable_runner|launcher_dependency_missing)
+    unusable_runner|launcher_dependency_missing|launcher_dependency_unsafe)
       printf '2'
       ;;
     subscription_auth_unavailable)
@@ -519,7 +520,7 @@ record_failure() {
 
 failure_offers_doctor() {
   case "${1:-}" in
-    missing_binary|unusable_runner|launcher_dependency_missing|subscription_auth_unavailable|ambiguous_auth|probe_timed_out|invocation_failed)
+    missing_binary|unusable_runner|launcher_dependency_missing|launcher_dependency_unsafe|subscription_auth_unavailable|ambiguous_auth|probe_timed_out|invocation_failed)
       return 0
       ;;
     *)
@@ -959,6 +960,18 @@ probe_runner_usability() {
       "launcher_dependency_missing" \
       "Claude Code was found, but its launcher interpreter is unavailable from Codex's inherited PATH." \
       "Make the '${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY}' interpreter available in the environment that launches Codex, or install the recommended native Claude with curl -fsSL https://claude.ai/install.sh | bash. Then run /claude-review doctor."
+    return 1
+  fi
+  if [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" = "available" ] && \
+    [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" != "none" ] && \
+    ! claude_locator_validate_launcher_dependency \
+      "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" \
+      "$REPO_ROOT" \
+      "$CLAUDE_INVOCATION_CWD"; then
+    record_failure \
+      "launcher_dependency_unsafe" \
+      "Claude Code was found, but its launcher interpreter resolves to an unsafe path." \
+      "Use a trusted '${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY}' interpreter outside repository, invocation-CWD, temp, world-writable file, and world-writable parent boundaries. Rejected interpreter: ${CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_SCOPE}:${CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_STATUS}."
     return 1
   fi
 

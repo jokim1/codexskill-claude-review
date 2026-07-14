@@ -674,6 +674,10 @@ or shell configuration, create a symlink, or otherwise mutate the user's system.
 Treat `claude_trust_reason=validation_unavailable` as a fail-closed unsafe-candidate
 diagnosis; do not recommend bypassing trust validation or using a mutable PATH
 utility in order to continue.
+Treat `claude_path_status=launcher_dependency_unsafe` the same way: the recognized
+shebang interpreter failed the launcher's trust boundary and must not be executed.
+Use the emitted `claude_launcher_dependency_path`, trust scope, and trust reason to
+explain which inherited-PATH or absolute interpreter needs repair.
 Do not replace it with a hand-written `claude -p` probe.
 
 ### `/claude-review update`

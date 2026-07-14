@@ -366,6 +366,28 @@ claude_locator_parent_world_writable() {
   return 1
 }
 
+claude_locator_file_world_writable() {
+  local path="$1"
+  local stat_bin=""
+  local mode=""
+  local last_digit=""
+
+  stat_bin="$(claude_locator_resolve_trusted_utility stat 2>/dev/null)" || return 2
+  mode="$("$stat_bin" -f '%Lp' "$path" 2>/dev/null || "$stat_bin" -c '%a' "$path" 2>/dev/null || true)"
+  case "$mode" in
+    ''|*[!0-7]*)
+      return 2
+      ;;
+  esac
+  last_digit="${mode#${mode%?}}"
+  case "$last_digit" in
+    2|3|6|7)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 claude_locator_boundary_status() {
   local path="$1"
   local repo_root="$2"
@@ -405,6 +427,7 @@ claude_locator_validate_candidate() {
   local launch_path=""
   local canonical_target=""
   local canonical_status=0
+  local writable_status=0
 
   CLAUDE_LOCATOR_LAUNCH_PATH=""
   CLAUDE_LOCATOR_CANONICAL_TARGET=""
@@ -475,10 +498,53 @@ claude_locator_validate_candidate() {
     CLAUDE_LOCATOR_VALIDATION_STATUS="$CLAUDE_LOCATOR_BOUNDARY_STATUS"
     return 1
   fi
+  if claude_locator_file_world_writable "$canonical_target"; then
+    CLAUDE_LOCATOR_VALIDATION_SCOPE="target"
+    CLAUDE_LOCATOR_VALIDATION_STATUS="world_writable_file"
+    return 1
+  else
+    writable_status=$?
+    if [ "$writable_status" -eq 2 ]; then
+      CLAUDE_LOCATOR_VALIDATION_SCOPE="target"
+      CLAUDE_LOCATOR_VALIDATION_STATUS="validation_unavailable"
+      return 1
+    fi
+  fi
 
   CLAUDE_LOCATOR_VALIDATION_SCOPE=""
   CLAUDE_LOCATOR_VALIDATION_STATUS="safe"
   return 0
+}
+
+claude_locator_validate_launcher_dependency() {
+  local dependency_path="${1:-}"
+  local repo_root="${2:-}"
+  local invocation_cwd="${3:-}"
+  local saved_launch_path="${CLAUDE_LOCATOR_LAUNCH_PATH-}"
+  local saved_canonical_target="${CLAUDE_LOCATOR_CANONICAL_TARGET-}"
+  local saved_validation_scope="${CLAUDE_LOCATOR_VALIDATION_SCOPE-}"
+  local saved_validation_status="${CLAUDE_LOCATOR_VALIDATION_STATUS-}"
+  local dependency_valid=false
+
+  CLAUDE_LOCATOR_DEPENDENCY_LAUNCH_PATH=""
+  CLAUDE_LOCATOR_DEPENDENCY_CANONICAL_TARGET=""
+  CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_SCOPE="launch"
+  CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_STATUS="missing"
+
+  if claude_locator_validate_candidate "$dependency_path" "$repo_root" "$invocation_cwd"; then
+    dependency_valid=true
+  fi
+  CLAUDE_LOCATOR_DEPENDENCY_LAUNCH_PATH="$CLAUDE_LOCATOR_LAUNCH_PATH"
+  CLAUDE_LOCATOR_DEPENDENCY_CANONICAL_TARGET="$CLAUDE_LOCATOR_CANONICAL_TARGET"
+  CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_SCOPE="$CLAUDE_LOCATOR_VALIDATION_SCOPE"
+  CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_STATUS="$CLAUDE_LOCATOR_VALIDATION_STATUS"
+
+  CLAUDE_LOCATOR_LAUNCH_PATH="$saved_launch_path"
+  CLAUDE_LOCATOR_CANONICAL_TARGET="$saved_canonical_target"
+  CLAUDE_LOCATOR_VALIDATION_SCOPE="$saved_validation_scope"
+  CLAUDE_LOCATOR_VALIDATION_STATUS="$saved_validation_status"
+
+  [ "$dependency_valid" = true ]
 }
 
 # claude-review-helper-complete: locator_v1

@@ -152,7 +152,8 @@ if ! load_required_claude_helper \
   claude_locator_native_path \
   claude_locator_homebrew_paths \
   claude_locator_first_present_fallback \
-  claude_locator_validate_candidate; then
+  claude_locator_validate_candidate \
+  claude_locator_validate_launcher_dependency; then
   print_kv "doctor_status" "bridge_installation_incomplete"
   print_kv "bridge_component" "claude-locator.sh"
   print_kv "bridge_guidance" "Reinstall or update the complete claude-review skill, then retry."
@@ -421,6 +422,9 @@ claude_target="missing"
 trust_scope="none"
 trust_reason="none"
 launcher_dependency="none"
+launcher_dependency_path="none"
+launcher_dependency_trust_scope="none"
+launcher_dependency_trust_reason="none"
 candidate_safe="false"
 
 if [ -n "$candidate_path" ]; then
@@ -437,6 +441,18 @@ if [ -n "$candidate_path" ]; then
       candidate_safe="false"
       path_status="launcher_dependency_missing"
       launcher_dependency="$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY"
+    elif [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" = "available" ] && \
+      [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" != "none" ] && \
+      ! claude_locator_validate_launcher_dependency \
+        "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" \
+        "$REPO_ROOT" \
+        "$INVOCATION_CWD"; then
+      candidate_safe="false"
+      path_status="launcher_dependency_unsafe"
+      launcher_dependency="$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY"
+      launcher_dependency_path="${CLAUDE_LOCATOR_DEPENDENCY_LAUNCH_PATH:-$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH}"
+      launcher_dependency_trust_scope="${CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_SCOPE:-launch}"
+      launcher_dependency_trust_reason="${CLAUDE_LOCATOR_DEPENDENCY_VALIDATION_STATUS:-missing}"
     fi
   else
     claude_bin="${CLAUDE_LOCATOR_LAUNCH_PATH:-$candidate_path}"
@@ -453,7 +469,7 @@ if [ -n "$candidate_path" ]; then
       dangling_symlink)
         path_status="dangling_symlink"
         ;;
-      temporary_path|repository_path|invocation_cwd_path|world_writable_parent|validation_unavailable)
+      temporary_path|repository_path|invocation_cwd_path|world_writable_file|world_writable_parent|validation_unavailable)
         path_status="unsafe_candidate"
         ;;
       *)
@@ -470,6 +486,9 @@ print_kv "claude_target" "$claude_target"
 print_kv "claude_trust_scope" "$trust_scope"
 print_kv "claude_trust_reason" "$trust_reason"
 print_kv "claude_launcher_dependency" "$launcher_dependency"
+print_kv "claude_launcher_dependency_path" "$launcher_dependency_path"
+print_kv "claude_launcher_dependency_trust_scope" "$launcher_dependency_trust_scope"
+print_kv "claude_launcher_dependency_trust_reason" "$launcher_dependency_trust_reason"
 print_kv "claude_runtime_contract" "$CLAUDE_RUNTIME_CONTRACT"
 print_kv "stale_fallback_source" "$stale_source"
 print_kv "stale_fallback_path" "$stale_path"
@@ -492,6 +511,9 @@ if [ "$candidate_safe" != "true" ]; then
       ;;
     launcher_dependency_missing)
       print_kv "claude_guidance" "Expose the named interpreter to Codex's inherited PATH or install native Claude with: curl -fsSL https://claude.ai/install.sh | bash"
+      ;;
+    launcher_dependency_unsafe)
+      print_kv "claude_guidance" "Use a trusted launcher interpreter outside repository, invocation-CWD, temp, world-writable file, and world-writable parent boundaries."
       ;;
   esac
   exit 0

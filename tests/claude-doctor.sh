@@ -305,6 +305,16 @@ assert_line "$world_output" "claude_trust_scope=launch" "world writable scope"
 assert_line "$world_output" "claude_trust_reason=world_writable_parent" "world writable reason"
 [ ! -e "$world_log" ] || fail "world-writable candidate executed"
 
+world_file_root="$TEST_ROOT/world-writable-file"
+world_file_log="$TEST_ROOT/world-file.log"
+write_fake_claude "$world_file_root/bin/claude"
+chmod 777 "$world_file_root/bin/claude"
+world_file_output="$(run_doctor "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$missing_home" "$world_file_root/bin:$SYSTEM_PATH" "$world_file_log" --skip-probes)"
+assert_line "$world_file_output" "claude_path_status=unsafe_candidate" "world-writable file status"
+assert_line "$world_file_output" "claude_trust_scope=target" "world-writable file scope"
+assert_line "$world_file_output" "claude_trust_reason=world_writable_file" "world-writable file reason"
+[ ! -e "$world_file_log" ] || fail "world-writable executable file ran"
+
 invocation_root="$TEST_ROOT/invocation-cwd"
 invocation_log="$TEST_ROOT/invocation.log"
 write_fake_claude "$invocation_root/bin/claude"
@@ -377,6 +387,27 @@ assert_line "$dependency_output" "claude_launcher_dependency=definitely-missing-
 assert_line "$dependency_output" "claude_trust_scope=none" "dependency trust scope"
 assert_line "$dependency_output" "claude_trust_reason=none" "dependency trust reason"
 [ ! -e "$TEST_ROOT/dependency.log" ] || fail "missing dependency launcher executed"
+
+unsafe_dependency_home="$TEST_ROOT/unsafe-dependency-home"
+unsafe_dependency_invocation="$TEST_ROOT/unsafe-dependency-invocation"
+unsafe_dependency_log="$TEST_ROOT/unsafe-dependency.log"
+mkdir -p "$unsafe_dependency_invocation/bin"
+write_fake_claude "$unsafe_dependency_home/.local/bin/claude"
+python3 - "$unsafe_dependency_home/.local/bin/claude" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+path.write_text(path.read_text().replace("#!/bin/bash", "#!/usr/bin/env fake-node", 1))
+PY
+ln -s /bin/bash "$unsafe_dependency_invocation/bin/fake-node"
+unsafe_dependency_output="$(run_doctor "$REPO_ROOT" "$REPO_ROOT" "$unsafe_dependency_invocation" "$unsafe_dependency_home" "$unsafe_dependency_invocation/bin:$SYSTEM_PATH" "$unsafe_dependency_log" --skip-probes)"
+assert_line "$unsafe_dependency_output" "claude_path_status=launcher_dependency_unsafe" "unsafe dependency status"
+assert_line "$unsafe_dependency_output" "claude_launcher_dependency=fake-node" "unsafe dependency name"
+assert_line "$unsafe_dependency_output" "claude_launcher_dependency_path=$unsafe_dependency_invocation/bin/fake-node" "unsafe dependency path"
+assert_line "$unsafe_dependency_output" "claude_launcher_dependency_trust_scope=launch" "unsafe dependency trust scope"
+assert_line "$unsafe_dependency_output" "claude_launcher_dependency_trust_reason=invocation_cwd_path" "unsafe dependency trust reason"
+[ ! -e "$unsafe_dependency_log" ] || fail "unsafe dependency launcher executed"
 pass "doctor launcher-dependency classification"
 
 # Profile-only values are not imported; directly inherited values are presence-only.

@@ -308,6 +308,14 @@ world_output="$(run_runner "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$native_home"
 assert_json_status "$world_output" blocked "unsafe path" "launch:world_writable_parent"
 [ ! -e "$world_log" ] || fail "world-writable candidate executed"
 
+world_file_root="$TEST_ROOT/world-writable-file"
+world_file_log="$TEST_ROOT/world-file.log"
+write_success_claude "$world_file_root/bin/claude"
+chmod 777 "$world_file_root/bin/claude"
+world_file_output="$(run_runner "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$native_home" "$world_file_root/bin:$SYSTEM_PATH" "$world_file_log")"
+assert_json_status "$world_file_output" blocked "unsafe path" "target:world_writable_file"
+[ ! -e "$world_file_log" ] || fail "world-writable executable file ran"
+
 invocation_root="$TEST_ROOT/invocation"
 invocation_log="$TEST_ROOT/invocation.log"
 write_success_claude "$invocation_root/bin/claude"
@@ -383,6 +391,24 @@ SH
 chmod 755 "$absolute_home/.local/bin/claude"
 absolute_output="$(run_runner "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$absolute_home" "$SYSTEM_PATH" "$TEST_ROOT/absolute.log")"
 assert_json_status "$absolute_output" blocked "launcher interpreter is unavailable" "claude-interpreter"
+
+unsafe_dependency_home="$TEST_ROOT/unsafe-dependency-home"
+unsafe_dependency_invocation="$TEST_ROOT/unsafe-dependency-invocation"
+unsafe_dependency_log="$TEST_ROOT/unsafe-dependency.log"
+mkdir -p "$unsafe_dependency_home/.local/bin" "$unsafe_dependency_invocation/bin"
+cp "$native_home/.local/bin/claude" "$unsafe_dependency_home/.local/bin/claude"
+python3 - "$unsafe_dependency_home/.local/bin/claude" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+path.write_text(path.read_text().replace("#!/bin/bash", "#!/usr/bin/env fake-node", 1))
+PY
+ln -s /bin/bash "$unsafe_dependency_invocation/bin/fake-node"
+unsafe_dependency_output="$(run_runner "$REPO_ROOT" "$REPO_ROOT" "$unsafe_dependency_invocation" "$unsafe_dependency_home" "$unsafe_dependency_invocation/bin:$SYSTEM_PATH" "$unsafe_dependency_log")"
+assert_json_status "$unsafe_dependency_output" blocked "launcher interpreter resolves to an unsafe path" "launch:invocation_cwd_path"
+assert_doctor_offer "$unsafe_dependency_output" true
+[ ! -e "$unsafe_dependency_log" ] || fail "unsafe launcher interpreter executed"
 
 exit_home="$TEST_ROOT/exit-127-home"
 mkdir -p "$exit_home/.local/bin"
