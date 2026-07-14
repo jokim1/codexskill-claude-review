@@ -58,10 +58,16 @@ set -euo pipefail
 } >> "${FAKE_CLAUDE_LOG:?}"
 
 if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-v" ]; then
+  if [ "${FAKE_CLAUDE_HANG_STAGE:-}" = "version" ]; then
+    while :; do :; done
+  fi
   printf '2.test.0 (Claude Code fake)\n'
   exit 0
 fi
 if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
+  if [ "${FAKE_CLAUDE_HANG_STAGE:-}" = "auth" ]; then
+    while :; do :; done
+  fi
   printf '{"loggedIn":true,"apiProvider":"firstParty","accessToken":"doctor-auth-secret"}\n'
   exit 0
 fi
@@ -237,6 +243,23 @@ grep -q '^ENV=absent$' "$path_log" || fail "doctor runtime scrubs ENV"
 grep -Eq '^cwd=/(private/)?tmp/claude-review-runtime-' "$path_log" || fail "doctor CWD uses isolated runtime directory"
 grep -q '^arg=\[\]$' "$path_log" || fail "doctor safe probe preserves empty --tools value"
 pass "doctor PATH discovery, runtime parity, env presence, argv, and redaction"
+
+version_timeout_output="$({
+  FAKE_CLAUDE_HANG_STAGE="version" \
+    run_doctor "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$HOME" "$path_value" "$path_log" \
+      --probe-timeout 1 \
+      --skip-probes
+})"
+assert_line "$version_timeout_output" "claude_runtime_status=timeout" "bounded version timeout"
+
+auth_timeout_output="$({
+  FAKE_CLAUDE_HANG_STAGE="auth" \
+    run_doctor "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$HOME" "$path_value" "$path_log" \
+      --probe-timeout 1 \
+      --skip-probes
+})"
+assert_line "$auth_timeout_output" "claude_auth_status=timeout" "bounded auth-status timeout"
+pass "doctor bounds version and auth-status preflight calls"
 
 # Native discovery and inherited HOME diagnostics.
 native_home="$TEST_ROOT/remapped-home"

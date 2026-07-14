@@ -251,6 +251,90 @@ run_doctor_claude() {
   claude_runtime_run_direct "$CLAUDE_RUNTIME_CWD" "$claude_bin" "$@"
 }
 
+run_doctor_claude_with_timeout() {
+  local timeout_seconds="$1"
+  local claude_bin="$2"
+  local msys_arg_conv_present="${MSYS2_ARG_CONV_EXCL+x}"
+  local msys_arg_conv_value="${MSYS2_ARG_CONV_EXCL-}"
+  shift 2
+
+  if ! type -P python3 >/dev/null 2>&1; then
+    return 125
+  fi
+
+  claude_runtime_build_command "$claude_bin" "$@"
+  claude_runtime_prepare_python_argv "${CLAUDE_RUNTIME_COMMAND[@]}" || return 126
+  (
+    claude_runtime_scrub_environment
+    CDPATH=
+    cd -P -- "$CLAUDE_RUNTIME_CWD" || exit 1
+    MSYS2_ARG_CONV_EXCL='*' python3 - \
+      "$timeout_seconds" \
+      "$msys_arg_conv_present" \
+      "$msys_arg_conv_value" \
+      "${CLAUDE_RUNTIME_PYTHON_ARGV[@]}" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+
+timeout = int(sys.argv[1])
+msys_arg_conv_present = sys.argv[2] == "x"
+msys_arg_conv_value = sys.argv[3]
+cmd = sys.argv[4:]
+child_env = os.environ.copy()
+if msys_arg_conv_present:
+    child_env["MSYS2_ARG_CONV_EXCL"] = msys_arg_conv_value
+else:
+    child_env.pop("MSYS2_ARG_CONV_EXCL", None)
+
+process_options = {}
+if os.name == "nt":
+    process_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+else:
+    process_options["start_new_session"] = True
+
+proc = subprocess.Popen(
+    cmd,
+    cwd=os.getcwd(),
+    shell=False,
+    stdin=subprocess.DEVNULL,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+    env=child_env,
+    **process_options,
+)
+try:
+    out, err = proc.communicate(timeout=timeout)
+except subprocess.TimeoutExpired:
+    try:
+        if os.name == "nt":
+            proc.terminate()
+        else:
+            os.killpg(proc.pid, signal.SIGTERM)
+    except OSError:
+        pass
+    try:
+        proc.communicate(timeout=3)
+    except subprocess.TimeoutExpired:
+        try:
+            if os.name == "nt":
+                proc.kill()
+            else:
+                os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        proc.communicate()
+    sys.exit(124)
+
+sys.stdout.write(out)
+sys.stderr.write(err)
+sys.exit(proc.returncode)
+PY
+  )
+}
+
 run_probe() {
   local label="$1"
   local claude_bin="$2"
@@ -593,9 +677,21 @@ if [ "$candidate_safe" != "true" ]; then
   exit 0
 fi
 
-version_output="$(run_doctor_claude "$claude_bin" --version 2>/dev/null || run_doctor_claude "$claude_bin" -v 2>/dev/null || true)"
+version_status=0
+set +e
+version_output="$(run_doctor_claude_with_timeout "$PROBE_TIMEOUT_SECONDS" "$claude_bin" --version 2>/dev/null)"
+version_status=$?
+if [ "$version_status" -ne 0 ] && [ "$version_status" -ne 124 ]; then
+  version_output="$(run_doctor_claude_with_timeout "$PROBE_TIMEOUT_SECONDS" "$claude_bin" -v 2>/dev/null)"
+  version_status=$?
+fi
+set -e
 version_output="$(printf '%s' "$version_output" | sed -n '1p' | cut -c 1-160)"
-if [ -n "$version_output" ]; then
+if [ "$version_status" -eq 124 ]; then
+  print_kv "claude_version" "unknown"
+  print_kv "claude_runtime_status" "timeout"
+  print_kv "claude_runtime_guidance" "The version check timed out; inspect the launcher/interpreter chain or increase --probe-timeout."
+elif [ -n "$version_output" ]; then
   print_kv "claude_version" "$version_output"
   print_kv "claude_runtime_status" "available"
 else
@@ -604,8 +700,15 @@ else
   print_kv "claude_runtime_guidance" "Check launcher permissions and required runtime executables in Codex's inherited PATH; no login profile is loaded."
 fi
 
-auth_status="$(run_doctor_claude "$claude_bin" auth status 2>/dev/null || true)"
-if [ -n "$auth_status" ]; then
+auth_status_code=0
+set +e
+auth_status="$(run_doctor_claude_with_timeout "$PROBE_TIMEOUT_SECONDS" "$claude_bin" auth status 2>/dev/null)"
+auth_status_code=$?
+set -e
+if [ "$auth_status_code" -eq 124 ]; then
+  print_kv "claude_auth_status" "timeout"
+  print_kv "claude_auth_guidance" "The auth status check timed out; inspect credential/keychain access and network reachability or increase --probe-timeout."
+elif [ -n "$auth_status" ]; then
   if type -P python3 >/dev/null 2>&1; then
     AUTH_STATUS="$auth_status" python3 - <<'PY' 2>/dev/null || print_kv "claude_auth_status" "present_unparsed"
 import json

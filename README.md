@@ -555,6 +555,9 @@ Doctor is report-only and will not edit PATH or shell files, install Claude, or
 create symlinks. Its auth diagnostics explicitly use the same
 `subscription_only_credentials_scrubbed` context as review, so an API-key-only
 ordinary Claude setup may work even when bridge subscription auth is unavailable.
+Runner and doctor bound their version, auth-status, and live-probe calls with the
+configured preflight timeout. Doctor reports `claude_runtime_status=timeout` or
+`claude_auth_status=timeout` instead of waiting indefinitely.
 
 ## Sandbox And Claude State
 

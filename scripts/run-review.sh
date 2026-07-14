@@ -953,6 +953,8 @@ probe_runner_usability() {
   local auth_status=""
   local probe_output=""
   local probe_status=0
+  local version_status=0
+  local auth_status_code=0
   local probe_timeout_seconds="$LIVE_PROBE_TIMEOUT_SECONDS"
   local probe_schema='{"type":"object","properties":{"ok":{"const":true}},"required":["ok"],"additionalProperties":false}'
   local probe_args=()
@@ -963,6 +965,14 @@ probe_runner_usability() {
       probe_timeout_seconds="30"
       ;;
   esac
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    record_failure \
+      "unusable_runner" \
+      "Claude Code preflight requires python3 for bounded, discrete-argv execution." \
+      "Install python3 in Codex's inherited PATH, then retry."
+    return 1
+  fi
 
   if ! claude_runtime_check_launcher_dependency "$CLAUDE_TARGET" "$CLAUDE_RUNTIME_CWD"; then
     case "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" in
@@ -1007,7 +1017,18 @@ probe_runner_usability() {
     fi
   done
 
-  if ! run_candidate_claude "$claude_bin" -v >/dev/null 2>&1; then
+  set +e
+  run_candidate_claude_with_timeout "$probe_timeout_seconds" "$claude_bin" -v >/dev/null 2>&1
+  version_status=$?
+  set -e
+  if [ "$version_status" -eq 124 ]; then
+    record_failure \
+      "probe_timed_out" \
+      "Claude Code version check timed out after ${probe_timeout_seconds}s." \
+      "The review was not started. Check the selected launcher and its interpreter chain, or retry after increasing LIVE_PROBE_TIMEOUT_SECONDS."
+    return 1
+  fi
+  if [ "$version_status" -ne 0 ]; then
     record_failure \
       "unusable_runner" \
       "Claude Code was found but could not run with Codex's inherited environment." \
@@ -1015,7 +1036,17 @@ probe_runner_usability() {
     return 1
   fi
 
-  auth_status="$(run_candidate_claude "$claude_bin" auth status 2>/dev/null || true)"
+  set +e
+  auth_status="$(run_candidate_claude_with_timeout "$probe_timeout_seconds" "$claude_bin" auth status 2>/dev/null)"
+  auth_status_code=$?
+  set -e
+  if [ "$auth_status_code" -eq 124 ]; then
+    record_failure \
+      "probe_timed_out" \
+      "Claude Code auth status timed out after ${probe_timeout_seconds}s." \
+      "The review was not started. Check Claude credential/keychain access and network reachability, or retry after increasing LIVE_PROBE_TIMEOUT_SECONDS."
+    return 1
+  fi
   if non_first_party_state "$auth_status"; then
     record_failure \
       "subscription_auth_unavailable" \

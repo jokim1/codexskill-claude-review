@@ -39,7 +39,7 @@ if git -C "$ROOT" ls-files --error-unmatch docs/local-plans/CLAUDE_DISCOVERY_AND
 fi
 pass "local implementation plans remain ignored and unpackaged"
 
-if rg -n 'claude-subscription-env' "$ROOT/scripts/run-review.sh" "$ROOT/scripts/claude-doctor.sh" >/dev/null; then
+if grep -n 'claude-subscription-env' "$ROOT/scripts/run-review.sh" "$ROOT/scripts/claude-doctor.sh" >/dev/null; then
   fail "runner or doctor still references the compatibility helper"
 fi
 [ -x "$ROOT/scripts/claude-subscription-env.sh" ] || fail "compatibility helper missing"

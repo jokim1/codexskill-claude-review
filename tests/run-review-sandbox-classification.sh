@@ -159,6 +159,7 @@ run_case() {
   local shell_path="${10:-/bin/bash}"
   local expected_doctor_offer="${11:-}"
   local fake_auth_status="${12:-}"
+  local fake_hang_stage="${13:-}"
   local fake_root tmpdir output
 
   if [ -z "$fake_auth_status" ]; then
@@ -175,11 +176,17 @@ run_case() {
 set -euo pipefail
 
 if [ "${1:-}" = "-v" ] || [ "${1:-}" = "--version" ]; then
+  if [ "${FAKE_CLAUDE_HANG_STAGE:-}" = "version" ]; then
+    while :; do :; done
+  fi
   printf 'Claude Code fake\n'
   exit 0
 fi
 
 if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
+  if [ "${FAKE_CLAUDE_HANG_STAGE:-}" = "auth" ]; then
+    while :; do :; done
+  fi
   printf '%s\n' "$FAKE_CLAUDE_AUTH_STATUS"
   exit 0
 fi
@@ -213,6 +220,8 @@ EOF
       FAKE_CLAUDE_REVIEW_OUTPUT="$review_output" \
       FAKE_CLAUDE_REVIEW_STATUS="$review_status" \
       FAKE_CLAUDE_AUTH_STATUS="$fake_auth_status" \
+      FAKE_CLAUDE_HANG_STAGE="$fake_hang_stage" \
+      LIVE_PROBE_TIMEOUT_SECONDS=1 \
       CLAUDE_CONFIG_DIR="$claude_config_dir" \
       SHELL="$shell_path" \
       bash scripts/run-review.sh \
@@ -968,6 +977,36 @@ run_case \
   "" \
   "true" \
   '{"loggedIn":true,"apiProvider":"console"}'
+
+run_case \
+  "version preflight timeout is bounded" \
+  "" \
+  0 \
+  "" \
+  0 \
+  "version check timed out after 1s" \
+  "increasing LIVE_PROBE_TIMEOUT_SECONDS" \
+  "" \
+  "" \
+  "" \
+  "true" \
+  "" \
+  "version"
+
+run_case \
+  "auth status timeout is bounded" \
+  "" \
+  0 \
+  "" \
+  0 \
+  "auth status timed out after 1s" \
+  "increasing LIVE_PROBE_TIMEOUT_SECONDS" \
+  "" \
+  "" \
+  "" \
+  "true" \
+  "" \
+  "auth"
 
 run_case \
   "review timeout preserves remediation" \

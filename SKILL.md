@@ -815,6 +815,8 @@ context, command/config boundaries, helper-integrity failures, and Claude
 state-write denial retain their direct remediation without this offer. Doctor is
 diagnostic only: never modify PATH, install Claude, create symlinks, edit profiles,
 or make other system changes in response to the offer.
+Version, auth-status, and live-probe calls are bounded by the preflight timeout;
+doctor renders timeout diagnostics rather than waiting indefinitely.
 
 Each finding should include:
 
