@@ -15,6 +15,26 @@ pass() {
   printf 'ok: %s\n' "$1"
 }
 
+disable_homebrew_paths() {
+  local locator="$1"
+  local replacement="$2"
+
+  python3 - "$locator" "$replacement" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+for original in (
+    "/opt/homebrew/bin/claude",
+    "/usr/local/bin/claude",
+    "/home/linuxbrew/.linuxbrew/bin/claude",
+):
+    text = text.replace(original, sys.argv[2])
+path.write_text(text)
+PY
+}
+
 for helper in scripts/claude-locator.sh scripts/claude-runtime.sh; do
   [ -r "$ROOT/$helper" ] || fail "$helper is not readable"
   [ -x "$ROOT/$helper" ] || fail "$helper is not executable"
@@ -47,13 +67,17 @@ pass "production callers migrated while compatibility entry point remains"
 
 # Exercise runner and doctor bootstrap from the tested checkout without executing
 # a real Claude installation.
-mkdir -p "$TEST_ROOT/home"
+bootstrap_skill="$TEST_ROOT/bootstrap-skill"
+mkdir -p "$TEST_ROOT/home" "$bootstrap_skill/scripts"
+cp "$ROOT"/scripts/*.sh "$bootstrap_skill/scripts/"
+chmod 755 "$bootstrap_skill"/scripts/*.sh
+disable_homebrew_paths "$bootstrap_skill/scripts/claude-locator.sh" "$TEST_ROOT/disabled-homebrew/claude"
 doctor_output="$({
   cd "$ROOT"
   HOME="$TEST_ROOT/home" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
-    /bin/bash scripts/claude-doctor.sh \
+    /bin/bash "$bootstrap_skill/scripts/claude-doctor.sh" \
       --repo-root "$ROOT" \
-      --skill-root "$ROOT" \
+      --skill-root "$bootstrap_skill" \
       --config-file "$ROOT/.codex/claude/config.env" \
       --skip-probes \
       --skip-update-check
@@ -65,7 +89,7 @@ printf 'artifact\n' > "$TEST_ROOT/claude-review-artifact.txt"
 runner_output="$({
   cd "$ROOT"
   HOME="$TEST_ROOT/home" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
-    /bin/bash scripts/run-review.sh \
+    /bin/bash "$bootstrap_skill/scripts/run-review.sh" \
       --mode code \
       --artifact-file "$TEST_ROOT/claude-review-artifact.txt" \
       --base-prompt "$ROOT/prompts/code-review.base.md" \

@@ -278,21 +278,26 @@ claude_locator_resolve_trusted_utility() {
       return 1
       ;;
   esac
-  [ ! -w "$physical_candidate" ] || return 1
-  store_parent="${physical_candidate%/*}"
-  while :; do
-    [ ! -w "$store_parent" ] || return 1
-    [ "$store_parent" = "$physical_store_root" ] && break
-    case "$store_parent" in
-      "$physical_store_root"/*)
-        ;;
-      *)
-        return 1
-        ;;
-    esac
-    store_parent="${store_parent%/*}"
-    [ -n "$store_parent" ] || return 1
-  done
+  # Effective-access tests always report writable for root. Physical store
+  # containment remains mandatory; apply the writability proof when it is
+  # meaningful for the invoking identity.
+  if [ "${EUID:-1}" -ne 0 ]; then
+    [ ! -w "$physical_candidate" ] || return 1
+    store_parent="${physical_candidate%/*}"
+    while :; do
+      [ ! -w "$store_parent" ] || return 1
+      [ "$store_parent" = "$physical_store_root" ] && break
+      case "$store_parent" in
+        "$physical_store_root"/*)
+          ;;
+        *)
+          return 1
+          ;;
+      esac
+      store_parent="${store_parent%/*}"
+      [ -n "$store_parent" ] || return 1
+    done
+  fi
   printf '%s' "$physical_candidate"
   return 0
 }

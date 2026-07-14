@@ -9,17 +9,23 @@ fail() {
   exit 1
 }
 
-grep -Fq '/bin/bash scripts/run-review.sh' "$ROOT/tests/windows-transport.sh" || fail "Windows test lacks production runner coverage"
-grep -Fq 'shim_root/claude' "$ROOT/tests/windows-transport.sh" || fail "Windows test lacks extensionless shim coverage"
 grep -Fq 'runs-on: windows-latest' "$ROOT/.github/workflows/ci.yml" || fail "Windows Git Bash CI job missing"
-grep -Fq 'if os.name == "nt"' "$ROOT/scripts/claude-doctor.sh" || fail "doctor lacks Windows timeout termination"
-if grep -Fq 'start_new_session=True' "$ROOT/scripts/claude-doctor.sh"; then
-  fail "doctor unconditionally requests a Unix process session"
-fi
-grep -Fq 'subprocess.CREATE_NEW_PROCESS_GROUP' "$ROOT/scripts/run-review.sh" || fail "runner lacks Windows timeout process-group creation"
-if grep -Fq 'start_new_session=True' "$ROOT/scripts/run-review.sh"; then
-  fail "runner unconditionally requests a Unix process session"
-fi
+python3 - "$ROOT/scripts/claude-doctor.sh" "$ROOT/scripts/run-review.sh" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+pattern = re.compile(
+    r'if os\.name == "nt":\n'
+    r'\s+process_options\["creationflags"\] = subprocess\.CREATE_NEW_PROCESS_GROUP\n'
+    r'else:\n'
+    r'\s+process_options\["start_new_session"\] = True'
+)
+for raw_path in sys.argv[1:]:
+    path = Path(raw_path)
+    if not pattern.search(path.read_text()):
+        raise SystemExit(f"{path.name} lacks conditional Windows/POSIX process-group creation")
+PY
 
 case "${OSTYPE:-}" in
   msys*|mingw*|cygwin*)

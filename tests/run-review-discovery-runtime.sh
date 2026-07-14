@@ -309,10 +309,14 @@ assert_json_status "$broken_output" blocked "could not run with Codex's inherite
 pass "runtime-broken PATH candidate remains authoritative over native fallback"
 
 missing_home="$TEST_ROOT/missing-home"
+missing_skill="$TEST_ROOT/missing-skill"
 mkdir -p "$missing_home"
-missing_output="$(run_runner "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$missing_home" "$SYSTEM_PATH" "$TEST_ROOT/missing.log")"
+copy_fixture_skill "$missing_skill"
+disable_homebrew_paths "$missing_skill" "$TEST_ROOT/disabled-missing-homebrew/claude"
+missing_output="$(run_runner "$missing_skill" "$REPO_ROOT" "$REPO_ROOT" "$missing_home" "$SYSTEM_PATH" "$TEST_ROOT/missing.log")"
 assert_json_status "$missing_output" blocked "not found in PATH or any checked official/default install location" "does not prove Claude is uninstalled"
 assert_doctor_offer "$missing_output" true
+[ ! -e "$TEST_ROOT/missing.log" ] || fail "missing-discovery case executed Claude"
 pass "runner missing diagnosis includes the exact doctor opt-in once"
 
 unset_home_skill="$TEST_ROOT/unset-home-skill"
@@ -509,16 +513,14 @@ if [[ "$absolute_output" == *"inherited PATH"* ]]; then fail "absolute interpret
 unsafe_dependency_home="$TEST_ROOT/unsafe-dependency-home"
 unsafe_dependency_invocation="$TEST_ROOT/unsafe-dependency-invocation"
 unsafe_dependency_log="$TEST_ROOT/unsafe-dependency.log"
-alternate_env_root="$TEST_ROOT/alternate-env"
-mkdir -p "$unsafe_dependency_home/.local/bin" "$unsafe_dependency_invocation/bin" "$alternate_env_root"
-ln -s /usr/bin/env "$alternate_env_root/env"
+mkdir -p "$unsafe_dependency_home/.local/bin" "$unsafe_dependency_invocation/bin"
 cp "$native_home/.local/bin/claude" "$unsafe_dependency_home/.local/bin/claude"
-python3 - "$unsafe_dependency_home/.local/bin/claude" "$alternate_env_root/env" <<'PY'
+python3 - "$unsafe_dependency_home/.local/bin/claude" <<'PY'
 from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
-path.write_text(path.read_text().replace("#!/bin/bash", f"#!{sys.argv[2]} fake-node", 1))
+path.write_text(path.read_text().replace("#!/bin/bash", "#!/usr/bin/env fake-node", 1))
 PY
 ln -s /bin/bash "$unsafe_dependency_invocation/bin/fake-node"
 unsafe_dependency_output="$(run_runner "$REPO_ROOT" "$REPO_ROOT" "$unsafe_dependency_invocation" "$unsafe_dependency_home" "$unsafe_dependency_invocation/bin:$SYSTEM_PATH" "$unsafe_dependency_log")"

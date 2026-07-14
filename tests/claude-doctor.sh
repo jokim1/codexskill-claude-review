@@ -274,7 +274,10 @@ assert_contains "$native_output" "Passwd HOME is diagnostic only and is never ex
 pass "native-user fallback and remapped HOME diagnostics"
 
 relative_log="$TEST_ROOT/relative.log"
-relative_output="$(run_doctor "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "relative-home" "$SYSTEM_PATH" "$relative_log" --skip-probes)"
+missing_skill="$TEST_ROOT/missing-skill"
+copy_fixture_skill "$missing_skill"
+disable_homebrew_paths "$missing_skill" "$TEST_ROOT/disabled-missing-homebrew/claude"
+relative_output="$(run_doctor "$missing_skill" "$REPO_ROOT" "$REPO_ROOT" "relative-home" "$SYSTEM_PATH" "$relative_log" --skip-probes)"
 assert_line "$relative_output" "checked_native_path=unavailable" "relative HOME native path"
 assert_line "$relative_output" "inherited_home_status=missing_or_non_absolute" "relative HOME status"
 assert_line "$relative_output" "claude_discovery=missing" "relative HOME no guessed fallback"
@@ -302,6 +305,7 @@ mkdir -p "$missing_home"
 no_python_skill="$TEST_ROOT/no-python-skill"
 no_python_tools="$TEST_ROOT/no-python-tools"
 copy_fixture_skill "$no_python_skill"
+disable_homebrew_paths "$no_python_skill" "$TEST_ROOT/disabled-no-python-homebrew/claude"
 rm -f "$no_python_skill/scripts/claude-config.sh"
 mkdir -p "$no_python_tools"
 for tool_name in dirname mktemp chmod rm grep; do
@@ -312,11 +316,12 @@ assert_line "$no_python_output" "inherited_home_status=passwd_unavailable" "pass
 pass "passwd parser unavailability is diagnostic and non-blocking"
 
 # Missing is explicitly inconclusive.
-missing_output="$(run_doctor "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$missing_home" "$SYSTEM_PATH" "$TEST_ROOT/missing.log" --skip-probes)"
+missing_output="$(run_doctor "$missing_skill" "$REPO_ROOT" "$REPO_ROOT" "$missing_home" "$SYSTEM_PATH" "$TEST_ROOT/missing.log" --skip-probes)"
 assert_line "$missing_output" "claude_discovery=missing" "missing source"
 assert_line "$missing_output" "claude_path_status=not_found" "missing status"
 assert_contains "$missing_output" "inconclusive for custom prefixes" "inconclusive guidance"
 assert_contains "$missing_output" "curl -fsSL https://claude.ai/install.sh | bash" "native install guidance"
+[ ! -e "$TEST_ROOT/missing.log" ] || fail "missing-discovery doctor case executed Claude"
 pass "not-found diagnosis is bounded and inconclusive"
 
 # Default Homebrew mapping, precedence, and dangling-only deferral use a fixture
@@ -527,16 +532,14 @@ assert_contains "$unsupported_output" "exact '#!/usr/bin/env NAME'" "unsupported
 unsafe_dependency_home="$TEST_ROOT/unsafe-dependency-home"
 unsafe_dependency_invocation="$TEST_ROOT/unsafe-dependency-invocation"
 unsafe_dependency_log="$TEST_ROOT/unsafe-dependency.log"
-alternate_env_root="$TEST_ROOT/alternate-env"
-mkdir -p "$unsafe_dependency_invocation/bin" "$alternate_env_root"
-ln -s /usr/bin/env "$alternate_env_root/env"
+mkdir -p "$unsafe_dependency_invocation/bin"
 write_fake_claude "$unsafe_dependency_home/.local/bin/claude"
-python3 - "$unsafe_dependency_home/.local/bin/claude" "$alternate_env_root/env" <<'PY'
+python3 - "$unsafe_dependency_home/.local/bin/claude" <<'PY'
 from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
-path.write_text(path.read_text().replace("#!/bin/bash", f"#!{sys.argv[2]} fake-node", 1))
+path.write_text(path.read_text().replace("#!/bin/bash", "#!/usr/bin/env fake-node", 1))
 PY
 ln -s /bin/bash "$unsafe_dependency_invocation/bin/fake-node"
 unsafe_dependency_output="$(run_doctor "$REPO_ROOT" "$REPO_ROOT" "$unsafe_dependency_invocation" "$unsafe_dependency_home" "$unsafe_dependency_invocation/bin:$SYSTEM_PATH" "$unsafe_dependency_log" --skip-probes)"

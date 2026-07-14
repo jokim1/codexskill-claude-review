@@ -6,7 +6,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOCATOR="$ROOT/scripts/claude-locator.sh"
 RUNTIME="$ROOT/scripts/claude-runtime.sh"
 TEST_ROOT="$(mktemp -d "$HOME/.claude-review-helper-test-XXXXXX")"
-trap 'chmod -R u+w "$TEST_ROOT" 2>/dev/null || true; rm -rf "$TEST_ROOT"' EXIT
+TEMP_BOUNDARY_ROOT="$(mktemp -d /tmp/claude-review-boundary-test-XXXXXX)"
+trap 'chmod -R u+w "$TEST_ROOT" "$TEMP_BOUNDARY_ROOT" 2>/dev/null || true; rm -rf "$TEST_ROOT" "$TEMP_BOUNDARY_ROOT"' EXIT
 
 fail() {
   echo "not ok: $1" >&2
@@ -64,6 +65,15 @@ eval "$(sed -n '/^checked_claude_locations() {$/,/^}$/p' "$runner")"
 [ "$(checked_claude_locations)" = "PATH" ]
 BASH
 pass "empty Homebrew discovery remains nounset-safe on legacy Bash"
+
+printf '#!/bin/bash\nexit 0\n' > "$TEMP_BOUNDARY_ROOT/claude"
+chmod 755 "$TEMP_BOUNDARY_ROOT" "$TEMP_BOUNDARY_ROOT/claude"
+if claude_locator_validate_candidate "$TEMP_BOUNDARY_ROOT/claude" "$ROOT" "$TEST_ROOT/work"; then
+  fail "temporary candidate passed trust validation"
+fi
+assert_eq "launch" "$CLAUDE_LOCATOR_VALIDATION_SCOPE" "temporary candidate trust scope"
+assert_eq "temporary_path" "$CLAUDE_LOCATOR_VALIDATION_STATUS" "temporary candidate trust reason"
+pass "temporary path boundary is independently classified"
 
 windows_identity_root="$TEST_ROOT/windows identity"
 mkdir -p "$windows_identity_root"
@@ -476,12 +486,10 @@ pass "unsupported shebangs fail closed while exit-code-only cases remain unclass
 
 dependency_invocation="$TEST_ROOT/dependency-invocation"
 dependency_launcher="$TEST_ROOT/trusted/bin/path-interpreter"
-alternate_env="$TEST_ROOT/trusted/bin/env"
 mkdir -p "$dependency_invocation/bin"
 ln -s /bin/bash "$dependency_invocation/bin/fake-node"
-ln -s /usr/bin/env "$alternate_env"
-cat > "$dependency_launcher" <<SH
-#!$alternate_env fake-node
+cat > "$dependency_launcher" <<'SH'
+#!/usr/bin/env fake-node
 exit 0
 SH
 chmod 755 "$dependency_launcher"
@@ -489,10 +497,10 @@ saved_path="$PATH"
 PATH="$dependency_invocation/bin:$PATH"
 export PATH
 claude_runtime_check_launcher_dependency "$dependency_launcher" || fail "PATH interpreter resolved"
-assert_eq "$alternate_env" "$CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH" "alternate absolute env retained"
+assert_eq "/usr/bin/env" "$CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH" "exact env interpreter retained"
 assert_eq "$dependency_invocation/bin/fake-node" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" "PATH interpreter path retained"
 assert_eq "3" "${#CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[@]}" "env transport argv count"
-assert_eq "$alternate_env" "${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[0]}" "env transport executable"
+assert_eq "/usr/bin/env" "${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[0]}" "env transport executable"
 assert_eq "fake-node" "${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[1]}" "env transport dependency token"
 assert_eq "$dependency_launcher" "${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[2]}" "env transport launcher"
 claude_locator_validate_candidate "$dependency_launcher" "$ROOT" "$TEST_ROOT/work" || fail "launcher remains trusted"
@@ -508,7 +516,19 @@ assert_eq "$selected_launch" "$CLAUDE_LOCATOR_LAUNCH_PATH" "launcher diagnostic 
 assert_eq "$selected_target" "$CLAUDE_LOCATOR_CANONICAL_TARGET" "launcher diagnostic target preserved"
 PATH="$saved_path"
 export PATH
-pass "alternate env and resolved interpreters reuse trust validation without clobbering launcher diagnostics"
+pass "exact env and resolved interpreters reuse trust validation without clobbering launcher diagnostics"
+
+alternate_env="$TEST_ROOT/trusted/bin/env"
+alternate_env_launcher="$TEST_ROOT/trusted/bin/alternate-env-launcher"
+ln -s /usr/bin/env "$alternate_env"
+printf '#!%s fake-node\nexit 0\n' "$alternate_env" > "$alternate_env_launcher"
+chmod 755 "$alternate_env_launcher"
+if claude_runtime_check_launcher_dependency "$alternate_env_launcher"; then
+  fail "non-exact env shebang accepted"
+fi
+assert_eq "unsupported" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "non-exact env shebang fails closed"
+assert_eq "shebang" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY" "non-exact env shebang reason"
+pass "only exact /usr/bin/env NAME shebangs are accepted"
 
 execution_root="$TEST_ROOT/execution-cwd-dependency"
 execution_invocation="$execution_root/invocation/work"

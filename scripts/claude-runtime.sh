@@ -204,7 +204,7 @@ claude_runtime_inspect_shebang_path() {
   fi
 
   case "$interpreter" in
-    /*/env|/env)
+    /usr/bin/env)
       CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH="$interpreter"
       if [ ! -f "$interpreter" ] || [ ! -x "$interpreter" ]; then
         CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="missing"
