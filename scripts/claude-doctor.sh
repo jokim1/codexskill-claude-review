@@ -467,8 +467,38 @@ fi
 RUN_REVIEW="$SKILL_ROOT/scripts/run-review.sh"
 ROUTER="$SKILL_ROOT/scripts/claude-command-router.sh"
 
+doctor_escape_record_value() {
+  local LC_ALL=C
+  local value="${1:-}"
+  local escaped=""
+  local character=""
+  local encoded=""
+  local index=0
+  local length="${#value}"
+
+  while [ "$index" -lt "$length" ]; do
+    character="${value:$index:1}"
+    case "$character" in
+      \\) escaped="${escaped}\\\\" ;;
+      $'\n') escaped="${escaped}\\n" ;;
+      $'\r') escaped="${escaped}\\r" ;;
+      $'\t') escaped="${escaped}\\t" ;;
+      [[:cntrl:]])
+        printf -v encoded '\\x%02x' "'$character"
+        escaped="${escaped}${encoded}"
+        ;;
+      *) escaped="${escaped}${character}" ;;
+    esac
+    index=$((index + 1))
+  done
+  printf '%s' "$escaped"
+}
+
 print_kv() {
-  printf '%s=%s\n' "$1" "$2"
+  local escaped_value=""
+
+  escaped_value="$(doctor_escape_record_value "${2:-}")"
+  printf '%s=%s\n' "$1" "$escaped_value"
 }
 
 helper_has_final_marker() {
@@ -707,6 +737,22 @@ run_doctor_claude_with_timeout() {
     "${CLAUDE_RUNTIME_COMMAND[@]}"
 }
 
+parse_auth_status_field() {
+  local auth_payload="$1"
+  local auth_field="$2"
+
+  AUTH_STATUS="$auth_payload" AUTH_FIELD="$auth_field" \
+    claude_runtime_invoke_trusted_python "$CLAUDE_RUNTIME_PYTHON_BIN" - <<'PY'
+import json
+import os
+import sys
+
+data = json.loads(os.environ.get("AUTH_STATUS", ""))
+value = data.get(os.environ["AUTH_FIELD"], "unknown")
+sys.stdout.write(str(value))
+PY
+}
+
 run_probe() {
   local label="$1"
   local claude_bin="$2"
@@ -817,7 +863,14 @@ print_kv "update_check" "skipped"
 
 if [ -f "$CONFIG_HELPER" ]; then
   printf 'effective_config_begin\n'
-  "$BASH" --noprofile --norc -p "$CONFIG_HELPER" show --config-file "$CONFIG_FILE" 2>/dev/null || true
+  if claude_config_load_file "$CONFIG_FILE"; then
+    print_kv "EFFORT" "$EFFORT"
+    print_kv "MODEL" "$MODEL"
+    print_kv "MAX_BUDGET_USD" "$MAX_BUDGET_USD"
+    print_kv "REVIEW_TIMEOUT_SECONDS" "$REVIEW_TIMEOUT_SECONDS"
+    print_kv "LIVE_PROBE_BUDGET_USD" "$LIVE_PROBE_BUDGET_USD"
+    print_kv "LIVE_PROBE_MODEL" "$LIVE_PROBE_MODEL"
+  fi
   printf 'effective_config_end\n'
 fi
 
@@ -1047,19 +1100,15 @@ if [ "$auth_status_code" -eq 124 ]; then
   print_kv "claude_auth_guidance" "The auth status check timed out; inspect credential/keychain access and network reachability or increase --probe-timeout."
 elif [ -n "$auth_status" ]; then
   if [ -n "${CLAUDE_RUNTIME_PYTHON_BIN:-}" ]; then
-    AUTH_STATUS="$auth_status" claude_runtime_invoke_trusted_python "$CLAUDE_RUNTIME_PYTHON_BIN" - <<'PY' 2>/dev/null || print_kv "claude_auth_status" "present_unparsed"
-import json
-import os
-
-try:
-    raw = os.environ.get("AUTH_STATUS", "")
-    data = json.loads(raw)
-except Exception:
-    print("claude_auth_status=present_unparsed")
-else:
-    print(f"claude_auth_logged_in={data.get('loggedIn', 'unknown')}")
-    print(f"claude_auth_provider={data.get('apiProvider', 'unknown')}")
-PY
+    auth_logged_in=""
+    auth_provider=""
+    if auth_logged_in="$(parse_auth_status_field "$auth_status" "loggedIn" 2>/dev/null)" && \
+      auth_provider="$(parse_auth_status_field "$auth_status" "apiProvider" 2>/dev/null)"; then
+      print_kv "claude_auth_logged_in" "$auth_logged_in"
+      print_kv "claude_auth_provider" "$auth_provider"
+    else
+      print_kv "claude_auth_status" "present_unparsed"
+    fi
   else
     print_kv "claude_auth_status" "present_unparsed"
   fi

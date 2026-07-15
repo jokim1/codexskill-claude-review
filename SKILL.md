@@ -759,6 +759,10 @@ Keep the legacy `plain_print_probe_status` key in doctor output as
 `skipped_redundant_hardened_probe`; only `safe_mode_print_probe` performs the
 bounded hardened live call.
 Do not replace it with a hand-written `claude -p` probe.
+Treat doctor output as line-oriented `key=value` records. Escape `\`, newline,
+carriage return, tab, and other control bytes in every dynamic value as `\\`,
+`\n`, `\r`, `\t`, and `\xNN`, respectively; never allow inherited paths or
+parsed command output to emit additional records.
 
 ### `/claude-review update`
 

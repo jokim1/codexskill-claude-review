@@ -636,6 +636,10 @@ configured preflight timeout. Doctor reports `claude_runtime_status=timeout` or
 The legacy `plain_print_probe_status` key remains present as
 `skipped_redundant_hardened_probe`; doctor makes one bounded hardened live call
 under `safe_mode_print_probe` rather than issuing duplicate Claude requests.
+Doctor's line-oriented `key=value` records escape `\`, newline, carriage return,
+tab, and other control bytes as `\\`, `\n`, `\r`, `\t`, and `\xNN`,
+respectively, so inherited paths and parsed command output cannot create forged
+diagnostic records.
 
 ## Sandbox And Claude State
 

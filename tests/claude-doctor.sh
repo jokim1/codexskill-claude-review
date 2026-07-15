@@ -68,7 +68,11 @@ if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
   if [ "${FAKE_CLAUDE_HANG_STAGE:-}" = "auth" ]; then
     while :; do :; done
   fi
-  printf '{"loggedIn":true,"apiProvider":"firstParty","accessToken":"doctor-auth-secret"}\n'
+  if [ -n "${FAKE_CLAUDE_AUTH_JSON:-}" ]; then
+    printf '%s\n' "$FAKE_CLAUDE_AUTH_JSON"
+  else
+    printf '{"loggedIn":true,"apiProvider":"firstParty","accessToken":"doctor-auth-secret"}\n'
+  fi
   exit 0
 fi
 if [ "${1:-}" = "-p" ]; then
@@ -95,6 +99,7 @@ run_doctor() {
     HOME="$home_value" \
     PATH="$path_value" \
     FAKE_CLAUDE_LOG="$fake_log" \
+    FAKE_CLAUDE_AUTH_JSON="${FAKE_CLAUDE_AUTH_JSON:-}" \
     PRESERVED_SENTINEL="preserved-value" \
     ANTHROPIC_API_KEY="api-secret" \
     ANTHROPIC_AUTH_TOKEN="auth-secret" \
@@ -290,6 +295,34 @@ grep -q '^ENV=absent$' "$path_log" || fail "doctor runtime scrubs ENV"
 grep -Eq '^cwd=/(private/)?tmp/claude-review-runtime-' "$path_log" || fail "doctor CWD uses isolated runtime directory"
 grep -q '^arg=\[\]$' "$path_log" || fail "doctor safe probe preserves empty --tools value"
 pass "doctor PATH discovery, runtime parity, env presence, argv, and redaction"
+
+record_injection_home="$TEST_ROOT/"$'home\ndoctor_status=forged\rrow\tfield\001\\tail'
+record_injection_output="$(run_doctor \
+  "$REPO_ROOT" \
+  "$REPO_ROOT" \
+  "$REPO_ROOT" \
+  "$record_injection_home" \
+  "$path_value" \
+  "$TEST_ROOT/record-injection.log" \
+  --skip-probes)"
+assert_line \
+  "$record_injection_output" \
+  "checked_native_path=$TEST_ROOT/home\\ndoctor_status=forged\\rrow\\tfield\\x01\\\\tail/.local/bin/claude" \
+  "doctor escapes control characters in inherited paths"
+[ "$(printf '%s\n' "$record_injection_output" | grep -c '^doctor_status=')" -eq 1 ] || \
+  fail "newline-bearing HOME forged a doctor status record"
+
+auth_injection_output="$({
+  FAKE_CLAUDE_AUTH_JSON='{"loggedIn":true,"apiProvider":"firstParty\\branch\ndoctor_status=forged"}' \
+    run_doctor "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$passwd_home" "$path_value" "$TEST_ROOT/auth-injection.log" --skip-probes
+})"
+assert_line \
+  "$auth_injection_output" \
+  'claude_auth_provider=firstParty\\branch\ndoctor_status=forged' \
+  "doctor escapes parsed auth fields through the shared serializer"
+[ "$(printf '%s\n' "$auth_injection_output" | grep -c '^doctor_status=')" -eq 1 ] || \
+  fail "newline-bearing auth field forged a doctor status record"
+pass "doctor record serialization escapes control characters"
 
 report_only_skill="$TEST_ROOT/report-only-skill"
 doctor_update_marker="$TEST_ROOT/doctor-update-helper-ran"
