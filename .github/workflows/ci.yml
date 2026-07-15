@@ -32,6 +32,9 @@ jobs:
       - name: Runner discovery and runtime tests
         run: bash tests/run-review-discovery-runtime.sh
 
+      - name: Artifact size and splitting tests
+        run: bash tests/artifact-size-and-splitting.sh
+
       - name: Challenge prompt fixture tests
         run: bash tests/challenge-prompt-fixtures.sh
 

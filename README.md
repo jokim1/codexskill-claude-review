@@ -538,9 +538,11 @@ Runner and doctor then execute the validated launch path directly from a private
 `/tmp/claude-review-runtime-*` directory. They preserve inherited PATH byte-for-byte
 for Claude and its descendants; they do not prepend the launcher directory, start
 a login shell, source profiles, or retry through an interactive shell. They unset
-only `BASH_ENV`, `ENV`, and the five Anthropic API credential variables used to
-enforce subscription-only review. `scripts/claude-subscription-env.sh` remains as a
-compatible legacy entry point, but runner and doctor share `claude-runtime.sh`.
+`BASH_ENV`, `ENV`, and the five Anthropic API credential variables used to enforce
+subscription-only review, and they strip inherited exported Bash-function entries
+(`BASH_FUNC_*`) before Claude starts. Other inherited environment data remains
+available. `scripts/claude-subscription-env.sh` remains as a compatible legacy
+entry point, but runner and doctor share `claude-runtime.sh`.
 For Git Bash timeout/probe calls through native Python, that shared runtime converts
 the validated launcher and validated executable paths in its shebang execution
 chain with the fixed `/usr/bin/cygpath` utility. It passes the interpreter chain,
