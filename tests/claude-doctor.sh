@@ -59,6 +59,9 @@ set -euo pipefail
 
 if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-v" ]; then
   if [ "${FAKE_CLAUDE_HANG_STAGE:-}" = "version" ]; then
+    if [ -n "${FAKE_CLAUDE_PARENT_PID_FILE:-}" ]; then
+      printf '%s\n' "$PPID" > "$FAKE_CLAUDE_PARENT_PID_FILE"
+    fi
     while :; do :; done
   fi
   printf '2.test.0 (Claude Code fake)\n'
@@ -100,6 +103,7 @@ run_doctor() {
     PATH="$path_value" \
     FAKE_CLAUDE_LOG="$fake_log" \
     FAKE_CLAUDE_AUTH_JSON="${FAKE_CLAUDE_AUTH_JSON:-}" \
+    FAKE_CLAUDE_PARENT_PID_FILE="${FAKE_CLAUDE_PARENT_PID_FILE:-}" \
     PRESERVED_SENTINEL="preserved-value" \
     ANTHROPIC_API_KEY="api-secret" \
     ANTHROPIC_AUTH_TOKEN="auth-secret" \
@@ -485,6 +489,44 @@ auth_timeout_output="$({
 })"
 assert_line "$auth_timeout_output" "claude_auth_status=timeout" "bounded auth-status timeout"
 pass "doctor bounds version and auth-status preflight calls"
+
+doctor_cancel_output="$TEST_ROOT/doctor-cancel.out"
+doctor_cancel_error="$TEST_ROOT/doctor-cancel.err"
+doctor_cancel_driver_pid_file="$TEST_ROOT/doctor-cancel-driver.pid"
+doctor_cancel_log="$TEST_ROOT/doctor-cancel.log"
+FAKE_CLAUDE_HANG_STAGE="version" \
+FAKE_CLAUDE_PARENT_PID_FILE="$doctor_cancel_driver_pid_file" \
+  run_doctor \
+    "$REPO_ROOT" \
+    "$REPO_ROOT" \
+    "$REPO_ROOT" \
+    "$HOME" \
+    "$path_value" \
+    "$doctor_cancel_log" \
+    --probe-timeout 5 \
+    --skip-probes >"$doctor_cancel_output" 2>"$doctor_cancel_error" &
+doctor_cancel_pid=$!
+for ((attempt = 0; attempt < 100; attempt++)); do
+  [ -s "$doctor_cancel_driver_pid_file" ] && break
+  sleep 0.05
+done
+if [ ! -s "$doctor_cancel_driver_pid_file" ]; then
+  kill -TERM "$doctor_cancel_pid" 2>/dev/null || true
+  wait "$doctor_cancel_pid" 2>/dev/null || true
+  fail "doctor cancellation driver PID was not recorded"
+fi
+kill -TERM "$(cat "$doctor_cancel_driver_pid_file")"
+set +e
+wait "$doctor_cancel_pid"
+doctor_cancel_status=$?
+set -e
+[ "$doctor_cancel_status" -eq 143 ] || \
+  fail "doctor did not propagate runtime cancellation (status=$doctor_cancel_status)"
+[ "$(grep -c '^call=' "$doctor_cancel_log")" -eq 1 ] || \
+  fail "doctor launched additional Claude commands after cancellation"
+grep -q '^call=--version$' "$doctor_cancel_log" || \
+  fail "doctor cancellation did not occur during the version command"
+pass "doctor propagates cancellation without fallback or later probes"
 
 # Native discovery and inherited HOME diagnostics.
 native_home="$TEST_ROOT/remapped-home"

@@ -673,9 +673,21 @@ redacted_env_presence() {
   fi
 }
 
+runtime_status_is_cancellation() {
+  case "${1:-}" in
+    129|130|143)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 inherited_home_status() {
   local inherited_home="${HOME:-}"
   local passwd_status=""
+  local passwd_status_code=0
 
   case "$inherited_home" in
     /*)
@@ -689,7 +701,8 @@ inherited_home_status() {
     printf 'passwd_unavailable'
     return 0
   fi
-  if passwd_status="$(
+  set +e
+  passwd_status="$(
     claude_runtime_run_with_timeout \
       "$CLAUDE_RUNTIME_PYTHON_BIN" \
       "$CLAUDE_PROCESS_DRIVER" \
@@ -708,7 +721,13 @@ except Exception:
 else:
     print("matches_passwd" if passwd_home == sys.argv[1] else "differs_passwd")
 ' "$inherited_home" 2>/dev/null
-  )"; then
+  )"
+  passwd_status_code=$?
+  set -e
+  if runtime_status_is_cancellation "$passwd_status_code"; then
+    exit "$passwd_status_code"
+  fi
+  if [ "$passwd_status_code" -eq 0 ]; then
     case "$passwd_status" in
       matches_passwd|differs_passwd|passwd_unavailable)
         printf '%s' "$passwd_status"
@@ -757,6 +776,7 @@ PY
 run_probe() {
   local label="$1"
   local claude_bin="$2"
+  local probe_status=0
   shift 2
 
   if [ -z "${CLAUDE_RUNTIME_PYTHON_BIN:-}" ] || [ ! -r "$CLAUDE_PROCESS_DRIVER" ]; then
@@ -769,14 +789,21 @@ run_probe() {
   fi
 
   claude_runtime_build_command "$claude_bin" "$@"
-  if ! claude_runtime_probe_with_timeout \
+  set +e
+  claude_runtime_probe_with_timeout \
     "$label" \
     "$CLAUDE_RUNTIME_PYTHON_BIN" \
     "$CLAUDE_PROCESS_DRIVER" \
     "$CLAUDE_RUNTIME_CWD" \
     "$PROBE_TIMEOUT_SECONDS" \
     @probe \
-    "${CLAUDE_RUNTIME_COMMAND[@]}"; then
+    "${CLAUDE_RUNTIME_COMMAND[@]}"
+  probe_status=$?
+  set -e
+  if runtime_status_is_cancellation "$probe_status"; then
+    exit "$probe_status"
+  fi
+  if [ "$probe_status" -ne 0 ]; then
     print_kv "${label}_status" "transport_unavailable"
   fi
 }
@@ -1072,9 +1099,15 @@ version_status=0
 set +e
 version_output="$(run_doctor_claude_with_timeout "$PROBE_TIMEOUT_SECONDS" "$claude_bin" --version 2>/dev/null)"
 version_status=$?
+if runtime_status_is_cancellation "$version_status"; then
+  exit "$version_status"
+fi
 if [ "$version_status" -ne 0 ] && [ "$version_status" -ne 124 ]; then
   version_output="$(run_doctor_claude_with_timeout "$PROBE_TIMEOUT_SECONDS" "$claude_bin" -v 2>/dev/null)"
   version_status=$?
+  if runtime_status_is_cancellation "$version_status"; then
+    exit "$version_status"
+  fi
 fi
 set -e
 version_output="$(printf '%s' "$version_output" | sed -n '1p' | cut -c 1-160)"
@@ -1096,6 +1129,9 @@ set +e
 auth_status="$(run_doctor_claude_with_timeout "$PROBE_TIMEOUT_SECONDS" "$claude_bin" auth status 2>/dev/null)"
 auth_status_code=$?
 set -e
+if runtime_status_is_cancellation "$auth_status_code"; then
+  exit "$auth_status_code"
+fi
 if [ "$auth_status_code" -eq 124 ]; then
   print_kv "claude_auth_status" "timeout"
   print_kv "claude_auth_guidance" "The auth status check timed out; inspect credential/keychain access and network reachability or increase --probe-timeout."

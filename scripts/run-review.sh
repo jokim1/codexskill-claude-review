@@ -959,6 +959,17 @@ append_doctor_offer() {
   printf '%s\n\nRun /claude-review doctor now?\nReply Y to run diagnostics, or N to stop.' "$existing_guidance"
 }
 
+runtime_status_is_cancellation() {
+  case "${1:-}" in
+    129|130|143)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 build_claude_cmd() {
   local claude_bin="$1"
   shift
@@ -1414,6 +1425,9 @@ probe_runner_usability() {
   run_candidate_claude_with_timeout "$probe_timeout_seconds" "$claude_bin" -v >/dev/null 2>&1
   version_status=$?
   set -e
+  if runtime_status_is_cancellation "$version_status"; then
+    exit "$version_status"
+  fi
   if [ "$version_status" -eq 124 ]; then
     record_failure \
       "probe_timed_out" \
@@ -1433,6 +1447,9 @@ probe_runner_usability() {
   auth_status="$(run_candidate_claude_with_timeout "$probe_timeout_seconds" "$claude_bin" auth status 2>/dev/null)"
   auth_status_code=$?
   set -e
+  if runtime_status_is_cancellation "$auth_status_code"; then
+    exit "$auth_status_code"
+  fi
   if [ "$auth_status_code" -eq 124 ]; then
     record_failure \
       "probe_timed_out" \
@@ -1482,6 +1499,10 @@ probe_runner_usability() {
   probe_output="$(run_candidate_claude_with_timeout_input "$probe_timeout_seconds" "$probe_prompt_file" "$claude_bin" "${probe_args[@]}" 2>&1)"
   probe_status=$?
   set -e
+
+  if runtime_status_is_cancellation "$probe_status"; then
+    exit "$probe_status"
+  fi
 
   if [ "$probe_status" -eq 0 ]; then
     if result_is_error "$probe_output"; then
@@ -1802,6 +1823,10 @@ output="$(run_selected_claude_with_timeout_input "$REVIEW_EFFECTIVE_TIMEOUT_SECO
 run_status=$?
 set -e
 
+if runtime_status_is_cancellation "$run_status"; then
+  exit "$run_status"
+fi
+
 if [ "$run_status" -eq 124 ] && [ "$REVIEW_RETRY_TIMEOUT_SECONDS" -gt "$REVIEW_EFFECTIVE_TIMEOUT_SECONDS" ]; then
   REVIEW_TIMEOUT_ATTEMPTS="2"
   REVIEW_TIMEOUT_ATTEMPT_SECONDS="${REVIEW_EFFECTIVE_TIMEOUT_SECONDS}s, ${REVIEW_RETRY_TIMEOUT_SECONDS}s"
@@ -1810,6 +1835,9 @@ if [ "$run_status" -eq 124 ] && [ "$REVIEW_RETRY_TIMEOUT_SECONDS" -gt "$REVIEW_E
   output="$(run_selected_claude_with_timeout_input "$REVIEW_RETRY_TIMEOUT_SECONDS" "$review_prompt_file" "${cmd_args[@]}" 2>&1)"
   run_status=$?
   set -e
+  if runtime_status_is_cancellation "$run_status"; then
+    exit "$run_status"
+  fi
 fi
 
 if [ "$run_status" -ne 0 ]; then

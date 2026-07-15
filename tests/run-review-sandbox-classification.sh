@@ -747,6 +747,111 @@ EOF
   printf 'ok: timeout terminates the Claude process group\n'
 }
 
+run_review_cancellation_case() {
+  case "${OSTYPE:-}" in
+    msys*|mingw*|cygwin*)
+      printf 'ok: review cancellation propagation skipped on Windows\n'
+      return 0
+      ;;
+  esac
+
+  local fake_root tmpdir runner_pid driver_pid child_pid runner_status attempt
+
+  fake_root="$(make_fake_claude_root)"
+  tmpdir="$(mktemp -d /tmp/claude-review-test-XXXXXX)"
+  mkdir -p "$fake_root/bin"
+  printf 'review artifact\n' > "$tmpdir/claude-review-artifact.txt"
+
+  cat > "$fake_root/bin/claude" <<'EOF'
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [ "${1:-}" = "-v" ] || [ "${1:-}" = "--version" ]; then
+  printf 'Claude Code fake\n'
+  exit 0
+fi
+
+if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
+  printf '{"loggedIn":true,"apiProvider":"firstParty"}\n'
+  exit 0
+fi
+
+if [ "${1:-}" = "-p" ]; then
+  prompt="$(cat)"
+  if [[ "$prompt" == *"Codex Claude skill preflight probe"* ]]; then
+    printf '{"ok":true}\n'
+    exit 0
+  fi
+  printf '%s\n' "$PPID" > "${FAKE_CLAUDE_DRIVER_PID_FILE:?}"
+  printf '%s\n' "$$" > "${FAKE_CLAUDE_CHILD_PID_FILE:?}"
+  while :; do sleep 1; done
+fi
+
+printf 'unexpected fake claude args: %s\n' "$*" >&2
+exit 2
+EOF
+  chmod +x "$fake_root/bin/claude"
+
+  (
+    cd "$REPO_ROOT"
+    PATH="$fake_root/bin:$PATH" \
+      FAKE_CLAUDE_DRIVER_PID_FILE="$tmpdir/driver.pid" \
+      FAKE_CLAUDE_CHILD_PID_FILE="$tmpdir/child.pid" \
+      REVIEW_TIMEOUT_SECONDS=30 \
+      bash --noprofile --norc -p scripts/run-review.sh \
+        --mode code \
+        --artifact-file "$tmpdir/claude-review-artifact.txt" \
+        --base-prompt prompts/code-review.base.md \
+        --schema-file schemas/review-output.json \
+        --repo-root "$REPO_ROOT" \
+        --branch test \
+        --base-branch main
+  ) >"$tmpdir/output" 2>"$tmpdir/error" &
+  runner_pid=$!
+
+  for ((attempt = 0; attempt < 100; attempt++)); do
+    [ -s "$tmpdir/driver.pid" ] && [ -s "$tmpdir/child.pid" ] && break
+    sleep 0.05
+  done
+  if [ ! -s "$tmpdir/driver.pid" ] || [ ! -s "$tmpdir/child.pid" ]; then
+    kill -TERM "$runner_pid" 2>/dev/null || true
+    wait "$runner_pid" 2>/dev/null || true
+    rm -rf "$fake_root" "$tmpdir"
+    fail "review cancellation process IDs were not recorded"
+  fi
+
+  driver_pid="$(cat "$tmpdir/driver.pid")"
+  child_pid="$(cat "$tmpdir/child.pid")"
+  kill -TERM "$driver_pid"
+  set +e
+  wait "$runner_pid"
+  runner_status=$?
+  set -e
+
+  if [ "$runner_status" -ne 143 ]; then
+    rm -rf "$fake_root" "$tmpdir"
+    fail "run-review did not propagate cancellation (status=$runner_status)"
+  fi
+  if grep -Fq 'Run /claude-review doctor now?' "$tmpdir/output" || \
+    grep -Fq '"status":"blocked"' "$tmpdir/output"; then
+    rm -rf "$fake_root" "$tmpdir"
+    fail "run-review converted cancellation into blocked recovery UX"
+  fi
+  for ((attempt = 0; attempt < 50; attempt++)); do
+    kill -0 "$child_pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  if kill -0 "$child_pid" 2>/dev/null; then
+    kill -KILL "$child_pid" 2>/dev/null || true
+    rm -rf "$fake_root" "$tmpdir"
+    fail "review cancellation left Claude child $child_pid running"
+  fi
+
+  rm -rf "$fake_root" "$tmpdir"
+  printf 'ok: review cancellation propagates without recovery UX\n'
+}
+
 run_safe_mode_args_case() {
   local fake_root tmpdir output arg_log
 
@@ -1123,5 +1228,6 @@ run_unsafe_claude_candidate_case
 run_timeout_wrapper_closes_stdin_case
 run_probe_timeout_case
 run_timeout_process_group_case
+run_review_cancellation_case
 run_safe_mode_args_case
 rm -f "$evil_shell"
