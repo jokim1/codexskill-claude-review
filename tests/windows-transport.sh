@@ -115,6 +115,10 @@ export ANTHROPIC_AUTH_TOKEN=secret
 export ANTHROPIC_BEARER_TOKEN=secret
 export ANTHROPIC_CONSOLE_API_KEY=secret
 export ANTHROPIC_CONSOLE_AUTH_TOKEN=secret
+export OPENSSL_CONF=untrusted-openssl-conf
+export OPENSSL_CONF_INCLUDE=untrusted-openssl-include
+export OPENSSL_ENGINES=untrusted-openssl-engines
+export OPENSSL_MODULES=untrusted-openssl-modules
 export BASH_ENV="$fixture_root/never-source"
 export ENV="$fixture_root/never-source-env"
 
@@ -123,7 +127,7 @@ claude_runtime_build_command \
   --noprofile \
   --norc \
   -c \
-  'if [ -n "${ANTHROPIC_API_KEY+x}" ]; then exit 41; else printf "direct-ok\n"; fi'
+  'if [ -n "${ANTHROPIC_API_KEY+x}" ] || [ -n "${OPENSSL_CONF+x}" ] || [ -n "${OPENSSL_CONF_INCLUDE+x}" ] || [ -n "${OPENSSL_ENGINES+x}" ] || [ -n "${OPENSSL_MODULES+x}" ]; then exit 41; else printf "direct-ok\n"; fi'
 direct_output="$({
   claude_runtime_scrub_environment
   cd "$runtime_cwd"
@@ -173,6 +177,18 @@ child_env = driver._child_environment(False, "")
 leaked_complus = [name for name in child_env if name.upper().startswith("COMPLUS_")]
 if leaked_complus:
     raise SystemExit(f"Windows COMPlus_ variables leaked to child: {leaked_complus!r}")
+leaked_openssl = [
+    name
+    for name in (
+        "OPENSSL_CONF",
+        "OPENSSL_CONF_INCLUDE",
+        "OPENSSL_ENGINES",
+        "OPENSSL_MODULES",
+    )
+    if name in child_env
+]
+if leaked_openssl:
+    raise SystemExit(f"Windows OpenSSL startup variables leaked to child: {leaked_openssl!r}")
 expected = "windows-unicode-☃-東京\n"
 proc, out, err, timed_out = driver._run_process(
     10,
@@ -383,7 +399,9 @@ if [ "${MSYS2_ARG_CONV_EXCL-}" = "*" ] && [ "${EXPECT_INHERITED_MSYS:-}" != "1" 
   printf 'internal MSYS conversion override leaked to Claude\n' >&2
   exit 91
 fi
-if [ -n "${ANTHROPIC_API_KEY+x}" ] || [ -n "${ANTHROPIC_AUTH_TOKEN+x}" ]; then
+if [ -n "${ANTHROPIC_API_KEY+x}" ] || [ -n "${ANTHROPIC_AUTH_TOKEN+x}" ] || \
+   [ -n "${OPENSSL_CONF+x}" ] || [ -n "${OPENSSL_CONF_INCLUDE+x}" ] || \
+   [ -n "${OPENSSL_ENGINES+x}" ] || [ -n "${OPENSSL_MODULES+x}" ]; then
   printf 'Anthropic credential variable leaked to Claude\n' >&2
   exit 92
 fi
@@ -422,6 +440,10 @@ runner_output="$({
   WINDOWS_SHIM_LOG="$shim_log" \
   ANTHROPIC_API_KEY=runner-secret \
   ANTHROPIC_AUTH_TOKEN=runner-secret \
+  OPENSSL_CONF=runner-openssl-conf \
+  OPENSSL_CONF_INCLUDE=runner-openssl-include \
+  OPENSSL_ENGINES=runner-openssl-engines \
+  OPENSSL_MODULES=runner-openssl-modules \
   BASH_ENV= ENV= /bin/bash --noprofile --norc -p scripts/run-review.sh \
     --mode code \
     --artifact-file "$artifact_file" \

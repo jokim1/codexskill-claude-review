@@ -583,21 +583,40 @@ case "${OSTYPE:-}" in
     pass "POSIX driver cancellation cleanup skipped on Windows"
     ;;
   *)
-    cancellation_child="$TEST_ROOT/work/cancellation-child.sh"
+    cancellation_child="$TEST_ROOT/work/cancellation-child.py"
     cancellation_child_pid="$TEST_ROOT/work/cancellation-child.pid"
-    cat > "$cancellation_child" <<'SH'
-#!/usr/bin/env bash
-sleep 30 &
-child_pid="$!"
-printf '%s\n' "$child_pid" > "${CANCELLATION_CHILD_PID_FILE:?}"
-wait "$child_pid"
-SH
-    chmod 755 "$cancellation_child"
+    cancellation_term_marker="$TEST_ROOT/work/cancellation-child.term"
+    cat > "$cancellation_child" <<'PY'
+from pathlib import Path
+import os
+import signal
+import subprocess
+import time
+
+child = subprocess.Popen(["/bin/sleep", "30"])
+
+
+def handle_term(_signum, _frame):
+    Path(os.environ["CANCELLATION_TERM_MARKER"]).write_text("term")
+    try:
+        child.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        pass
+    raise SystemExit(0)
+
+
+signal.signal(signal.SIGTERM, handle_term)
+Path(os.environ["CANCELLATION_CHILD_PID_FILE"]).write_text(f"{child.pid}\n")
+while child.poll() is None:
+    time.sleep(0.05)
+PY
     CANCELLATION_CHILD_PID_FILE="$cancellation_child_pid" \
+    CANCELLATION_TERM_MARKER="$cancellation_term_marker" \
       "$CLAUDE_RUNTIME_PYTHON_BIN" -I -S - \
       "$python_driver" \
       "$cancellation_child" \
-      "$cancellation_child_pid" <<'PY'
+      "$cancellation_child_pid" \
+      "$cancellation_term_marker" <<'PY'
 from pathlib import Path
 import os
 import signal
@@ -608,6 +627,7 @@ import time
 driver_path = sys.argv[1]
 child_path = sys.argv[2]
 pid_path = Path(sys.argv[3])
+term_marker = Path(sys.argv[4])
 driver = subprocess.Popen(
     [
         sys.executable,
@@ -620,6 +640,9 @@ driver = subprocess.Popen(
         "",
         "",
         "-",
+        sys.executable,
+        "-I",
+        "-S",
         child_path,
     ],
     stdin=subprocess.DEVNULL,
@@ -654,6 +677,8 @@ try:
             f"driver cancellation status changed: rc={returncode} "
             f"stdout={out!r} stderr={err!r}"
         )
+    if not term_marker.exists():
+        raise SystemExit("runtime child did not handle SIGTERM before cleanup completed")
 
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
@@ -674,7 +699,7 @@ finally:
         except ProcessLookupError:
             pass
 PY
-    pass "POSIX cancellation terminates the runtime process group"
+    pass "POSIX cancellation restores child signals and terminates the runtime process group"
     ;;
 esac
 unicode_stdout="$TEST_ROOT/work/unicode-stdout"
@@ -790,7 +815,7 @@ CWD_LOG="$TEST_ROOT/cwd.log"
 cat > "$TEST_ROOT/trusted/bin/claude-env" <<'SH'
 #!/usr/bin/env bash
 printf '%s' "$PATH" > "$ENV_LOG.path"
-for name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV NODE_OPTIONS NODE_PATH PYTHONPATH RUBYOPT PERL5OPT ZDOTDIR; do
+for name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV NODE_OPTIONS NODE_PATH OPENSSL_CONF OPENSSL_CONF_INCLUDE OPENSSL_ENGINES OPENSSL_MODULES PYTHONPATH RUBYOPT PERL5OPT ZDOTDIR; do
   if [ -n "${!name+x}" ]; then printf '%s=present\n' "$name" >> "$ENV_LOG"; else printf '%s=absent\n' "$name" >> "$ENV_LOG"; fi
 done
 printf '%s' "${PRESERVED_SENTINEL:-}" >> "$ENV_LOG"
@@ -819,12 +844,16 @@ original_path="$PATH"
   NODE_EXTRA_CA_CERTS="$TEST_ROOT/runtime-ca"
   NODE_OPTIONS="--require=$TEST_ROOT/runtime-node-injection.js"
   NODE_PATH="$TEST_ROOT/runtime-node-path"
+  OPENSSL_CONF="$TEST_ROOT/runtime-openssl.cnf"
+  OPENSSL_CONF_INCLUDE="$TEST_ROOT/runtime-openssl-include"
+  OPENSSL_ENGINES="$TEST_ROOT/runtime-openssl-engines"
+  OPENSSL_MODULES="$TEST_ROOT/runtime-openssl-modules"
   PYTHONPATH="$TEST_ROOT/runtime-python-path"
   RUBYOPT="-r$TEST_ROOT/runtime-ruby-injection.rb"
   PERL5OPT="-M$TEST_ROOT/runtime-perl-injection"
   ZDOTDIR="$TEST_ROOT/runtime-zdotdir"
   CDPATH="$TEST_ROOT/runtime-cdpath-one:$TEST_ROOT/runtime-cdpath-two"
-  export HOME TMPDIR LC_ALL HTTPS_PROXY NO_PROXY NODE_EXTRA_CA_CERTS NODE_OPTIONS NODE_PATH PYTHONPATH RUBYOPT PERL5OPT ZDOTDIR CDPATH
+  export HOME TMPDIR LC_ALL HTTPS_PROXY NO_PROXY NODE_EXTRA_CA_CERTS NODE_OPTIONS NODE_PATH OPENSSL_CONF OPENSSL_CONF_INCLUDE OPENSSL_ENGINES OPENSSL_MODULES PYTHONPATH RUBYOPT PERL5OPT ZDOTDIR CDPATH
   claude_runtime_run_direct \
     "$TEST_ROOT/work" \
     "$CLAUDE_RUNTIME_PYTHON_BIN" \
@@ -840,7 +869,7 @@ assert_eq "$TEST_ROOT/work" "$(cat "$CWD_LOG")" "isolated runtime CWD"
 grep -q '^ANTHROPIC_API_KEY=absent$' "$ENV_LOG" || fail "API key scrubbed"
 grep -q '^BASH_ENV=absent$' "$ENV_LOG" || fail "BASH_ENV scrubbed"
 grep -q '^ENV=absent$' "$ENV_LOG" || fail "ENV scrubbed"
-for scrubbed_name in NODE_OPTIONS NODE_PATH PYTHONPATH RUBYOPT PERL5OPT ZDOTDIR; do
+for scrubbed_name in NODE_OPTIONS NODE_PATH OPENSSL_CONF OPENSSL_CONF_INCLUDE OPENSSL_ENGINES OPENSSL_MODULES PYTHONPATH RUBYOPT PERL5OPT ZDOTDIR; do
   grep -q "^${scrubbed_name}=absent$" "$ENV_LOG" || fail "$scrubbed_name scrubbed"
 done
 grep -q 'preserved$' "$ENV_LOG" || fail "unrelated env preserved"
@@ -1532,5 +1561,5 @@ if before_files != after_files:
 PY
 pass "bounded helper source purity"
 
-assert_eq "direct_inherited_path_v12" "$CLAUDE_RUNTIME_CONTRACT" "runtime contract label"
+assert_eq "direct_inherited_path_v13" "$CLAUDE_RUNTIME_CONTRACT" "runtime contract label"
 pass "shared helper contracts"

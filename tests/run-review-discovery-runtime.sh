@@ -83,7 +83,7 @@ fi
   printf 'call=%s\n' "${1:-none}"
   printf 'cwd=%s\n' "$(pwd -P)"
   printf 'path=%s\n' "$PATH"
-  for name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV NODE_OPTIONS NODE_PATH PYTHONPATH RUBYOPT PERL5OPT ZDOTDIR; do
+  for name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV NODE_OPTIONS NODE_PATH OPENSSL_CONF OPENSSL_CONF_INCLUDE OPENSSL_ENGINES OPENSSL_MODULES PYTHONPATH RUBYOPT PERL5OPT ZDOTDIR; do
     if /usr/bin/env | /usr/bin/grep -q "^${name}="; then printf '%s=present\n' "$name"; else printf '%s=absent\n' "$name"; fi
   done
   printf 'preserved=%s\n' "${PRESERVED_SENTINEL:-missing}"
@@ -136,6 +136,10 @@ run_runner() {
     ANTHROPIC_CONSOLE_AUTH_TOKEN="console-auth-secret" \
     NODE_OPTIONS="--require=$TEST_ROOT/runner-node-injection.js" \
     NODE_PATH="$TEST_ROOT/runner-node-path" \
+    OPENSSL_CONF="$TEST_ROOT/runner-openssl.cnf" \
+    OPENSSL_CONF_INCLUDE="$TEST_ROOT/runner-openssl-include" \
+    OPENSSL_ENGINES="$TEST_ROOT/runner-openssl-engines" \
+    OPENSSL_MODULES="$TEST_ROOT/runner-openssl-modules" \
     PYTHONPATH="$TEST_ROOT/runner-python-path" \
     RUBYOPT="-r$TEST_ROOT/runner-ruby-injection.rb" \
     PERL5OPT="-M$TEST_ROOT/runner-perl-injection" \
@@ -250,7 +254,7 @@ native_output="$(run_runner "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$native_home
 assert_json_status "$native_output" clean ok
 grep -Fq "executable=$native_home/.local/bin/claude" "$native_log" || fail "native launch path not executed"
 [ "$(grep '^call=' "$native_log" | wc -l | tr -d ' ')" = "4" ] || fail "runner did not execute version/auth/preflight/review"
-for scrubbed_name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV NODE_OPTIONS NODE_PATH PYTHONPATH RUBYOPT PERL5OPT ZDOTDIR; do
+for scrubbed_name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV NODE_OPTIONS NODE_PATH OPENSSL_CONF OPENSSL_CONF_INCLUDE OPENSSL_ENGINES OPENSSL_MODULES PYTHONPATH RUBYOPT PERL5OPT ZDOTDIR; do
   grep -q "^${scrubbed_name}=absent$" "$native_log" || fail "runner did not scrub $scrubbed_name"
 done
 grep -q '^preserved=runner-preserved$' "$native_log" || fail "runner dropped non-sensitive inherited environment"
@@ -792,7 +796,7 @@ run_bootstrap_case() {
     missing_symbol_config) sed 's/^claude_config_load_file()/claude_config_load_file_missing()/' "$REPO_ROOT/scripts/claude-config.sh" > "$skill/scripts/claude-config.sh" ;;
     missing_symbol_locator) sed 's/^claude_locator_validate_candidate()/claude_locator_validate_candidate_missing()/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
     stale_locator) sed -e 's/bounded_path_native_homebrew_v6/bounded_path_native_homebrew_v5/' -e 's/locator_v6/locator_v5/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
-    stale_runtime) sed -e 's/direct_inherited_path_v12/direct_inherited_path_v11/' -e 's/runtime_v12/runtime_v11/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
+    stale_runtime) sed -e 's/direct_inherited_path_v13/direct_inherited_path_v12/' -e 's/runtime_v13/runtime_v12/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
   esac
   output="$(run_runner "$skill" "$REPO_ROOT" "$REPO_ROOT" "$HOME" "$path_root/bin:$SYSTEM_PATH" "$candidate_log" 2>&1)"
   assert_json_status "$output" blocked "installation is incomplete"

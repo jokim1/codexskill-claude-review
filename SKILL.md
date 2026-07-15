@@ -242,7 +242,7 @@ uses a private process group. Do not replace either path with direct-process-onl
 Review flows may need to run `scripts/run-review.sh` outside the Codex filesystem
 sandbox when the command tool supports that choice. The bridge eventually shells out
 to `claude -p`, and Claude Code may need to create lock or refresh files under
-`~/.claude` even for report-only review. A sandboxed parent Bash process causes the
+`~/.claude` even for report-only review. A sandboxed parent bash process causes the
 child `claude` process to inherit the same write restrictions, which can fail with
 `EPERM` on paths such as `~/.claude/.oauth_refresh.lock`.
 
