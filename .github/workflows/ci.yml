@@ -23,8 +23,17 @@ jobs:
       - name: Doctor tests
         run: bash tests/claude-doctor.sh
 
+      - name: Locator and runtime contract tests
+        run: bash tests/claude-locator-runtime.sh
+
       - name: Runner classification tests
         run: bash tests/run-review-sandbox-classification.sh
+
+      - name: Runner discovery and runtime tests
+        run: bash tests/run-review-discovery-runtime.sh
+
+      - name: Artifact size and splitting tests
+        run: bash tests/artifact-size-and-splitting.sh
 
       - name: Challenge prompt fixture tests
         run: bash tests/challenge-prompt-fixtures.sh
@@ -34,3 +43,32 @@ jobs:
 
       - name: Router guard docs test
         run: bash tests/claude-router-guard-docs.sh
+
+      - name: Install completeness test
+        run: bash tests/install-completeness.sh
+
+  windows-transport:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up native Python transport
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Materialize the production python3 basename
+        run: |
+          test -n "${pythonLocation:-}"
+          if [ ! -e "$pythonLocation/python3.exe" ]; then
+            cp "$pythonLocation/python.exe" "$pythonLocation/python3.exe"
+          fi
+          "$pythonLocation/python3.exe" --version
+          type -P python3
+
+      - name: Windows Git Bash transport
+        run: bash tests/windows-transport.sh

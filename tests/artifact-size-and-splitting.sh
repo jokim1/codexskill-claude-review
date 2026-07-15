@@ -265,7 +265,7 @@ PY
 
   output="$(
     cd "$REPO_ROOT"
-    bash scripts/run-review.sh \
+    bash --noprofile --norc -p scripts/run-review.sh \
       --mode code \
       --artifact-file "$tmpdir/claude-review-large.txt" \
       --base-prompt prompts/code-review.base.md \
@@ -288,7 +288,7 @@ run_runner_invalid_limit_case() {
 
   output="$(
     cd "$REPO_ROOT"
-    CLAUDE_REVIEW_MAX_ARTIFACT_BYTES=00 bash scripts/run-review.sh \
+    CLAUDE_REVIEW_MAX_ARTIFACT_BYTES=00 bash --noprofile --norc -p scripts/run-review.sh \
       --mode code \
       --artifact-file "$tmpdir/claude-review-small.txt" \
       --base-prompt prompts/code-review.base.md \
@@ -327,7 +327,7 @@ PY
 
   output="$(
     cd "$REPO_ROOT"
-    bash scripts/run-review.sh \
+    bash --noprofile --norc -p scripts/run-review.sh \
       --mode code \
       --artifact-file "$artifact_file" \
       --base-prompt prompts/code-review.base.md \
@@ -368,7 +368,7 @@ PY
 
   output="$(
     cd "$REPO_ROOT"
-    bash scripts/run-review.sh \
+    bash --noprofile --norc -p scripts/run-review.sh \
       --mode code \
       --artifact-file "$artifact_file" \
       --base-prompt prompts/code-review.base.md \
@@ -579,7 +579,7 @@ run_builder_rejects_old_live_pid_lock_case() {
 }
 
 run_builder_recovers_stale_reaper_case() {
-  local repo output_file split_dir output_bytes
+  local repo output_file split_dir output_bytes stat_tools
 
   repo="$TMP_ROOT/stale-reaper-split-dir"
   make_small_review_repo "$repo"
@@ -588,8 +588,23 @@ run_builder_recovers_stale_reaper_case() {
   mkdir -p "$split_dir/.claude-review-build.lock/reaper"
   printf '999999\n' > "$split_dir/.claude-review-build.lock/pid"
   touch -t 200001010000 "$split_dir/.claude-review-build.lock/reaper"
+  stat_tools="$TMP_ROOT/stale-reaper-stat-tools"
+  mkdir -p "$stat_tools"
+  cat > "$stat_tools/stat" <<'SH'
+#!/usr/bin/env bash
+if [ "$1" = "-f" ]; then
+  printf 'not-an-epoch\n'
+  exit 0
+fi
+if [ "$1" = "-c" ]; then
+  printf '946684800\n'
+  exit 0
+fi
+exit 2
+SH
+  chmod +x "$stat_tools/stat"
 
-  bash "$REPO_ROOT/scripts/build-review-artifact.sh" \
+  PATH="$stat_tools:$PATH" bash "$REPO_ROOT/scripts/build-review-artifact.sh" \
     --mode code \
     --repo-root "$repo" \
     --base-branch main \

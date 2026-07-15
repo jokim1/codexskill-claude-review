@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+readonly CLAUDE_CONFIG_CONTRACT="config_v1"
+
 CLAUDE_CONFIG_DEFAULT_EFFORT="xhigh"
 CLAUDE_CONFIG_DEFAULT_MODEL="opus"
 CLAUDE_CONFIG_DEFAULT_MAX_BUDGET_USD="5.00"
@@ -235,3 +237,5 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   set -euo pipefail
   claude_config_main "$@"
 fi
+
+# claude-review-helper-complete: config_v1
