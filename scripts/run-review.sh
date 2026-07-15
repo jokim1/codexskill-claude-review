@@ -1009,13 +1009,6 @@ run_candidate_claude_with_timeout_input() {
   run_built_claude_cmd_with_timeout "$timeout_seconds" "$input_path" "${SELECTED_CLAUDE_CMD[@]}"
 }
 
-run_selected_claude_with_timeout() {
-  local timeout_seconds="$1"
-  shift
-
-  run_candidate_claude_with_timeout "$timeout_seconds" "$CLAUDE_BIN" "$@"
-}
-
 run_selected_claude_with_timeout_input() {
   local timeout_seconds="$1"
   local input_path="$2"
