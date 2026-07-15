@@ -219,7 +219,9 @@ Runner and doctor must use only the exact `python3` accepted by
 `claude_runtime_resolve_trusted_python`, and every bridge Python invocation must
 retain isolated mode (`-I`). The resolver applies the Claude trust policy to the
 Python launch path and rejects script-shaped Python launchers so `-I` cannot be
-reinterpreted as a script argument. Do not fall back to a second PATH lookup.
+reinterpreted as a script argument. A shebangless candidate is accepted only when
+its binary header identifies ELF, Mach-O, or PE; shebangless text and malformed
+PE-like wrappers fail closed. Do not fall back to a second PATH lookup.
 Temporary trust boundaries include inherited absolute `TMPDIR`, `TEMP`, and `TMP`
 roots plus the macOS `/var/folders` namespace.
 

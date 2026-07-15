@@ -241,10 +241,12 @@ This bridge intentionally does not use Anthropic Console API billing. It scrubs
 The bridge resolves one exact `python3` from Codex's inherited PATH, applies the
 same launcher/symlink/temp/world-writable trust policy used for Claude, rejects
 script-shaped Python launchers, and invokes the validated native interpreter with
-isolated mode (`-I`). Python startup files, the current directory, `PYTHONPATH`,
-and other `PYTHON*` injection variables therefore cannot run bridge code before
-Claude's launcher is validated. Doctor reports `python_runtime_status` and the
-corresponding validation scope/reason without executing a rejected interpreter.
+isolated mode (`-I`). A shebangless Python candidate must have a binary ELF,
+Mach-O, or PE header; shebangless text and malformed PE-like wrappers fail closed.
+Python startup files, the current directory, `PYTHONPATH`, and other `PYTHON*`
+injection variables therefore cannot run bridge code before Claude's launcher is
+validated. Doctor reports `python_runtime_status` and the corresponding validation
+scope/reason without executing a rejected interpreter.
 
 ## First-Time Check
 
@@ -510,7 +512,7 @@ include `/tmp`, `/private/tmp`, inherited absolute `TMPDIR`/`TEMP`/`TMP` roots, 
 the macOS per-user `/var/folders` namespace. The canonical target must also be a
 regular, executable, non-world-writable file before Claude runs.
 
-Trust validation prefers the fixed `/usr/bin` or `/bin` `stat` and `readlink`
+Trust validation prefers the fixed `/usr/bin` or `/bin` `stat`, `readlink`, and `od`
 utilities. On NixOS it searches the captured inherited PATH and accepts a Nix
 profile symlink only after matching its final inode to a regular executable target
 inside the immutable `/nix/store` boundary. The bootstrap applies the same proof to
@@ -565,7 +567,10 @@ every executable in the resulting chain. An unsafe interpreter reports
 `launcher_dependency_unreadable`. Shebangs other than an argument-free absolute
 interpreter or exact `#!/usr/bin/env NAME` form fail closed as
 `launcher_dependency_unsupported` rather than being executed without deterministic
-dependency validation. For `env NAME`, PATH lookup is evaluated from the same
+dependency validation. Shebangless launchers likewise fail closed unless their
+binary header identifies ELF, Mach-O, or PE; PE validation includes its declared
+`PE\0\0` signature rather than accepting an `MZ` filename prefix alone. For
+`env NAME`, PATH lookup is evaluated from the same
 private runtime directory used for execution, so a relative PATH entry cannot be
 validated against the invocation directory and then select a different executable
 after the runtime changes directory. Expose a trusted interpreter to the environment
@@ -696,9 +701,10 @@ rewrite PATH to select a different interpreter.
 ### Doctor reports `launcher_dependency_unsupported`
 
 The selected launcher uses shebang syntax the bridge cannot parse without
-reimplementing platform-specific shebang argument or `env -S` tokenization. Use a
-launcher with an argument-free absolute interpreter or exact
-`#!/usr/bin/env NAME` shebang, or migrate to native Claude.
+reimplementing platform-specific shebang argument or `env -S` tokenization, or it
+is a shebangless file without a supported binary ELF, Mach-O, or PE header. Use a
+launcher with an argument-free absolute interpreter, an exact
+`#!/usr/bin/env NAME` shebang, or a native executable; otherwise migrate to native Claude.
 The bridge fails closed instead of executing an unvalidated interpreter.
 
 ### Doctor reports `launcher_dependency_unreadable`

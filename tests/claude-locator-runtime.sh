@@ -562,6 +562,45 @@ assert_eq "invocation_cwd_path" "$CLAUDE_RUNTIME_PYTHON_VALIDATION_STATUS" "unsa
 [ ! -e "$TEST_ROOT/unsafe-python-executed" ] || fail "untrusted Python executed during resolution"
 pass "trusted isolated Python bootstrap rejects startup injection"
 
+shebangless_python_root="$TEST_ROOT/shebangless-python"
+shebangless_python_marker="$TEST_ROOT/shebangless-python-executed"
+mkdir -p "$shebangless_python_root/bin"
+cat > "$shebangless_python_root/bin/python3" <<'SH'
+printf executed > "${SHEBANGLESS_PYTHON_MARKER:?}"
+exec /usr/bin/python3 "$@"
+SH
+chmod 755 "$shebangless_python_root/bin/python3"
+(
+  CLAUDE_RUNTIME_INHERITED_PATH="$shebangless_python_root/bin:${PATH-}"
+  SHEBANGLESS_PYTHON_MARKER="$shebangless_python_marker"
+  export CLAUDE_RUNTIME_INHERITED_PATH SHEBANGLESS_PYTHON_MARKER
+  if claude_runtime_resolve_trusted_python "$ROOT" "$TEST_ROOT/work" "$TEST_ROOT/work"; then
+    exit 1
+  fi
+  [ "$CLAUDE_RUNTIME_PYTHON_STATUS" = "launcher_dependency_unsupported" ] || exit 1
+  [ -z "$CLAUDE_RUNTIME_PYTHON_BIN" ] || exit 1
+) || fail "shebangless text Python fails closed"
+[ ! -e "$shebangless_python_marker" ] || fail "shebangless Python executed during resolution"
+
+mz_python_root="$TEST_ROOT/mz-text-python"
+mkdir -p "$mz_python_root/bin"
+cat > "$mz_python_root/bin/python3" <<'SH'
+MZ() { :; }
+printf executed > "${MZ_PYTHON_MARKER:?}"
+SH
+chmod 755 "$mz_python_root/bin/python3"
+(
+  CLAUDE_RUNTIME_INHERITED_PATH="$mz_python_root/bin:${PATH-}"
+  MZ_PYTHON_MARKER="$TEST_ROOT/mz-text-python-executed"
+  export CLAUDE_RUNTIME_INHERITED_PATH MZ_PYTHON_MARKER
+  if claude_runtime_resolve_trusted_python "$ROOT" "$TEST_ROOT/work" "$TEST_ROOT/work"; then
+    exit 1
+  fi
+  [ "$CLAUDE_RUNTIME_PYTHON_STATUS" = "launcher_dependency_unsupported" ] || exit 1
+) || fail "MZ-prefixed text Python fails closed"
+[ ! -e "$TEST_ROOT/mz-text-python-executed" ] || fail "MZ-prefixed text Python executed during resolution"
+pass "Python bootstrap requires a native executable header"
+
 ENV_LOG="$TEST_ROOT/env.log"
 ARGV_LOG="$TEST_ROOT/argv.log"
 CWD_LOG="$TEST_ROOT/cwd.log"

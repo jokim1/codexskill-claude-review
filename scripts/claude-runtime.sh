@@ -591,6 +591,66 @@ claude_runtime_resolve_path_dependency() {
   )
 }
 
+claude_runtime_is_native_executable() {
+  local executable_path="$1"
+  local od_bin=""
+  local header_output=""
+  local signature_output=""
+  local header_bytes=()
+  local byte=""
+  local has_binary_nul=0
+  local pe_offset=0
+
+  od_bin="$(claude_locator_resolve_trusted_utility od 2>/dev/null)" || return 1
+  header_output="$(LC_ALL=C "$od_bin" -An -tx1 -v -N80 "$executable_path" 2>/dev/null)" || return 1
+  # The trusted od emits only hexadecimal byte tokens. Validate them before
+  # using shell word splitting or arithmetic so malformed output fails closed.
+  # shellcheck disable=SC2206
+  header_bytes=($header_output)
+  [ "${#header_bytes[@]}" -ge 4 ] || return 1
+  for byte in "${header_bytes[@]}"; do
+    case "$byte" in
+      [0-9a-fA-F][0-9a-fA-F])
+        [ "$byte" != "00" ] || has_binary_nul=1
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  done
+  # Bash will not apply its ENOEXEC text-script fallback to a binary header.
+  # Requiring a NUL in the inspected header makes that property explicit even
+  # when an otherwise native-looking file is malformed.
+  [ "$has_binary_nul" -eq 1 ] || return 1
+
+  case "${header_bytes[0]} ${header_bytes[1]} ${header_bytes[2]} ${header_bytes[3]}" in
+    "7f 45 4c 46"|\
+    "fe ed fa ce"|"ce fa ed fe"|\
+    "fe ed fa cf"|"cf fa ed fe"|\
+    "ca fe ba be"|"be ba fe ca"|\
+    "ca fe ba bf"|"bf ba fe ca")
+      return 0
+      ;;
+    "4d 5a "*)
+      [ "${#header_bytes[@]}" -ge 64 ] || return 1
+      pe_offset=$((
+        16#${header_bytes[60]} +
+        (16#${header_bytes[61]} << 8) +
+        (16#${header_bytes[62]} << 16) +
+        (16#${header_bytes[63]} << 24)
+      ))
+      [ "$pe_offset" -ge 64 ] && [ "$pe_offset" -le 16777216 ] || return 1
+      signature_output="$(LC_ALL=C "$od_bin" -An -tx1 -v -j "$pe_offset" -N4 "$executable_path" 2>/dev/null)" || return 1
+      # shellcheck disable=SC2206
+      header_bytes=($signature_output)
+      [ "${#header_bytes[@]}" -eq 4 ] || return 1
+      [ "${header_bytes[0]} ${header_bytes[1]} ${header_bytes[2]} ${header_bytes[3]}" = "50 45 00 00" ] || return 1
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 claude_runtime_inspect_shebang_path() {
   local current_path="$1"
   local depth="$2"
@@ -646,8 +706,14 @@ claude_runtime_inspect_shebang_path() {
     '#!'*)
       ;;
     *)
-      CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND=("$current_path")
-      return 0
+      if claude_runtime_is_native_executable "$current_path"; then
+        CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND=("$current_path")
+        return 0
+      fi
+      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unsupported"
+      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="native_format"
+      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="$current_path"
+      return 1
       ;;
   esac
 
