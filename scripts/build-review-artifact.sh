@@ -156,7 +156,22 @@ make_temp_dir() {
 }
 
 file_mtime_epoch() {
-  stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || printf '0'
+  local path="$1"
+  local mtime=""
+
+  mtime="$(stat -f %m "$path" 2>/dev/null || true)"
+  if [[ "$mtime" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$mtime"
+    return 0
+  fi
+
+  mtime="$(stat -c %Y "$path" 2>/dev/null || true)"
+  if [[ "$mtime" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$mtime"
+    return 0
+  fi
+
+  printf '0'
 }
 
 path_age_is_stale() {

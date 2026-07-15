@@ -153,6 +153,7 @@ printf '%s' "$argv_output" | grep -Fq 'equals=value' || fail "equals argv lost"
 python_bin="$(type -P python3 2>/dev/null || type -P python 2>/dev/null || true)"
 [ -n "$python_bin" ] || fail "Python unavailable for timeout transport"
 windows_claude_target="$CLAUDE_LOCATOR_CANONICAL_TARGET"
+windows_claude_launch_path="$CLAUDE_LOCATOR_LAUNCH_PATH"
 claude_runtime_resolve_trusted_python "$ROOT" "$PWD" "$runtime_cwd" || fail "trusted Windows Python resolution: ${CLAUDE_RUNTIME_PYTHON_STATUS:-missing}"
 [ "$CLAUDE_RUNTIME_PYTHON_STATUS" = "safe" ] || fail "trusted Windows Python status"
 process_driver="$runtime_cwd/process-driver.py"
@@ -217,7 +218,7 @@ PY
 claude_runtime_check_launcher_dependency "$windows_claude_target" "$runtime_cwd" || fail "native Windows executable classification"
 [ "$CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_KIND" = "direct" ] || fail "native .exe transport kind"
 claude_runtime_build_command \
-  "$CLAUDE_LOCATOR_LAUNCH_PATH" \
+  "$windows_claude_launch_path" \
   --noprofile \
   --norc \
   -c \
