@@ -41,8 +41,8 @@ for helper in scripts/claude-config.sh scripts/claude-locator.sh scripts/claude-
   [ -x "$ROOT/$helper" ] || fail "$helper is not executable"
   case "$helper" in
     *config*) tail -n 1 "$ROOT/$helper" | grep -Fqx '# claude-review-helper-complete: config_v1' || fail "$helper marker" ;;
-    *locator*) tail -n 1 "$ROOT/$helper" | grep -Fqx '# claude-review-helper-complete: locator_v1' || fail "$helper marker" ;;
-    *runtime*) tail -n 1 "$ROOT/$helper" | grep -Fqx '# claude-review-helper-complete: runtime_v1' || fail "$helper marker" ;;
+    *locator*) tail -n 1 "$ROOT/$helper" | grep -Fqx '# claude-review-helper-complete: locator_v2' || fail "$helper marker" ;;
+    *runtime*) tail -n 1 "$ROOT/$helper" | grep -Fqx '# claude-review-helper-complete: runtime_v2' || fail "$helper marker" ;;
   esac
   if git -C "$ROOT" ls-files --error-unmatch "$helper" >/dev/null 2>&1; then
     mode="$(git -C "$ROOT" ls-files -s "$helper" | awk '{print $1}')"
@@ -55,6 +55,7 @@ for helper in scripts/claude-config.sh scripts/claude-locator.sh scripts/claude-
 done
 for runtime_symbol in \
   claude_runtime_resolve_trusted_python \
+  claude_runtime_is_native_executable \
   claude_runtime_write_python_driver \
   claude_runtime_python_transport_path \
   claude_runtime_run_with_timeout \
@@ -123,7 +124,7 @@ doctor_output="$({
       --skip-update-check
 })"
 printf '%s\n' "$doctor_output" | grep -Fqx 'doctor_status=ok' || fail "doctor bootstrap from checkout"
-printf '%s\n' "$doctor_output" | grep -Fqx 'claude_runtime_contract=direct_inherited_path_v1' || fail "doctor runtime helper bootstrap"
+printf '%s\n' "$doctor_output" | grep -Fqx 'claude_runtime_contract=direct_inherited_path_v2' || fail "doctor runtime helper bootstrap"
 printf '%s\n' "$doctor_output" | grep -Fqx 'python_runtime_status=safe' || fail "doctor trusted Python bootstrap"
 
 printf 'artifact\n' > "$TEST_ROOT/claude-review-artifact.txt"

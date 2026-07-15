@@ -262,6 +262,10 @@ final inode matches a regular executable target inside the immutable store. An F
 immutable-store target and is never executed to validate itself. Other FHS utility
 symlinks are accepted only through a bounded `/usr/bin`, `/bin`, or
 `/etc/alternatives` chain ending at a regular executable in `/usr/bin` or `/bin`.
+Runner and doctor must require the exact current locator/runtime contract values,
+EOF completeness markers, and required symbol sets before sourcing the helpers.
+Treat a stale or mixed-generation helper as `bridge_installation_incomplete`; do
+not combine helper generations after a partial update.
 The validated Claude child still receives the original inherited PATH. Approving the prefix above grants
 unsandboxed execution to the installed skill script, so only approve the exact
 installed skill path you trust. Do not approve broad shell prefixes, and do not

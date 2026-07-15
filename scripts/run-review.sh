@@ -612,7 +612,7 @@ REVIEW_TIMEOUT_SECONDS="$CLAUDE_CONFIG_DEFAULT_REVIEW_TIMEOUT_SECONDS"
 
 if ! load_required_claude_helper \
   "$CLAUDE_LOCATOR_HELPER" \
-  "# claude-review-helper-complete: locator_v1" \
+  "# claude-review-helper-complete: locator_v2" \
   claude_locator_path_candidate \
   claude_locator_native_supported \
   claude_locator_native_path \
@@ -627,9 +627,10 @@ fi
 
 if ! load_required_claude_helper \
   "$CLAUDE_RUNTIME_HELPER" \
-  "# claude-review-helper-complete: runtime_v1" \
+  "# claude-review-helper-complete: runtime_v2" \
   claude_runtime_check_launcher_dependency \
   claude_runtime_build_command \
+  claude_runtime_is_native_executable \
   claude_runtime_probe_with_timeout \
   claude_runtime_prepare_python_argv \
   claude_runtime_python_transport_path \
@@ -644,12 +645,12 @@ if ! load_required_claude_helper \
   exit 0
 fi
 
-if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v1" ]; then
+if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v2" ]; then
   emit_bridge_installation_incomplete "claude-locator.sh"
   exit 0
 fi
 
-if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v1" ]; then
+if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v2" ]; then
   emit_bridge_installation_incomplete "claude-runtime.sh"
   exit 0
 fi

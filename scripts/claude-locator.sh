@@ -3,7 +3,7 @@
 # Shared Claude launcher discovery and trust validation. This file must remain
 # source-pure: definitions and readonly contract constants only.
 
-readonly CLAUDE_LOCATOR_CONTRACT="bounded_path_native_homebrew_v1"
+readonly CLAUDE_LOCATOR_CONTRACT="bounded_path_native_homebrew_v2"
 readonly CLAUDE_LOCATOR_TRUSTED_STORE_ROOT="/nix/store"
 
 claude_locator_native_supported() {
@@ -736,4 +736,4 @@ claude_locator_validate_launcher_dependency() {
   [ "$dependency_valid" = true ]
 }
 
-# claude-review-helper-complete: locator_v1
+# claude-review-helper-complete: locator_v2

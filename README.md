@@ -529,6 +529,11 @@ If no trusted validation utility is available, the bridge fails closed with
 `claude_trust_reason=validation_unavailable`; it never substitutes an arbitrary
 PATH utility or misreports the candidate as world-writable/dangling.
 
+Runner and doctor also require matching locator/runtime contract generations and
+EOF completeness markers before sourcing either helper. A stale helper from a
+mixed or interrupted update is reported as `bridge_installation_incomplete`; the
+bridge does not combine old trust code with a newer caller.
+
 Runner and doctor then execute the validated launch path directly from a private
 `/tmp/claude-review-runtime-*` directory. They preserve inherited PATH byte-for-byte
 for Claude and its descendants; they do not prepend the launcher directory, start

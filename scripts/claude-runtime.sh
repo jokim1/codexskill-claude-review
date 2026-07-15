@@ -3,7 +3,7 @@
 # Shared direct Claude command transport. This file must remain source-pure:
 # definitions and readonly contract constants only.
 
-readonly CLAUDE_RUNTIME_CONTRACT="direct_inherited_path_v1"
+readonly CLAUDE_RUNTIME_CONTRACT="direct_inherited_path_v2"
 
 claude_runtime_scrub_environment() {
   unset BASH_ENV
@@ -824,4 +824,4 @@ claude_runtime_check_launcher_dependency() {
   return 0
 }
 
-# claude-review-helper-complete: runtime_v1
+# claude-review-helper-complete: runtime_v2
