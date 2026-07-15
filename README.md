@@ -598,15 +598,16 @@ environment that launches Codex or in Claude `settings.json` as appropriate.
 Doctor's main discovery states are `available`, `installed_not_on_path`,
 `not_executable`, `not_regular`, `dangling_symlink`, `unsafe_candidate`,
 `launcher_dependency_missing`, `launcher_dependency_unsafe`,
-`launcher_dependency_unsupported`, `launcher_dependency_unreadable`, and
+`launcher_dependency_validation_unavailable`, `launcher_dependency_unsupported`,
+`launcher_dependency_unreadable`, and
 `not_found`. `not_found` means only that PATH and the bounded official/default
 locations did not contain a candidate; it does not prove Claude is uninstalled.
 Doctor is report-only and will not edit PATH or shell files, install Claude, or
 create symlinks. Its `--skill-root` argument may only assert the physical root
 containing the invoked doctor; it cannot redirect sourced helpers to another
 checkout or directory. Its checkout diagnostics disable fsmonitor and optional Git
-locks, ignore inherited Git repository/config routing overrides, and do not
-refresh the index. Its auth diagnostics explicitly use the same
+locks, ignore inherited Git repository/config routing and trace-output variables,
+and do not refresh the index or write trace files. Its auth diagnostics explicitly use the same
 `subscription_only_credentials_scrubbed` context as review, so an API-key-only
 ordinary Claude setup may work even when bridge subscription auth is unavailable.
 Runner and doctor bound their version, auth-status, and live-probe calls with the
@@ -711,6 +712,14 @@ is a shebangless file without a supported binary ELF, Mach-O, or PE header. Use 
 launcher with an argument-free absolute interpreter, an exact
 `#!/usr/bin/env NAME` shebang, or a native executable; otherwise migrate to native Claude.
 The bridge fails closed instead of executing an unvalidated interpreter.
+
+### Doctor reports `launcher_dependency_validation_unavailable`
+
+The bridge could not resolve or run a trusted `od` utility to inspect a shebangless
+native executable header. Restore `od` under `/usr/bin` or `/bin`, or expose its
+immutable Nix-store executable through the environment that launches Codex. The
+bridge will not substitute an arbitrary mutable PATH utility or misreport this as
+unsupported launcher syntax.
 
 ### Doctor reports `launcher_dependency_unreadable`
 

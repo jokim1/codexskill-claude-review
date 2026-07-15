@@ -88,6 +88,7 @@ eligible = {
     "unusable_runner",
     "launcher_dependency_missing",
     "launcher_dependency_unsafe",
+    "launcher_dependency_validation_unavailable",
     "launcher_dependency_unsupported",
     "launcher_dependency_unreadable",
     "subscription_auth_unavailable",

@@ -716,7 +716,8 @@ always skips the mutating update helper. It is diagnostic and report-only: it mu
 not install Claude, edit PATH
 or shell configuration, create a symlink, refresh a Git index, execute a Git
 fsmonitor hook, or otherwise mutate the user's system. Checkout diagnostics must
-disable optional locks and ignore inherited Git repository/config routing overrides.
+disable optional locks and ignore inherited Git repository/config routing and
+trace-output variables.
 Treat `claude_trust_reason=validation_unavailable` as a fail-closed unsafe-candidate
 diagnosis; do not recommend bypassing trust validation or using a mutable PATH
 utility in order to continue.
@@ -724,6 +725,9 @@ Treat `claude_path_status=launcher_dependency_unsafe` the same way: the recogniz
 shebang interpreter failed the launcher's trust boundary and must not be executed.
 Use the emitted `claude_launcher_dependency_path`, trust scope, and trust reason to
 explain which inherited-PATH or absolute interpreter needs repair.
+Treat `claude_path_status=launcher_dependency_validation_unavailable` as a missing
+trusted native-header validator. Restore fixed-FHS `od` or an immutable-store `od`;
+do not substitute a mutable PATH utility or describe the launcher syntax as invalid.
 For `claude_path_status=launcher_dependency_missing`, use
 `claude_launcher_dependency_resolution`: recommend an inherited-PATH change only
 for `path`; for `absolute`, tell the user to repair or reinstall the exact reported

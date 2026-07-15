@@ -3,7 +3,7 @@
 # Shared direct Claude command transport. This file must remain source-pure:
 # definitions and readonly contract constants only.
 
-readonly CLAUDE_RUNTIME_CONTRACT="direct_inherited_path_v2"
+readonly CLAUDE_RUNTIME_CONTRACT="direct_inherited_path_v3"
 
 claude_runtime_scrub_environment() {
   unset BASH_ENV
@@ -601,8 +601,8 @@ claude_runtime_is_native_executable() {
   local has_binary_nul=0
   local pe_offset=0
 
-  od_bin="$(claude_locator_resolve_trusted_utility od 2>/dev/null)" || return 1
-  header_output="$(LC_ALL=C "$od_bin" -An -tx1 -v -N80 "$executable_path" 2>/dev/null)" || return 1
+  od_bin="$(claude_locator_resolve_trusted_utility od 2>/dev/null)" || return 2
+  header_output="$(LC_ALL=C "$od_bin" -An -tx1 -v -N80 "$executable_path" 2>/dev/null)" || return 2
   # The trusted od emits only hexadecimal byte tokens. Validate them before
   # using shell word splitting or arithmetic so malformed output fails closed.
   # shellcheck disable=SC2206
@@ -614,7 +614,7 @@ claude_runtime_is_native_executable() {
         [ "$byte" != "00" ] || has_binary_nul=1
         ;;
       *)
-        return 1
+        return 2
         ;;
     esac
   done
@@ -640,10 +640,16 @@ claude_runtime_is_native_executable() {
         (16#${header_bytes[63]} << 24)
       ))
       [ "$pe_offset" -ge 64 ] && [ "$pe_offset" -le 16777216 ] || return 1
-      signature_output="$(LC_ALL=C "$od_bin" -An -tx1 -v -j "$pe_offset" -N4 "$executable_path" 2>/dev/null)" || return 1
+      signature_output="$(LC_ALL=C "$od_bin" -An -tx1 -v -j "$pe_offset" -N4 "$executable_path" 2>/dev/null)" || return 2
       # shellcheck disable=SC2206
       header_bytes=($signature_output)
       [ "${#header_bytes[@]}" -eq 4 ] || return 1
+      for byte in "${header_bytes[@]}"; do
+        case "$byte" in
+          [0-9a-fA-F][0-9a-fA-F]) ;;
+          *) return 2 ;;
+        esac
+      done
       [ "${header_bytes[0]} ${header_bytes[1]} ${header_bytes[2]} ${header_bytes[3]}" = "50 45 00 00" ] || return 1
       return 0
       ;;
@@ -664,6 +670,7 @@ claude_runtime_inspect_shebang_path() {
   local remainder=""
   local extra=""
   local stack_index=0
+  local native_status=0
   local interpreter_transport=()
 
   if [ "$depth" -gt 8 ]; then
@@ -709,6 +716,15 @@ claude_runtime_inspect_shebang_path() {
       if claude_runtime_is_native_executable "$current_path"; then
         CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND=("$current_path")
         return 0
+      else
+        native_status=$?
+      fi
+      if [ "$native_status" -eq 2 ]; then
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="validation_unavailable"
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="od"
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="none"
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_RESOLUTION="bootstrap"
+        return 1
       fi
       CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unsupported"
       CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="native_format"
@@ -824,4 +840,4 @@ claude_runtime_check_launcher_dependency() {
   return 0
 }
 
-# claude-review-helper-complete: runtime_v2
+# claude-review-helper-complete: runtime_v3

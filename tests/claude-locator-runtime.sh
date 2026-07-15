@@ -431,6 +431,14 @@ PY
 cp "$TEST_ROOT/work/subprocess.py" "$python_injection_root/subprocess.py"
 claude_runtime_resolve_trusted_python "$ROOT" "$TEST_ROOT/work" "$TEST_ROOT/work" || fail "trusted Python resolution"
 assert_eq "safe" "$CLAUDE_RUNTIME_PYTHON_STATUS" "trusted Python status"
+(
+  claude_locator_resolve_trusted_utility() { return 1; }
+  if claude_runtime_check_launcher_dependency "$CLAUDE_RUNTIME_PYTHON_CANONICAL_TARGET" "$TEST_ROOT/work"; then
+    exit 1
+  fi
+  [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" = "validation_unavailable" ] || exit 1
+  [ "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY" = "od" ] || exit 1
+) || fail "missing trusted od is validation-unavailable"
 claude_runtime_write_python_driver "$python_driver"
 "$CLAUDE_RUNTIME_PYTHON_BIN" -I - "$python_driver" <<'PY'
 import importlib.util
@@ -1050,5 +1058,5 @@ if before_files != after_files:
 PY
 pass "bounded helper source purity"
 
-assert_eq "direct_inherited_path_v2" "$CLAUDE_RUNTIME_CONTRACT" "runtime contract label"
+assert_eq "direct_inherited_path_v3" "$CLAUDE_RUNTIME_CONTRACT" "runtime contract label"
 pass "shared helper contracts"

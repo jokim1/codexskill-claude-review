@@ -504,7 +504,7 @@ fi
 
 if ! load_required_claude_helper \
   "$RUNTIME_HELPER" \
-  "# claude-review-helper-complete: runtime_v2" \
+  "# claude-review-helper-complete: runtime_v3" \
   claude_runtime_check_launcher_dependency \
   claude_runtime_build_command \
   claude_runtime_is_native_executable \
@@ -531,7 +531,7 @@ if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v2" ]; then
   exit 0
 fi
 
-if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v2" ]; then
+if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v3" ]; then
   print_kv "doctor_status" "bridge_installation_incomplete"
   print_kv "bridge_component" "claude-runtime.sh"
   print_kv "bridge_guidance" "Reinstall or update the complete claude-review skill, then retry."
@@ -683,6 +683,25 @@ doctor_git_report_only() {
     unset GIT_CEILING_DIRECTORIES
     unset GIT_DISCOVERY_ACROSS_FILESYSTEM
     unset GIT_CONFIG_PARAMETERS
+    unset GIT_TRACE
+    unset GIT_TRACE_CURL
+    unset GIT_TRACE_CURL_NO_DATA
+    unset GIT_TRACE_FSMONITOR
+    unset GIT_TRACE_PACK_ACCESS
+    unset GIT_TRACE_PACKET
+    unset GIT_TRACE_PERFORMANCE
+    unset GIT_TRACE_REFS
+    unset GIT_TRACE_SETUP
+    unset GIT_TRACE_SHALLOW
+    unset GIT_TRACE2
+    unset GIT_TRACE2_BRIEF
+    unset GIT_TRACE2_CONFIG_PARAMS
+    unset GIT_TRACE2_DST_DEBUG
+    unset GIT_TRACE2_EVENT
+    unset GIT_TRACE2_PARENT_NAME
+    unset GIT_TRACE2_PARENT_SID
+    unset GIT_TRACE2_PERF
+    unset GIT_TRACE_REDACT
     GIT_OPTIONAL_LOCKS=0
     GIT_CONFIG_COUNT=0
     GIT_CONFIG_NOSYSTEM=1
@@ -819,6 +838,9 @@ if [ -n "$candidate_path" ]; then
       launcher_dependency="$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY"
       launcher_dependency_resolution="${CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_RESOLUTION:-none}"
       case "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" in
+        validation_unavailable)
+          path_status="launcher_dependency_validation_unavailable"
+          ;;
         unsupported)
           path_status="launcher_dependency_unsupported"
           ;;
@@ -913,6 +935,9 @@ if [ "$candidate_safe" != "true" ]; then
     launcher_dependency_unsafe)
       print_kv "claude_guidance" "Use a trusted launcher interpreter outside repository, invocation-CWD, temp, world-writable file, and world-writable parent boundaries."
       ;;
+    launcher_dependency_validation_unavailable)
+      print_kv "claude_guidance" "Restore a trusted od utility under /usr/bin or /bin, or in the immutable Nix store exposed by Codex's inherited PATH; the bridge will not inspect native executable headers with a mutable PATH utility."
+      ;;
     launcher_dependency_unsupported)
       print_kv "claude_guidance" "Use an argument-free absolute interpreter or exact '#!/usr/bin/env NAME' launcher shebang, or install native Claude with: curl -fsSL https://claude.ai/install.sh | bash"
       ;;
@@ -988,8 +1013,16 @@ run_probe \
   "plain_print_probe" \
   "$claude_bin" \
   -p \
+  --safe-mode \
   --output-format json \
-  --disable-slash-commands
+  --tools "" \
+  --strict-mcp-config \
+  --setting-sources local \
+  --disable-slash-commands \
+  --no-session-persistence \
+  --permission-mode dontAsk \
+  --effort low \
+  --max-budget-usd 0.15
 
 run_probe \
   "safe_mode_print_probe" \

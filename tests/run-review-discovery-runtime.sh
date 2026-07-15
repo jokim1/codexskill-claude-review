@@ -700,7 +700,7 @@ run_bootstrap_case() {
     missing_symbol_config) sed 's/^claude_config_load_file()/claude_config_load_file_missing()/' "$REPO_ROOT/scripts/claude-config.sh" > "$skill/scripts/claude-config.sh" ;;
     missing_symbol_locator) sed 's/^claude_locator_validate_candidate()/claude_locator_validate_candidate_missing()/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
     stale_locator) sed -e 's/bounded_path_native_homebrew_v2/bounded_path_native_homebrew_v1/' -e 's/locator_v2/locator_v1/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
-    stale_runtime) sed -e 's/direct_inherited_path_v2/direct_inherited_path_v1/' -e 's/runtime_v2/runtime_v1/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
+    stale_runtime) sed -e 's/direct_inherited_path_v3/direct_inherited_path_v2/' -e 's/runtime_v3/runtime_v2/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
   esac
   output="$(run_runner "$skill" "$REPO_ROOT" "$REPO_ROOT" "$HOME" "$path_root/bin:$SYSTEM_PATH" "$candidate_log" 2>&1)"
   assert_json_status "$output" blocked "installation is incomplete"

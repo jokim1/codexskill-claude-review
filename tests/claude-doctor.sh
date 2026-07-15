@@ -221,7 +221,7 @@ assert_line "$basic_output" "claude_bin=$path_bin/claude" "absolute launch path"
 assert_line "$basic_output" "claude_target=$path_bin/claude" "canonical target"
 assert_line "$basic_output" "claude_trust_scope=none" "safe trust scope"
 assert_line "$basic_output" "claude_trust_reason=none" "safe trust reason"
-assert_line "$basic_output" "claude_runtime_contract=direct_inherited_path_v2" "runtime contract"
+assert_line "$basic_output" "claude_runtime_contract=direct_inherited_path_v3" "runtime contract"
 assert_line "$basic_output" "claude_version=2.test.0 (Claude Code fake)" "version"
 assert_line "$basic_output" "claude_auth_logged_in=True" "auth state"
 assert_line "$basic_output" "claude_auth_provider=firstParty" "auth provider"
@@ -231,6 +231,12 @@ assert_line "$basic_output" "python_validation_scope=none" "trusted Python scope
 assert_line "$basic_output" "python_validation_reason=none" "trusted Python reason"
 assert_line "$basic_output" "plain_print_probe_status=completed" "plain probe"
 assert_line "$basic_output" "safe_mode_print_probe_status=completed" "safe probe"
+probe_safe_mode_count="$(grep -Fc 'arg=[--safe-mode]' "$path_log" || true)"
+probe_empty_tools_count="$(grep -Fc 'arg=[--tools]' "$path_log" || true)"
+probe_no_session_count="$(grep -Fc 'arg=[--no-session-persistence]' "$path_log" || true)"
+[ "$probe_safe_mode_count" -eq 2 ] || fail "both doctor probes require safe mode"
+[ "$probe_empty_tools_count" -eq 2 ] || fail "both doctor probes disable tools"
+[ "$probe_no_session_count" -eq 2 ] || fail "both doctor probes disable session persistence"
 assert_line "$basic_output" "runner_safe_mode=ok" "runner safe-mode contract"
 assert_line "$basic_output" "runner_strict_mcp_config=ok" "runner strict-MCP contract"
 assert_line "$basic_output" "router_present=ok" "router presence"
@@ -329,6 +335,12 @@ print(sha256(Path(sys.argv[1]).read_bytes()).hexdigest())
 PY
 )"
 git_expected_head="$(git -C "$git_diagnostic_skill" rev-parse --short=12 HEAD)"
+git_trace_marker="$TEST_ROOT/inherited-git-trace"
+git_trace2_event_marker="$TEST_ROOT/inherited-git-trace2-event"
+git_trace2_perf_marker="$TEST_ROOT/inherited-git-trace2-perf"
+GIT_TRACE="$git_trace_marker" git -C "$git_diagnostic_skill" rev-parse HEAD >/dev/null 2>&1
+[ -s "$git_trace_marker" ] || fail "Git trace fixture did not create its destination"
+rm "$git_trace_marker"
 git_diagnostic_output="$(
   export GIT_DIR="$TEST_ROOT/injected-git-dir"
   export GIT_WORK_TREE="$TEST_ROOT/injected-git-work-tree"
@@ -337,6 +349,9 @@ git_diagnostic_output="$(
   export GIT_CONFIG_KEY_0=core.fsmonitor
   export GIT_CONFIG_VALUE_0="$git_fsmonitor_hook"
   export GIT_OPTIONAL_LOCKS=1
+  export GIT_TRACE="$git_trace_marker"
+  export GIT_TRACE2_EVENT="$git_trace2_event_marker"
+  export GIT_TRACE2_PERF="$git_trace2_perf_marker"
   run_doctor \
     "$git_diagnostic_skill" \
     "$REPO_ROOT" \
@@ -357,6 +372,9 @@ PY
 assert_line "$git_diagnostic_output" "skill_git_head=$git_expected_head" "report-only Git environment isolation"
 assert_line "$git_diagnostic_output" "skill_git_tracked_changes=no" "report-only Git status"
 [ ! -e "$git_fsmonitor_marker" ] || fail "doctor executed the repository fsmonitor hook"
+[ ! -e "$git_trace_marker" ] || fail "doctor wrote inherited GIT_TRACE output"
+[ ! -e "$git_trace2_event_marker" ] || fail "doctor wrote inherited GIT_TRACE2_EVENT output"
+[ ! -e "$git_trace2_perf_marker" ] || fail "doctor wrote inherited GIT_TRACE2_PERF output"
 [ "$git_index_before" = "$git_index_after" ] || fail "doctor refreshed the repository index"
 grep -Fq 'GIT_OPTIONAL_LOCKS=0' "$git_diagnostic_skill/scripts/claude-doctor.sh" || fail "doctor does not disable optional Git locks"
 pass "doctor Git diagnostics disable hooks, locks, index writes, and inherited routing"
@@ -708,6 +726,25 @@ assert_line "$unsupported_output" "claude_launcher_dependency=env" "unsupported 
 assert_contains "$unsupported_output" "exact '#!/usr/bin/env NAME'" "unsupported dependency guidance"
 [ ! -e "$unsupported_log" ] || fail "unsupported dependency launcher executed"
 
+missing_od_skill="$TEST_ROOT/missing-od-skill"
+missing_od_home="$TEST_ROOT/missing-od-home"
+missing_od_log="$TEST_ROOT/missing-od.log"
+copy_fixture_skill "$missing_od_skill"
+write_fake_claude "$missing_od_home/.local/bin/claude"
+python3 - "$missing_od_skill/scripts/claude-runtime.sh" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+marker = "# claude-review-helper-complete: runtime_v3"
+replacement = "claude_runtime_is_native_executable() { return 2; }\n\n" + marker
+path.write_text(path.read_text().replace(marker, replacement))
+PY
+missing_od_output="$(run_doctor "$missing_od_skill" "$REPO_ROOT" "$REPO_ROOT" "$missing_od_home" "$SYSTEM_PATH" "$missing_od_log" --skip-probes)"
+assert_line "$missing_od_output" "claude_path_status=launcher_dependency_validation_unavailable" "missing od dependency status"
+assert_contains "$missing_od_output" "Restore a trusted od utility" "missing od guidance"
+[ ! -e "$missing_od_log" ] || fail "launcher executed without trusted od validation"
+
 unsafe_dependency_home="$TEST_ROOT/unsafe-dependency-home"
 unsafe_dependency_invocation="$TEST_ROOT/unsafe-dependency-invocation"
 unsafe_dependency_log="$TEST_ROOT/unsafe-dependency.log"
@@ -809,7 +846,7 @@ run_bootstrap_case() {
     missing_symbol_config) sed 's/^claude_config_load_file()/claude_config_load_file_missing()/' "$REPO_ROOT/scripts/claude-config.sh" > "$skill/scripts/claude-config.sh" ;;
     missing_symbol_locator) sed 's/^claude_locator_validate_candidate()/claude_locator_validate_candidate_missing()/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
     stale_locator) sed -e 's/bounded_path_native_homebrew_v2/bounded_path_native_homebrew_v1/' -e 's/locator_v2/locator_v1/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
-    stale_runtime) sed -e 's/direct_inherited_path_v2/direct_inherited_path_v1/' -e 's/runtime_v2/runtime_v1/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
+    stale_runtime) sed -e 's/direct_inherited_path_v3/direct_inherited_path_v2/' -e 's/runtime_v3/runtime_v2/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
   esac
   output="$(run_doctor "$skill" "$REPO_ROOT" "$REPO_ROOT" "$HOME" "$path_value" "$candidate_log" --skip-probes 2>&1)"
   assert_line "$output" "doctor_status=bridge_installation_incomplete" "$case_name status"

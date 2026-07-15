@@ -627,7 +627,7 @@ fi
 
 if ! load_required_claude_helper \
   "$CLAUDE_RUNTIME_HELPER" \
-  "# claude-review-helper-complete: runtime_v2" \
+  "# claude-review-helper-complete: runtime_v3" \
   claude_runtime_check_launcher_dependency \
   claude_runtime_build_command \
   claude_runtime_is_native_executable \
@@ -650,7 +650,7 @@ if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v2" ]; then
   exit 0
 fi
 
-if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v2" ]; then
+if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v3" ]; then
   emit_bridge_installation_incomplete "claude-runtime.sh"
   exit 0
 fi
@@ -887,7 +887,7 @@ record_failure() {
 
 failure_offers_doctor() {
   case "${1:-}" in
-    missing_binary|unusable_runner|launcher_dependency_missing|launcher_dependency_unsafe|launcher_dependency_unsupported|launcher_dependency_unreadable|subscription_auth_unavailable|ambiguous_auth|probe_timed_out|invocation_failed)
+    missing_binary|unusable_runner|launcher_dependency_missing|launcher_dependency_unsafe|launcher_dependency_validation_unavailable|launcher_dependency_unsupported|launcher_dependency_unreadable|subscription_auth_unavailable|ambiguous_auth|probe_timed_out|invocation_failed)
       return 0
       ;;
     *)
@@ -1318,6 +1318,12 @@ probe_runner_usability() {
 
   if ! claude_runtime_check_launcher_dependency "$CLAUDE_TARGET" "$CLAUDE_RUNTIME_CWD"; then
     case "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" in
+      validation_unavailable)
+        record_failure \
+          "launcher_dependency_validation_unavailable" \
+          "Claude Code was found, but native launcher validation utilities are unavailable." \
+          "Restore a trusted od utility under /usr/bin or /bin, or in the immutable Nix store exposed by Codex's inherited PATH. Then run /claude-review doctor."
+        ;;
       unsupported)
         record_failure \
           "launcher_dependency_unsupported" \
