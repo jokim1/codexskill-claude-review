@@ -564,7 +564,7 @@ fi
 
 if ! load_required_claude_helper \
   "$RUNTIME_HELPER" \
-  "# claude-review-helper-complete: runtime_v8" \
+  "# claude-review-helper-complete: runtime_v9" \
   claude_runtime_check_launcher_dependency \
   claude_runtime_build_command \
   claude_runtime_interpreter_startup_args \
@@ -593,7 +593,7 @@ if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v6" ]; then
   exit 0
 fi
 
-if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v8" ]; then
+if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v9" ]; then
   print_kv "doctor_status" "bridge_installation_incomplete"
   print_kv "bridge_component" "claude-runtime.sh"
   print_kv "bridge_guidance" "Reinstall or update the complete claude-review skill, then retry."
@@ -665,7 +665,7 @@ inherited_home_status() {
       "$CLAUDE_RUNTIME_CWD" \
       "$PROBE_TIMEOUT_SECONDS" \
       - \
-      "$CLAUDE_RUNTIME_PYTHON_BIN" -I -c '
+      "$CLAUDE_RUNTIME_PYTHON_BIN" -I -S -c '
 import os
 import sys
 

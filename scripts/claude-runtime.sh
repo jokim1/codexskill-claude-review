@@ -3,7 +3,7 @@
 # Shared direct Claude command transport. This file must remain source-pure:
 # definitions and readonly contract constants only.
 
-readonly CLAUDE_RUNTIME_CONTRACT="direct_inherited_path_v8"
+readonly CLAUDE_RUNTIME_CONTRACT="direct_inherited_path_v9"
 readonly CLAUDE_RUNTIME_SCRUBBED_ENV_NAMES="ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH DYLD_FORCE_FLAT_NAMESPACE DYLD_IMAGE_SUFFIX DYLD_ROOT_PATH GCONV_PATH NODE_OPTIONS NODE_PATH PYTHONHOME PYTHONPATH PYTHONSTARTUP PYTHONINSPECT PYTHONBREAKPOINT PYTHONWARNINGS PYTHONUSERBASE RUBYOPT RUBYLIB RUBYGEMS_GEMDEPS GEM_HOME GEM_PATH BUNDLE_GEMFILE PERL5OPT PERL5LIB PERLLIB PERL_LOCAL_LIB_ROOT ZDOTDIR FPATH LUA_INIT LUA_PATH LUA_CPATH JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS CLASSPATH DOTNET_STARTUP_HOOKS CORECLR_ENABLE_PROFILING CORECLR_PROFILER CORECLR_PROFILER_PATH COR_ENABLE_PROFILING COR_PROFILER PHPRC PHP_INI_SCAN_DIR AWKPATH AWKLIBPATH TCLLIBPATH"
 
 claude_runtime_scrub_environment() {
@@ -41,6 +41,37 @@ claude_runtime_build_command() {
   CLAUDE_RUNTIME_COMMAND=("${launcher_transport[@]}" "$@")
 }
 
+claude_runtime_is_python_interpreter_name() {
+  local interpreter_name="${1##*/}"
+  local version_suffix=""
+
+  case "$interpreter_name" in
+    *.exe) interpreter_name="${interpreter_name%.exe}" ;;
+  esac
+  case "$interpreter_name" in
+    python|pypy)
+      return 0
+      ;;
+    python*)
+      version_suffix="${interpreter_name#python}"
+      ;;
+    pypy*)
+      version_suffix="${interpreter_name#pypy}"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+  case "$version_suffix" in
+    [0-9]*) ;;
+    *) return 1 ;;
+  esac
+  case "$version_suffix" in
+    *[!0-9.]*|*..*|*.) return 1 ;;
+  esac
+  return 0
+}
+
 claude_runtime_interpreter_startup_args() {
   local interpreter_name="${1##*/}"
 
@@ -50,7 +81,8 @@ claude_runtime_interpreter_startup_args() {
       # These runtimes do not read HOME-based startup files for a non-interactive
       # script after the corresponding environment hooks have been scrubbed.
       ;;
-    python|python.exe|python[0-9]*|pypy|pypy.exe|pypy[0-9]*)
+    python*|pypy*)
+      claude_runtime_is_python_interpreter_name "$interpreter_name" || return 1
       # Isolated mode suppresses user-site and environment injection; -S also
       # prevents global .pth/sitecustomize execution before a trusted launcher.
       CLAUDE_RUNTIME_INTERPRETER_STARTUP_ARGS=(-I -S)
@@ -996,4 +1028,4 @@ claude_runtime_check_launcher_dependency() {
   return 0
 }
 
-# claude-review-helper-complete: runtime_v8
+# claude-review-helper-complete: runtime_v9

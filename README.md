@@ -771,8 +771,8 @@ Run:
 ```
 
 The doctor reports the installed skill SHA, router and runner paths, whether the
-runner contains the hardened `--safe-mode` flags, and bounded plain vs safe-mode
-Claude probes. If the runner is current but another thread still runs raw
+runner contains the hardened `--safe-mode` flags, a skipped legacy plain-probe key,
+and the bounded hardened safe-mode Claude probe. If the runner is current but another thread still runs raw
 `claude -p`, restart Codex or open a new thread so the skill instructions reload.
 
 ### Preflight says the budget is too low

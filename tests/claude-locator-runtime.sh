@@ -855,6 +855,16 @@ assert_eq "safe" "$timeout_python_output" "timeout Python startup filter"
 [ ! -e "$python_home_marker" ] || fail "validated Python launcher loaded HOME user-site startup code"
 pass "direct and timeout transports strip interpreter startup injection"
 
+for valid_python_name in python python.exe python3 python3.exe python3.14 python3.14.exe pypy pypy3 pypy3.10.exe; do
+  claude_runtime_is_python_interpreter_name "$valid_python_name" || fail "valid Python interpreter name rejected: $valid_python_name"
+done
+for invalid_python_name in python3evil python3evil.exe python3. pypy3evil pypy.3; do
+  if claude_runtime_is_python_interpreter_name "$invalid_python_name"; then
+    fail "invalid Python interpreter name accepted: $invalid_python_name"
+  fi
+done
+pass "Python interpreter allowlist accepts only numeric version suffixes"
+
 zsh_bin="$(type -P zsh 2>/dev/null || true)"
 if [ -n "$zsh_bin" ]; then
   zsh_injection_home="$TEST_ROOT/interpreter-zsh-home"
@@ -1108,9 +1118,9 @@ export PATH
 pass "exact env and resolved interpreters reuse trust validation without clobbering launcher diagnostics"
 
 unsupported_native_launcher="$TEST_ROOT/trusted/bin/unsupported-native-launcher"
-ln -s /bin/bash "$dependency_invocation/bin/unsupported-native"
+ln -s /bin/bash "$dependency_invocation/bin/python3evil"
 cat > "$unsupported_native_launcher" <<'SH'
-#!/usr/bin/env unsupported-native
+#!/usr/bin/env python3evil
 exit 0
 SH
 chmod 755 "$unsupported_native_launcher"
@@ -1121,7 +1131,7 @@ if claude_runtime_check_launcher_dependency "$unsupported_native_launcher"; then
   fail "unknown native shebang interpreter accepted"
 fi
 assert_eq "unsupported" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "unknown native interpreter status"
-assert_eq "unsupported-native" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY" "unknown native interpreter reason"
+assert_eq "python3evil" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY" "unknown native interpreter reason"
 PATH="$saved_path"
 export PATH
 pass "unknown native shebang interpreters fail closed before HOME startup"
@@ -1395,5 +1405,5 @@ if before_files != after_files:
 PY
 pass "bounded helper source purity"
 
-assert_eq "direct_inherited_path_v8" "$CLAUDE_RUNTIME_CONTRACT" "runtime contract label"
+assert_eq "direct_inherited_path_v9" "$CLAUDE_RUNTIME_CONTRACT" "runtime contract label"
 pass "shared helper contracts"

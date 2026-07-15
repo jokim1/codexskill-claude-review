@@ -210,6 +210,13 @@ import pwd
 print(pwd.getpwuid(os.getuid()).pw_dir)
 PY
 )"
+
+grep -Fq '"$CLAUDE_RUNTIME_PYTHON_BIN" -I -S -c' "$REPO_ROOT/scripts/claude-doctor.sh" || \
+  fail "doctor passwd-home Python probe must use isolated/no-site mode"
+if grep -Fq '"$CLAUDE_RUNTIME_PYTHON_BIN" -I -c' "$REPO_ROOT/scripts/claude-doctor.sh"; then
+  fail "doctor contains a Python probe without no-site mode"
+fi
+pass "doctor internal Python probes retain isolated/no-site mode"
 write_fake_claude "$path_bin/claude"
 path_value="$path_bin:$SYSTEM_PATH"
 basic_output="$({
@@ -239,7 +246,7 @@ assert_line "$basic_output" "claude_bin=$path_bin/claude" "absolute launch path"
 assert_line "$basic_output" "claude_target=$path_bin/claude" "canonical target"
 assert_line "$basic_output" "claude_trust_scope=none" "safe trust scope"
 assert_line "$basic_output" "claude_trust_reason=none" "safe trust reason"
-assert_line "$basic_output" "claude_runtime_contract=direct_inherited_path_v8" "runtime contract"
+assert_line "$basic_output" "claude_runtime_contract=direct_inherited_path_v9" "runtime contract"
 assert_line "$basic_output" "claude_version=2.test.0 (Claude Code fake)" "version"
 assert_line "$basic_output" "claude_auth_logged_in=True" "auth state"
 assert_line "$basic_output" "claude_auth_provider=firstParty" "auth provider"
@@ -758,7 +765,7 @@ from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
-marker = "# claude-review-helper-complete: runtime_v8"
+marker = "# claude-review-helper-complete: runtime_v9"
 replacement = "claude_runtime_is_native_executable() { return 2; }\n\n" + marker
 path.write_text(path.read_text().replace(marker, replacement))
 PY
@@ -870,7 +877,7 @@ run_bootstrap_case() {
     missing_symbol_config) sed 's/^claude_config_load_file()/claude_config_load_file_missing()/' "$REPO_ROOT/scripts/claude-config.sh" > "$skill/scripts/claude-config.sh" ;;
     missing_symbol_locator) sed 's/^claude_locator_validate_candidate()/claude_locator_validate_candidate_missing()/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
     stale_locator) sed -e 's/bounded_path_native_homebrew_v6/bounded_path_native_homebrew_v5/' -e 's/locator_v6/locator_v5/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
-    stale_runtime) sed -e 's/direct_inherited_path_v8/direct_inherited_path_v7/' -e 's/runtime_v8/runtime_v7/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
+    stale_runtime) sed -e 's/direct_inherited_path_v9/direct_inherited_path_v8/' -e 's/runtime_v9/runtime_v8/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
   esac
   output="$(run_doctor "$skill" "$REPO_ROOT" "$REPO_ROOT" "$HOME" "$path_value" "$candidate_log" --skip-probes 2>&1)"
   assert_line "$output" "doctor_status=bridge_installation_incomplete" "$case_name status"
