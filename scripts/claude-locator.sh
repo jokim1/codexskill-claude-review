@@ -539,11 +539,17 @@ claude_locator_path_within() {
     *) return 1 ;;
   esac
   boundary_physical="${boundary_physical%/.claude-review-boundary}"
+  [ -n "$boundary_physical" ] || boundary_physical="/"
   path_physical="$(claude_locator_physical_launch_path "$path" "/" 2>/dev/null && printf '\001')" || return 1
   case "$path_physical" in
     *$'\001') path_physical="${path_physical%$'\001'}" ;;
     *) return 1 ;;
   esac
+  if [ "$boundary_physical" = "/" ]; then
+    case "$path_physical" in
+      /*) return 0 ;;
+    esac
+  fi
   case "$path_physical" in
     "$boundary_physical"|"$boundary_physical"/*)
       return 0
@@ -655,7 +661,7 @@ claude_locator_boundary_status() {
     CLAUDE_LOCATOR_BOUNDARY_STATUS="repository_path"
     return 1
   fi
-  if [ -n "$invocation_cwd" ] && claude_locator_path_within "$path" "$invocation_cwd"; then
+  if [ -n "$invocation_cwd" ] && [ "$invocation_cwd" != "/" ] && claude_locator_path_within "$path" "$invocation_cwd"; then
     CLAUDE_LOCATOR_BOUNDARY_STATUS="invocation_cwd_path"
     return 1
   fi

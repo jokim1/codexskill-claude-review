@@ -583,10 +583,12 @@ interpreter that resolves through inherited PATH, or an argument-free absolute
 shebang interpreter, must pass the same path, symlink-chain, file-mode, and parent trust
 validation as the Claude launcher. The bridge recursively inspects script
 interpreters with an eight-hop depth bound and cycle detection, and trust-validates
-every executable in the resulting chain. An unsafe interpreter reports
+every executable in the resulting chain. Native shebang interpreters are limited to
+audited Bash/dash/sh, Node, Python/PyPy, and zsh forms; unknown native interpreters
+fail closed before retained HOME or XDG configuration can run. An unsafe interpreter reports
 `launcher_dependency_unsafe`; an unreadable launcher or interpreter reports
 `launcher_dependency_unreadable`. Shebangs other than an argument-free absolute
-interpreter or exact `#!/usr/bin/env NAME` form fail closed as
+audited interpreter or exact `#!/usr/bin/env NAME` form resolving recursively to one fail closed as
 `launcher_dependency_unsupported` rather than being executed without deterministic
 dependency validation. Shebangless launchers likewise fail closed unless their
 binary header identifies ELF, Mach-O, or PE; PE validation includes its declared
@@ -730,10 +732,12 @@ rewrite PATH to select a different interpreter.
 ### Doctor reports `launcher_dependency_unsupported`
 
 The selected launcher uses shebang syntax the bridge cannot parse without
-reimplementing platform-specific shebang argument or `env -S` tokenization, or it
+reimplementing platform-specific shebang argument or `env -S` tokenization, resolves
+to a native interpreter outside the audited Bash/dash/sh, Node, Python/PyPy, and zsh set, or it
 is a shebangless file without a supported binary ELF, Mach-O, or PE header. Use a
-launcher with an argument-free absolute interpreter, an exact
-`#!/usr/bin/env NAME` shebang, or a native executable; otherwise migrate to native Claude.
+launcher with an argument-free audited absolute interpreter, an exact
+`#!/usr/bin/env NAME` shebang that resolves recursively to an audited interpreter, or
+a native executable; otherwise migrate to native Claude.
 The bridge fails closed instead of executing an unvalidated interpreter.
 
 ### Doctor reports `launcher_dependency_validation_unavailable`

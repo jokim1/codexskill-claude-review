@@ -3,7 +3,7 @@
 # Shared direct Claude command transport. This file must remain source-pure:
 # definitions and readonly contract constants only.
 
-readonly CLAUDE_RUNTIME_CONTRACT="direct_inherited_path_v7"
+readonly CLAUDE_RUNTIME_CONTRACT="direct_inherited_path_v8"
 readonly CLAUDE_RUNTIME_SCRUBBED_ENV_NAMES="ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH DYLD_FORCE_FLAT_NAMESPACE DYLD_IMAGE_SUFFIX DYLD_ROOT_PATH GCONV_PATH NODE_OPTIONS NODE_PATH PYTHONHOME PYTHONPATH PYTHONSTARTUP PYTHONINSPECT PYTHONBREAKPOINT PYTHONWARNINGS PYTHONUSERBASE RUBYOPT RUBYLIB RUBYGEMS_GEMDEPS GEM_HOME GEM_PATH BUNDLE_GEMFILE PERL5OPT PERL5LIB PERLLIB PERL_LOCAL_LIB_ROOT ZDOTDIR FPATH LUA_INIT LUA_PATH LUA_CPATH JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS CLASSPATH DOTNET_STARTUP_HOOKS CORECLR_ENABLE_PROFILING CORECLR_PROFILER CORECLR_PROFILER_PATH COR_ENABLE_PROFILING COR_PROFILER PHPRC PHP_INI_SCAN_DIR AWKPATH AWKLIBPATH TCLLIBPATH"
 
 claude_runtime_scrub_environment() {
@@ -46,16 +46,27 @@ claude_runtime_interpreter_startup_args() {
 
   CLAUDE_RUNTIME_INTERPRETER_STARTUP_ARGS=()
   case "$interpreter_name" in
-    python|python[0-9]*|pypy|pypy[0-9]*)
+    bash|bash.exe|dash|dash.exe|node|node.exe|nodejs|nodejs.exe|sh|sh.exe)
+      # These runtimes do not read HOME-based startup files for a non-interactive
+      # script after the corresponding environment hooks have been scrubbed.
+      ;;
+    python|python.exe|python[0-9]*|pypy|pypy.exe|pypy[0-9]*)
       # Isolated mode suppresses user-site and environment injection; -S also
       # prevents global .pth/sitecustomize execution before a trusted launcher.
       CLAUDE_RUNTIME_INTERPRETER_STARTUP_ARGS=(-I -S)
       ;;
-    zsh)
+    zsh|zsh.exe)
       # zsh otherwise reads $ZDOTDIR/.zshenv or $HOME/.zshenv for scripts.
       CLAUDE_RUNTIME_INTERPRETER_STARTUP_ARGS=(-f)
       ;;
+    *)
+      # Unknown native interpreters may load HOME/XDG startup code. Script-shaped
+      # wrappers remain acceptable only after recursion reaches an audited native
+      # interpreter from this list.
+      return 1
+      ;;
   esac
+  return 0
 }
 
 claude_runtime_prepare_python_argv() {
@@ -819,6 +830,13 @@ claude_runtime_inspect_shebang_path() {
       ;;
     *)
       if claude_runtime_is_native_executable "$current_path"; then
+        if [ "$depth" -gt 0 ] && ! claude_runtime_interpreter_startup_args "$current_path"; then
+          CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unsupported"
+          CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="${current_path##*/}"
+          CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="$current_path"
+          CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_RESOLUTION="$resolution_kind"
+          return 1
+        fi
         CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND=("$current_path")
         return 0
       else
@@ -875,7 +893,23 @@ claude_runtime_inspect_shebang_path() {
         CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_ARGUMENT="$dependency"
       fi
       claude_runtime_add_dependency_path "$interpreter"
-      claude_runtime_inspect_shebang_path "$interpreter" "$((depth + 1))" "$execution_cwd" "absolute" || return 1
+      if claude_runtime_is_native_executable "$interpreter"; then
+        :
+      else
+        native_status=$?
+        if [ "$native_status" -eq 2 ]; then
+          CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="validation_unavailable"
+          CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="od"
+          CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="none"
+          CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_RESOLUTION="bootstrap"
+        else
+          CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unsupported"
+          CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="env"
+          CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="$interpreter"
+          CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_RESOLUTION="absolute"
+        fi
+        return 1
+      fi
       dependency_path="$(claude_runtime_resolve_path_dependency "$dependency" "$execution_cwd" 2>/dev/null || true)"
       if [ -z "$dependency_path" ]; then
         CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="missing"
@@ -888,8 +922,12 @@ claude_runtime_inspect_shebang_path() {
       claude_runtime_inspect_shebang_path "$dependency_path" "$((depth + 1))" "$execution_cwd" "path" || return 1
       dependency_transport=("${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[@]+"${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[@]}"}")
       CLAUDE_RUNTIME_INTERPRETER_STARTUP_ARGS=()
-      if claude_runtime_is_native_executable "$dependency_path"; then
-        claude_runtime_interpreter_startup_args "$dependency"
+      if [ "${#dependency_transport[@]}" -eq 1 ] && ! claude_runtime_interpreter_startup_args "$dependency"; then
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unsupported"
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="$dependency"
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="$dependency_path"
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_RESOLUTION="path"
+        return 1
       fi
       interpreter_startup_args=("${CLAUDE_RUNTIME_INTERPRETER_STARTUP_ARGS[@]+"${CLAUDE_RUNTIME_INTERPRETER_STARTUP_ARGS[@]}"}")
       CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND=("${dependency_transport[@]}" "${interpreter_startup_args[@]+"${interpreter_startup_args[@]}"}" "$current_path")
@@ -917,8 +955,12 @@ claude_runtime_inspect_shebang_path() {
       claude_runtime_add_dependency_path "$interpreter"
       claude_runtime_inspect_shebang_path "$interpreter" "$((depth + 1))" "$execution_cwd" "absolute" || return 1
       CLAUDE_RUNTIME_INTERPRETER_STARTUP_ARGS=()
-      if claude_runtime_is_native_executable "$interpreter"; then
-        claude_runtime_interpreter_startup_args "$interpreter"
+      if [ "${#CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[@]}" -eq 1 ] && ! claude_runtime_interpreter_startup_args "$interpreter"; then
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unsupported"
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="${interpreter##*/}"
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="$interpreter"
+        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_RESOLUTION="absolute"
+        return 1
       fi
       CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND+=("${CLAUDE_RUNTIME_INTERPRETER_STARTUP_ARGS[@]+"${CLAUDE_RUNTIME_INTERPRETER_STARTUP_ARGS[@]}"}" "$current_path")
       return 0
@@ -954,4 +996,4 @@ claude_runtime_check_launcher_dependency() {
   return 0
 }
 
-# claude-review-helper-complete: runtime_v7
+# claude-review-helper-complete: runtime_v8

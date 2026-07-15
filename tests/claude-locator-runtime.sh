@@ -385,6 +385,10 @@ if claude_locator_validate_candidate "$TEST_ROOT/invocation/bin/claude" "$ROOT" 
 fi
 assert_eq "invocation_cwd_path" "$CLAUDE_LOCATOR_VALIDATION_STATUS" "invocation CWD reason"
 
+claude_locator_boundary_status "$TEST_ROOT/trusted/bin/claude" "" "/" || fail "filesystem-root invocation CWD accepted"
+assert_eq "safe" "$CLAUDE_LOCATOR_BOUNDARY_STATUS" "filesystem-root invocation CWD boundary"
+pass "filesystem-root invocation CWD does not reject every candidate"
+
 mkdir -p "$TEST_ROOT/world-writable/bin"
 cp "$TEST_ROOT/trusted/bin/claude" "$TEST_ROOT/world-writable/bin/claude"
 chmod 777 "$TEST_ROOT/world-writable"
@@ -1073,9 +1077,9 @@ pass "unsupported shebangs fail closed while exit-code-only cases remain unclass
 dependency_invocation="$TEST_ROOT/dependency-invocation"
 dependency_launcher="$TEST_ROOT/trusted/bin/path-interpreter"
 mkdir -p "$dependency_invocation/bin"
-ln -s /bin/bash "$dependency_invocation/bin/fake-node"
+ln -s /bin/bash "$dependency_invocation/bin/node"
 cat > "$dependency_launcher" <<'SH'
-#!/usr/bin/env fake-node
+#!/usr/bin/env node
 exit 0
 SH
 chmod 755 "$dependency_launcher"
@@ -1084,9 +1088,9 @@ PATH="$dependency_invocation/bin:$PATH"
 export PATH
 claude_runtime_check_launcher_dependency "$dependency_launcher" || fail "PATH interpreter resolved"
 assert_eq "/usr/bin/env" "$CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH" "exact env interpreter retained"
-assert_eq "$dependency_invocation/bin/fake-node" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" "PATH interpreter path retained"
+assert_eq "$dependency_invocation/bin/node" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" "PATH interpreter path retained"
 assert_eq "2" "${#CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[@]}" "env transport argv count"
-assert_eq "$dependency_invocation/bin/fake-node" "${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[0]}" "env transport resolved executable"
+assert_eq "$dependency_invocation/bin/node" "${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[0]}" "env transport resolved executable"
 assert_eq "$dependency_launcher" "${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[1]}" "env transport launcher"
 claude_locator_validate_candidate "$dependency_launcher" "$ROOT" "$TEST_ROOT/work" || fail "launcher remains trusted"
 selected_launch="$CLAUDE_LOCATOR_LAUNCH_PATH"
@@ -1103,10 +1107,29 @@ PATH="$saved_path"
 export PATH
 pass "exact env and resolved interpreters reuse trust validation without clobbering launcher diagnostics"
 
+unsupported_native_launcher="$TEST_ROOT/trusted/bin/unsupported-native-launcher"
+ln -s /bin/bash "$dependency_invocation/bin/unsupported-native"
+cat > "$unsupported_native_launcher" <<'SH'
+#!/usr/bin/env unsupported-native
+exit 0
+SH
+chmod 755 "$unsupported_native_launcher"
+saved_path="$PATH"
+PATH="$dependency_invocation/bin:$PATH"
+export PATH
+if claude_runtime_check_launcher_dependency "$unsupported_native_launcher"; then
+  fail "unknown native shebang interpreter accepted"
+fi
+assert_eq "unsupported" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS" "unknown native interpreter status"
+assert_eq "unsupported-native" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY" "unknown native interpreter reason"
+PATH="$saved_path"
+export PATH
+pass "unknown native shebang interpreters fail closed before HOME startup"
+
 alternate_env="$TEST_ROOT/trusted/bin/env"
 alternate_env_launcher="$TEST_ROOT/trusted/bin/alternate-env-launcher"
 ln -s /usr/bin/env "$alternate_env"
-printf '#!%s fake-node\nexit 0\n' "$alternate_env" > "$alternate_env_launcher"
+printf '#!%s node\nexit 0\n' "$alternate_env" > "$alternate_env_launcher"
 chmod 755 "$alternate_env_launcher"
 if claude_runtime_check_launcher_dependency "$alternate_env_launcher"; then
   fail "non-exact env shebang accepted"
@@ -1372,5 +1395,5 @@ if before_files != after_files:
 PY
 pass "bounded helper source purity"
 
-assert_eq "direct_inherited_path_v7" "$CLAUDE_RUNTIME_CONTRACT" "runtime contract label"
+assert_eq "direct_inherited_path_v8" "$CLAUDE_RUNTIME_CONTRACT" "runtime contract label"
 pass "shared helper contracts"

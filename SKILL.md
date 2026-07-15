@@ -227,6 +227,9 @@ roots plus the macOS `/var/folders` namespace.
 The explicit launcher transport applies `-I -S` to validated Python shebangs and
 `-f` to validated zsh shebangs, including through accepted recursive shebang chains,
 preventing retained HOME from loading user startup code before the launcher.
+Native shebang interpreters are restricted to audited Bash/dash/sh, Node,
+Python/PyPy, and zsh forms; recursively inspected script wrappers are accepted only
+when their chain terminates in one of those native interpreters.
 
 The shared runtime driver owns bounded child-process lifetime. On Windows it creates
 the child suspended, assigns it to a kill-on-close Job Object, and only then resumes
@@ -742,9 +745,10 @@ For `claude_path_status=launcher_dependency_missing`, use
 for `path`; for `absolute`, tell the user to repair or reinstall the exact reported
 shebang path because PATH cannot fix it.
 Treat `claude_path_status=launcher_dependency_unsupported` as fail-closed too; use
-an argument-free absolute interpreter or exact `#!/usr/bin/env NAME` launcher
-rather than trying to interpret or bypass unsupported `env -S` syntax in the
-rendering layer.
+an argument-free audited absolute interpreter or exact `#!/usr/bin/env NAME`
+launcher resolving to audited Bash/dash/sh, Node, Python/PyPy, or zsh rather than
+trying to interpret unsupported `env -S` syntax or bypass an unknown native
+interpreter in the rendering layer.
 Treat `claude_path_status=launcher_dependency_unreadable` as fail-closed; repair
 read access to the reported launcher/interpreter chain or reinstall native Claude.
 Treat symlink loops and inaccessible targets as fail-closed

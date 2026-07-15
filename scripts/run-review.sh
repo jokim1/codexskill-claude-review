@@ -687,7 +687,7 @@ fi
 
 if ! load_required_claude_helper \
   "$CLAUDE_RUNTIME_HELPER" \
-  "# claude-review-helper-complete: runtime_v7" \
+  "# claude-review-helper-complete: runtime_v8" \
   claude_runtime_check_launcher_dependency \
   claude_runtime_build_command \
   claude_runtime_interpreter_startup_args \
@@ -712,7 +712,7 @@ if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v6" ]; then
   exit 0
 fi
 
-if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v7" ]; then
+if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v8" ]; then
   emit_bridge_installation_incomplete "claude-runtime.sh"
   exit 0
 fi
@@ -1379,7 +1379,7 @@ probe_runner_usability() {
         record_failure \
           "launcher_dependency_unsupported" \
           "Claude Code was found, but its launcher uses unsupported shebang interpreter syntax." \
-          "Use a launcher with an argument-free absolute interpreter or exact '#!/usr/bin/env NAME' shebang, or install the recommended native Claude with curl -fsSL https://claude.ai/install.sh | bash. Then run /claude-review doctor."
+          "Use an argument-free Bash, dash, sh, Node, Python/PyPy, or zsh interpreter with an exact '#!/usr/bin/env NAME' or absolute shebang, or install the recommended native Claude with curl -fsSL https://claude.ai/install.sh | bash. Then run /claude-review doctor."
         ;;
       unreadable)
         record_failure \

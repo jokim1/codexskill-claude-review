@@ -564,7 +564,7 @@ fi
 
 if ! load_required_claude_helper \
   "$RUNTIME_HELPER" \
-  "# claude-review-helper-complete: runtime_v7" \
+  "# claude-review-helper-complete: runtime_v8" \
   claude_runtime_check_launcher_dependency \
   claude_runtime_build_command \
   claude_runtime_interpreter_startup_args \
@@ -593,7 +593,7 @@ if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v6" ]; then
   exit 0
 fi
 
-if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v7" ]; then
+if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v8" ]; then
   print_kv "doctor_status" "bridge_installation_incomplete"
   print_kv "bridge_component" "claude-runtime.sh"
   print_kv "bridge_guidance" "Reinstall or update the complete claude-review skill, then retry."
@@ -1005,7 +1005,7 @@ if [ "$candidate_safe" != "true" ]; then
       print_kv "claude_guidance" "Restore a trusted od utility under /usr/bin or /bin, or in the immutable Nix store exposed by Codex's inherited PATH; the bridge will not inspect native executable headers with a mutable PATH utility."
       ;;
     launcher_dependency_unsupported)
-      print_kv "claude_guidance" "Use an argument-free absolute interpreter or exact '#!/usr/bin/env NAME' launcher shebang, or install native Claude with: curl -fsSL https://claude.ai/install.sh | bash"
+      print_kv "claude_guidance" "Use an argument-free Bash, dash, sh, Node, Python/PyPy, or zsh interpreter with an exact '#!/usr/bin/env NAME' or absolute launcher shebang, or install native Claude with: curl -fsSL https://claude.ai/install.sh | bash"
       ;;
     launcher_dependency_unreadable)
       print_kv "claude_guidance" "Make the selected launcher and every shebang interpreter readable to Codex, or reinstall native Claude."
