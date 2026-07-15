@@ -554,7 +554,8 @@ variables through `scrubbed_env_<NAME>` keys; it never prints those values.
 `scripts/claude-subscription-env.sh` remains as a compatible legacy entry point,
 but runner and doctor share `claude-runtime.sh`.
 Validated Python shebang launchers receive `-I -S`, and validated zsh shebang
-launchers receive `-f`, so retained HOME cannot activate user startup files.
+launchers receive `-f`, including through accepted recursive shebang chains, so
+retained HOME cannot activate user startup files.
 For Git Bash timeout/probe calls through native Python, that shared runtime converts
 the validated launcher and validated executable paths in its shebang execution
 chain with the bootstrap-validated, pinned `/usr/bin/cygpath[.exe]` utility. It

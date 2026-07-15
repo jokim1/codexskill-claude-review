@@ -239,7 +239,7 @@ assert_line "$basic_output" "claude_bin=$path_bin/claude" "absolute launch path"
 assert_line "$basic_output" "claude_target=$path_bin/claude" "canonical target"
 assert_line "$basic_output" "claude_trust_scope=none" "safe trust scope"
 assert_line "$basic_output" "claude_trust_reason=none" "safe trust reason"
-assert_line "$basic_output" "claude_runtime_contract=direct_inherited_path_v6" "runtime contract"
+assert_line "$basic_output" "claude_runtime_contract=direct_inherited_path_v7" "runtime contract"
 assert_line "$basic_output" "claude_version=2.test.0 (Claude Code fake)" "version"
 assert_line "$basic_output" "claude_auth_logged_in=True" "auth state"
 assert_line "$basic_output" "claude_auth_provider=firstParty" "auth provider"
@@ -758,7 +758,7 @@ from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
-marker = "# claude-review-helper-complete: runtime_v6"
+marker = "# claude-review-helper-complete: runtime_v7"
 replacement = "claude_runtime_is_native_executable() { return 2; }\n\n" + marker
 path.write_text(path.read_text().replace(marker, replacement))
 PY
@@ -870,7 +870,7 @@ run_bootstrap_case() {
     missing_symbol_config) sed 's/^claude_config_load_file()/claude_config_load_file_missing()/' "$REPO_ROOT/scripts/claude-config.sh" > "$skill/scripts/claude-config.sh" ;;
     missing_symbol_locator) sed 's/^claude_locator_validate_candidate()/claude_locator_validate_candidate_missing()/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
     stale_locator) sed -e 's/bounded_path_native_homebrew_v6/bounded_path_native_homebrew_v5/' -e 's/locator_v6/locator_v5/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
-    stale_runtime) sed -e 's/direct_inherited_path_v6/direct_inherited_path_v5/' -e 's/runtime_v6/runtime_v5/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
+    stale_runtime) sed -e 's/direct_inherited_path_v7/direct_inherited_path_v6/' -e 's/runtime_v7/runtime_v6/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
   esac
   output="$(run_doctor "$skill" "$REPO_ROOT" "$REPO_ROOT" "$HOME" "$path_value" "$candidate_log" --skip-probes 2>&1)"
   assert_line "$output" "doctor_status=bridge_installation_incomplete" "$case_name status"

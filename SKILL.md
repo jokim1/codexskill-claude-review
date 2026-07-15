@@ -225,8 +225,8 @@ PE-like wrappers fail closed. Do not fall back to a second PATH lookup.
 Temporary trust boundaries include inherited absolute `TMPDIR`, `TEMP`, and `TMP`
 roots plus the macOS `/var/folders` namespace.
 The explicit launcher transport applies `-I -S` to validated Python shebangs and
-`-f` to validated zsh shebangs, preventing retained HOME from loading user startup
-code before the launcher.
+`-f` to validated zsh shebangs, including through accepted recursive shebang chains,
+preventing retained HOME from loading user startup code before the launcher.
 
 The shared runtime driver owns bounded child-process lifetime. On Windows it creates
 the child suspended, assigns it to a kill-on-close Job Object, and only then resumes

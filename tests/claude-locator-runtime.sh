@@ -880,6 +880,77 @@ SH
 fi
 pass "validated zsh launcher suppresses HOME startup files"
 
+nested_startup_bin="$TEST_ROOT/nested-startup-bin"
+nested_python_interpreter="$nested_startup_bin/nested-python"
+nested_python_launcher="$TEST_ROOT/trusted/bin/nested-python-launcher"
+mkdir -p "$nested_startup_bin"
+cat > "$nested_python_interpreter" <<'PY'
+#!/usr/bin/env python3
+print("nested-python-safe")
+PY
+cat > "$nested_python_launcher" <<'SH'
+#!/usr/bin/env nested-python
+ignored
+SH
+chmod 755 "$nested_python_interpreter" "$nested_python_launcher"
+saved_path="$PATH"
+PATH="$nested_startup_bin:$PATH"
+export PATH
+claude_runtime_check_launcher_dependency "$nested_python_launcher" || fail "nested Python launcher dependency transport"
+claude_runtime_build_command "$nested_python_launcher"
+nested_python_command=("${CLAUDE_RUNTIME_COMMAND[@]}")
+nested_python_output="$(
+  HOME="$python_injection_home" \
+  INTERPRETER_HOME_MARKER="$python_home_marker" \
+  claude_runtime_run_with_timeout \
+    "$CLAUDE_RUNTIME_PYTHON_BIN" \
+    "$python_driver" \
+    "$TEST_ROOT/work" \
+    5 \
+    - \
+    "${nested_python_command[@]}"
+)"
+PATH="$saved_path"
+export PATH
+assert_eq "nested-python-safe" "$nested_python_output" "nested Python startup filter"
+[ ! -e "$python_home_marker" ] || fail "nested validated Python interpreter loaded HOME user-site startup code"
+pass "nested env-to-Python transport preserves isolated/no-site startup flags"
+
+if [ -n "$zsh_bin" ]; then
+  nested_zsh_interpreter="$nested_startup_bin/nested-zsh"
+  nested_zsh_launcher="$TEST_ROOT/trusted/bin/nested-zsh-launcher"
+  cat > "$nested_zsh_interpreter" <<'SH'
+#!/usr/bin/env zsh
+printf nested-zsh-safe
+SH
+  cat > "$nested_zsh_launcher" <<'SH'
+#!/usr/bin/env nested-zsh
+ignored
+SH
+  chmod 755 "$nested_zsh_interpreter" "$nested_zsh_launcher"
+  saved_path="$PATH"
+  PATH="$nested_startup_bin:$PATH"
+  export PATH
+  claude_runtime_check_launcher_dependency "$nested_zsh_launcher" || fail "nested zsh launcher dependency transport"
+  claude_runtime_build_command "$nested_zsh_launcher"
+  nested_zsh_command=("${CLAUDE_RUNTIME_COMMAND[@]}")
+  nested_zsh_output="$(
+    HOME="$zsh_injection_home" \
+    claude_runtime_run_with_timeout \
+      "$CLAUDE_RUNTIME_PYTHON_BIN" \
+      "$python_driver" \
+      "$TEST_ROOT/work" \
+      5 \
+      - \
+      "${nested_zsh_command[@]}"
+  )"
+  PATH="$saved_path"
+  export PATH
+  assert_eq "nested-zsh-safe" "$nested_zsh_output" "nested zsh startup filter"
+  [ ! -e "$zsh_injection_marker" ] || fail "nested validated zsh interpreter loaded HOME startup code"
+fi
+pass "nested env-to-zsh transport preserves no-startup flag"
+
 timeout_cdpath="$TEST_ROOT/timeout-cdpath-one:$TEST_ROOT/timeout-cdpath-two"
 claude_runtime_resolve_trusted_python "$ROOT" "$TEST_ROOT/work" "$TEST_ROOT/work" || fail "trusted Python CDPATH transport resolution"
 timeout_cdpath_output="$(
@@ -1014,10 +1085,9 @@ export PATH
 claude_runtime_check_launcher_dependency "$dependency_launcher" || fail "PATH interpreter resolved"
 assert_eq "/usr/bin/env" "$CLAUDE_RUNTIME_LAUNCHER_INTERPRETER_PATH" "exact env interpreter retained"
 assert_eq "$dependency_invocation/bin/fake-node" "$CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH" "PATH interpreter path retained"
-assert_eq "3" "${#CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[@]}" "env transport argv count"
-assert_eq "/usr/bin/env" "${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[0]}" "env transport executable"
-assert_eq "fake-node" "${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[1]}" "env transport dependency token"
-assert_eq "$dependency_launcher" "${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[2]}" "env transport launcher"
+assert_eq "2" "${#CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[@]}" "env transport argv count"
+assert_eq "$dependency_invocation/bin/fake-node" "${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[0]}" "env transport resolved executable"
+assert_eq "$dependency_launcher" "${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[1]}" "env transport launcher"
 claude_locator_validate_candidate "$dependency_launcher" "$ROOT" "$TEST_ROOT/work" || fail "launcher remains trusted"
 selected_launch="$CLAUDE_LOCATOR_LAUNCH_PATH"
 selected_target="$CLAUDE_LOCATOR_CANONICAL_TARGET"
@@ -1302,5 +1372,5 @@ if before_files != after_files:
 PY
 pass "bounded helper source purity"
 
-assert_eq "direct_inherited_path_v6" "$CLAUDE_RUNTIME_CONTRACT" "runtime contract label"
+assert_eq "direct_inherited_path_v7" "$CLAUDE_RUNTIME_CONTRACT" "runtime contract label"
 pass "shared helper contracts"

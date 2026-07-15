@@ -3,7 +3,7 @@
 # Shared direct Claude command transport. This file must remain source-pure:
 # definitions and readonly contract constants only.
 
-readonly CLAUDE_RUNTIME_CONTRACT="direct_inherited_path_v6"
+readonly CLAUDE_RUNTIME_CONTRACT="direct_inherited_path_v7"
 readonly CLAUDE_RUNTIME_SCRUBBED_ENV_NAMES="ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH DYLD_FORCE_FLAT_NAMESPACE DYLD_IMAGE_SUFFIX DYLD_ROOT_PATH GCONV_PATH NODE_OPTIONS NODE_PATH PYTHONHOME PYTHONPATH PYTHONSTARTUP PYTHONINSPECT PYTHONBREAKPOINT PYTHONWARNINGS PYTHONUSERBASE RUBYOPT RUBYLIB RUBYGEMS_GEMDEPS GEM_HOME GEM_PATH BUNDLE_GEMFILE PERL5OPT PERL5LIB PERLLIB PERL_LOCAL_LIB_ROOT ZDOTDIR FPATH LUA_INIT LUA_PATH LUA_CPATH JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS CLASSPATH DOTNET_STARTUP_HOOKS CORECLR_ENABLE_PROFILING CORECLR_PROFILER CORECLR_PROFILER_PATH COR_ENABLE_PROFILING COR_PROFILER PHPRC PHP_INI_SCAN_DIR AWKPATH AWKLIBPATH TCLLIBPATH"
 
 claude_runtime_scrub_environment() {
@@ -775,7 +775,7 @@ claude_runtime_inspect_shebang_path() {
   local extra=""
   local stack_index=0
   local native_status=0
-  local interpreter_transport=()
+  local dependency_transport=()
   local interpreter_startup_args=()
 
   if [ "$depth" -gt 8 ]; then
@@ -876,7 +876,6 @@ claude_runtime_inspect_shebang_path() {
       fi
       claude_runtime_add_dependency_path "$interpreter"
       claude_runtime_inspect_shebang_path "$interpreter" "$((depth + 1))" "$execution_cwd" "absolute" || return 1
-      interpreter_transport=("${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[@]+"${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[@]}"}")
       dependency_path="$(claude_runtime_resolve_path_dependency "$dependency" "$execution_cwd" 2>/dev/null || true)"
       if [ -z "$dependency_path" ]; then
         CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="missing"
@@ -887,9 +886,13 @@ claude_runtime_inspect_shebang_path() {
       fi
       claude_runtime_add_dependency_path "$dependency_path"
       claude_runtime_inspect_shebang_path "$dependency_path" "$((depth + 1))" "$execution_cwd" "path" || return 1
-      claude_runtime_interpreter_startup_args "$dependency"
+      dependency_transport=("${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[@]+"${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[@]}"}")
+      CLAUDE_RUNTIME_INTERPRETER_STARTUP_ARGS=()
+      if claude_runtime_is_native_executable "$dependency_path"; then
+        claude_runtime_interpreter_startup_args "$dependency"
+      fi
       interpreter_startup_args=("${CLAUDE_RUNTIME_INTERPRETER_STARTUP_ARGS[@]+"${CLAUDE_RUNTIME_INTERPRETER_STARTUP_ARGS[@]}"}")
-      CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND=("${interpreter_transport[@]}" "$dependency" "${interpreter_startup_args[@]+"${interpreter_startup_args[@]}"}" "$current_path")
+      CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND=("${dependency_transport[@]}" "${interpreter_startup_args[@]+"${interpreter_startup_args[@]}"}" "$current_path")
       return 0
       ;;
     /*)
@@ -913,7 +916,10 @@ claude_runtime_inspect_shebang_path() {
       fi
       claude_runtime_add_dependency_path "$interpreter"
       claude_runtime_inspect_shebang_path "$interpreter" "$((depth + 1))" "$execution_cwd" "absolute" || return 1
-      claude_runtime_interpreter_startup_args "$interpreter"
+      CLAUDE_RUNTIME_INTERPRETER_STARTUP_ARGS=()
+      if claude_runtime_is_native_executable "$interpreter"; then
+        claude_runtime_interpreter_startup_args "$interpreter"
+      fi
       CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND+=("${CLAUDE_RUNTIME_INTERPRETER_STARTUP_ARGS[@]+"${CLAUDE_RUNTIME_INTERPRETER_STARTUP_ARGS[@]}"}" "$current_path")
       return 0
       ;;
@@ -948,4 +954,4 @@ claude_runtime_check_launcher_dependency() {
   return 0
 }
 
-# claude-review-helper-complete: runtime_v6
+# claude-review-helper-complete: runtime_v7

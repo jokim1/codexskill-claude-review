@@ -687,7 +687,7 @@ fi
 
 if ! load_required_claude_helper \
   "$CLAUDE_RUNTIME_HELPER" \
-  "# claude-review-helper-complete: runtime_v6" \
+  "# claude-review-helper-complete: runtime_v7" \
   claude_runtime_check_launcher_dependency \
   claude_runtime_build_command \
   claude_runtime_interpreter_startup_args \
@@ -712,7 +712,7 @@ if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v6" ]; then
   exit 0
 fi
 
-if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v6" ]; then
+if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v7" ]; then
   emit_bridge_installation_incomplete "claude-runtime.sh"
   exit 0
 fi
