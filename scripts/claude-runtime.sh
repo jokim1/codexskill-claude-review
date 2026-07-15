@@ -3,7 +3,7 @@
 # Shared direct Claude command transport. This file must remain source-pure:
 # definitions and readonly contract constants only.
 
-readonly CLAUDE_RUNTIME_CONTRACT="direct_inherited_path_v10"
+readonly CLAUDE_RUNTIME_CONTRACT="direct_inherited_path_v11"
 readonly CLAUDE_RUNTIME_SCRUBBED_ENV_NAMES="ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH DYLD_FORCE_FLAT_NAMESPACE DYLD_IMAGE_SUFFIX DYLD_ROOT_PATH GCONV_PATH NODE_OPTIONS NODE_PATH PYTHONHOME PYTHONPATH PYTHONSTARTUP PYTHONINSPECT PYTHONBREAKPOINT PYTHONWARNINGS PYTHONUSERBASE RUBYOPT RUBYLIB RUBYGEMS_GEMDEPS GEM_HOME GEM_PATH BUNDLE_GEMFILE PERL5OPT PERL5LIB PERLLIB PERL_LOCAL_LIB_ROOT ZDOTDIR FPATH LUA_INIT LUA_PATH LUA_CPATH JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS CLASSPATH DOTNET_STARTUP_HOOKS CORECLR_ENABLE_PROFILING CORECLR_PROFILER CORECLR_PROFILER_PATH COR_ENABLE_PROFILING COR_PROFILER PHPRC PHP_INI_SCAN_DIR AWKPATH AWKLIBPATH TCLLIBPATH"
 
 claude_runtime_scrub_environment() {
@@ -739,6 +739,60 @@ claude_runtime_resolve_path_dependency() {
   )
 }
 
+claude_runtime_read_bounded_shebang_line() {
+  local executable_path="$1"
+  local od_bin=""
+  local header_output=""
+  local header_bytes=()
+  local byte=""
+  local character=""
+  local newline_found=0
+
+  CLAUDE_RUNTIME_BOUNDED_SHEBANG_LINE=""
+  CLAUDE_RUNTIME_BOUNDED_SHEBANG_STATUS="not_shebang"
+  od_bin="$(claude_locator_resolve_trusted_utility od 2>/dev/null)" || {
+    CLAUDE_RUNTIME_BOUNDED_SHEBANG_STATUS="validation_unavailable"
+    return 2
+  }
+  header_output="$(LC_ALL=C "$od_bin" -An -tx1 -v -N4096 "$executable_path" 2>/dev/null)" || {
+    CLAUDE_RUNTIME_BOUNDED_SHEBANG_STATUS="validation_unavailable"
+    return 2
+  }
+  # shellcheck disable=SC2206
+  header_bytes=($header_output)
+  for byte in "${header_bytes[@]+"${header_bytes[@]}"}"; do
+    case "$byte" in
+      [0-9a-fA-F][0-9a-fA-F]) ;;
+      *)
+        CLAUDE_RUNTIME_BOUNDED_SHEBANG_STATUS="validation_unavailable"
+        return 2
+        ;;
+    esac
+  done
+  [ "${#header_bytes[@]}" -ge 2 ] || return 1
+  [ "${header_bytes[0]} ${header_bytes[1]}" = "23 21" ] || return 1
+
+  CLAUDE_RUNTIME_BOUNDED_SHEBANG_STATUS="malformed"
+  for byte in "${header_bytes[@]}"; do
+    case "$byte" in
+      00)
+        return 1
+        ;;
+      0a)
+        newline_found=1
+        break
+        ;;
+    esac
+    printf -v character '%b' "\\x$byte"
+    CLAUDE_RUNTIME_BOUNDED_SHEBANG_LINE="${CLAUDE_RUNTIME_BOUNDED_SHEBANG_LINE}${character}"
+  done
+  if [ "$newline_found" -eq 0 ] && [ "${#header_bytes[@]}" -ge 4096 ]; then
+    return 1
+  fi
+  CLAUDE_RUNTIME_BOUNDED_SHEBANG_STATUS="safe"
+  return 0
+}
+
 claude_runtime_is_native_executable() {
   local executable_path="$1"
   local od_bin=""
@@ -849,45 +903,46 @@ claude_runtime_inspect_shebang_path() {
     CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="$current_path"
     return 1
   fi
-  if { IFS= read -r -n 4096 first_line || true; } 2>/dev/null < "$current_path"; then
-    :
+  if claude_runtime_is_native_executable "$current_path"; then
+    if [ "$depth" -gt 0 ] && ! claude_runtime_interpreter_startup_args "$current_path"; then
+      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unsupported"
+      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="${current_path##*/}"
+      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="$current_path"
+      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_RESOLUTION="$resolution_kind"
+      return 1
+    fi
+    CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND=("$current_path")
+    return 0
   else
-    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unreadable"
-    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="${current_path##*/}"
+    native_status=$?
+  fi
+  if [ "$native_status" -eq 2 ]; then
+    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="validation_unavailable"
+    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="od"
+    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="none"
+    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_RESOLUTION="bootstrap"
+    return 1
+  fi
+  if claude_runtime_read_bounded_shebang_line "$current_path"; then
+    first_line="$CLAUDE_RUNTIME_BOUNDED_SHEBANG_LINE"
+  else
+    if [ "${CLAUDE_RUNTIME_BOUNDED_SHEBANG_STATUS:-not_shebang}" = "validation_unavailable" ]; then
+      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="validation_unavailable"
+      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="od"
+      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="none"
+      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_RESOLUTION="bootstrap"
+      return 1
+    fi
+    CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unsupported"
+    if [ "${CLAUDE_RUNTIME_BOUNDED_SHEBANG_STATUS:-not_shebang}" = "malformed" ]; then
+      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="shebang"
+    else
+      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="native_format"
+    fi
     CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="$current_path"
     return 1
   fi
   first_line="${first_line%$'\r'}"
-  case "$first_line" in
-    '#!'*)
-      ;;
-    *)
-      if claude_runtime_is_native_executable "$current_path"; then
-        if [ "$depth" -gt 0 ] && ! claude_runtime_interpreter_startup_args "$current_path"; then
-          CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unsupported"
-          CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="${current_path##*/}"
-          CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="$current_path"
-          CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_RESOLUTION="$resolution_kind"
-          return 1
-        fi
-        CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND=("$current_path")
-        return 0
-      else
-        native_status=$?
-      fi
-      if [ "$native_status" -eq 2 ]; then
-        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="validation_unavailable"
-        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="od"
-        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="none"
-        CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_RESOLUTION="bootstrap"
-        return 1
-      fi
-      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unsupported"
-      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY="native_format"
-      CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_PATH="$current_path"
-      return 1
-      ;;
-  esac
 
   payload="${first_line#\#!}"
   IFS=$' \t' read -r interpreter remainder <<< "$payload"
@@ -1029,4 +1084,4 @@ claude_runtime_check_launcher_dependency() {
   return 0
 }
 
-# claude-review-helper-complete: runtime_v10
+# claude-review-helper-complete: runtime_v11

@@ -981,6 +981,34 @@ timeout_cdpath_output="$(
 assert_eq "$timeout_cdpath" "$timeout_cdpath_output" "timeout runtime preserves exported CDPATH"
 pass "direct and timeout transports preserve exported CDPATH"
 
+if grep -Fq 'read -r -n 4096' "$RUNTIME"; then
+  fail "launcher inspection still counts characters instead of bounded bytes"
+fi
+if [ "${BASH_VERSINFO[0]}" -ge 5 ]; then
+  nul_heavy_native="$TEST_ROOT/trusted/bin/nul-heavy-native"
+  timeout_bin="$(type -P timeout 2>/dev/null || true)"
+  [ -n "$timeout_bin" ] || fail "GNU Bash 5 byte-bound regression requires timeout"
+  python3 - "$nul_heavy_native" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+with path.open("wb") as handle:
+    handle.write(b"\x7fELF")
+    handle.truncate(4 * 1024 * 1024 * 1024)
+PY
+  chmod 755 "$nul_heavy_native"
+  "$timeout_bin" 5 "$BASH" --noprofile --norc -c '
+    set -euo pipefail
+    source "$1"
+    source "$2"
+    claude_runtime_check_launcher_dependency "$3"
+    [ "$CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_KIND" = "direct" ]
+  ' _ "$LOCATOR" "$RUNTIME" "$nul_heavy_native" || \
+    fail "GNU Bash 5 scanned beyond the bounded native executable prefix"
+fi
+pass "native and shebang inspection is byte-bounded on GNU Bash 5"
+
 cat > "$TEST_ROOT/trusted/bin/missing-env-interpreter" <<'SH'
 #!/usr/bin/env definitely-missing-claude-interpreter
 SH
@@ -1405,5 +1433,5 @@ if before_files != after_files:
 PY
 pass "bounded helper source purity"
 
-assert_eq "direct_inherited_path_v10" "$CLAUDE_RUNTIME_CONTRACT" "runtime contract label"
+assert_eq "direct_inherited_path_v11" "$CLAUDE_RUNTIME_CONTRACT" "runtime contract label"
 pass "shared helper contracts"
