@@ -578,6 +578,105 @@ driver_output="$(
 )"
 assert_eq "driver-ok" "$driver_output" "isolated Python driver output"
 [ ! -e "$python_injection_marker" ] || fail "isolated Python loaded startup code from CWD or PYTHONPATH"
+case "${OSTYPE:-}" in
+  msys*|mingw*|cygwin*)
+    pass "POSIX driver cancellation cleanup skipped on Windows"
+    ;;
+  *)
+    cancellation_child="$TEST_ROOT/work/cancellation-child.sh"
+    cancellation_child_pid="$TEST_ROOT/work/cancellation-child.pid"
+    cat > "$cancellation_child" <<'SH'
+#!/usr/bin/env bash
+sleep 30 &
+child_pid="$!"
+printf '%s\n' "$child_pid" > "${CANCELLATION_CHILD_PID_FILE:?}"
+wait "$child_pid"
+SH
+    chmod 755 "$cancellation_child"
+    CANCELLATION_CHILD_PID_FILE="$cancellation_child_pid" \
+      "$CLAUDE_RUNTIME_PYTHON_BIN" -I -S - \
+      "$python_driver" \
+      "$cancellation_child" \
+      "$cancellation_child_pid" <<'PY'
+from pathlib import Path
+import os
+import signal
+import subprocess
+import sys
+import time
+
+driver_path = sys.argv[1]
+child_path = sys.argv[2]
+pid_path = Path(sys.argv[3])
+driver = subprocess.Popen(
+    [
+        sys.executable,
+        "-I",
+        "-S",
+        driver_path,
+        "run",
+        "-",
+        "30",
+        "",
+        "",
+        "-",
+        child_path,
+    ],
+    stdin=subprocess.DEVNULL,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+)
+child_pid = None
+try:
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if pid_path.exists() and pid_path.stat().st_size:
+            child_pid = int(pid_path.read_text().strip())
+            break
+        if driver.poll() is not None:
+            out, err = driver.communicate()
+            raise SystemExit(
+                f"driver exited before child startup: rc={driver.returncode} "
+                f"stdout={out!r} stderr={err!r}"
+            )
+        time.sleep(0.05)
+    if child_pid is None:
+        raise SystemExit("driver child PID was not recorded")
+
+    driver.send_signal(signal.SIGTERM)
+    try:
+        returncode = driver.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        raise SystemExit("driver did not finish bounded cancellation cleanup")
+    if returncode != 128 + signal.SIGTERM:
+        out, err = driver.communicate()
+        raise SystemExit(
+            f"driver cancellation status changed: rc={returncode} "
+            f"stdout={out!r} stderr={err!r}"
+        )
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        raise SystemExit(f"driver cancellation left descendant {child_pid} running")
+finally:
+    if driver.poll() is None:
+        driver.kill()
+        driver.wait()
+    if child_pid is not None:
+        try:
+            os.kill(child_pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+PY
+    pass "POSIX cancellation terminates the runtime process group"
+    ;;
+esac
 unicode_stdout="$TEST_ROOT/work/unicode-stdout"
 unicode_stderr="$TEST_ROOT/work/unicode-stderr"
 claude_runtime_run_with_timeout \
@@ -1433,5 +1532,5 @@ if before_files != after_files:
 PY
 pass "bounded helper source purity"
 
-assert_eq "direct_inherited_path_v11" "$CLAUDE_RUNTIME_CONTRACT" "runtime contract label"
+assert_eq "direct_inherited_path_v12" "$CLAUDE_RUNTIME_CONTRACT" "runtime contract label"
 pass "shared helper contracts"

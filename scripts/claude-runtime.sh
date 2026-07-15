@@ -3,7 +3,7 @@
 # Shared direct Claude command transport. This file must remain source-pure:
 # definitions and readonly contract constants only.
 
-readonly CLAUDE_RUNTIME_CONTRACT="direct_inherited_path_v11"
+readonly CLAUDE_RUNTIME_CONTRACT="direct_inherited_path_v12"
 readonly CLAUDE_RUNTIME_SCRUBBED_ENV_NAMES="ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH DYLD_FORCE_FLAT_NAMESPACE DYLD_IMAGE_SUFFIX DYLD_ROOT_PATH GCONV_PATH NODE_OPTIONS NODE_PATH PYTHONHOME PYTHONPATH PYTHONSTARTUP PYTHONINSPECT PYTHONBREAKPOINT PYTHONWARNINGS PYTHONUSERBASE RUBYOPT RUBYLIB RUBYGEMS_GEMDEPS GEM_HOME GEM_PATH BUNDLE_GEMFILE PERL5OPT PERL5LIB PERLLIB PERL_LOCAL_LIB_ROOT ZDOTDIR FPATH LUA_INIT LUA_PATH LUA_CPATH JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS CLASSPATH DOTNET_STARTUP_HOOKS CORECLR_ENABLE_PROFILING CORECLR_PROFILER CORECLR_PROFILER_PATH COR_ENABLE_PROFILING COR_PROFILER PHPRC PHP_INI_SCAN_DIR AWKPATH AWKLIBPATH TCLLIBPATH"
 
 claude_runtime_scrub_environment() {
@@ -232,6 +232,16 @@ import time
 JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
 CREATE_SUSPENDED = 0x00000004
+
+
+class _ProcessCancellation(BaseException):
+    def __init__(self, signum):
+        super().__init__(signum)
+        self.signum = signum
+
+
+def _raise_process_cancellation(signum, _frame):
+    raise _ProcessCancellation(signum)
 
 
 if os.name == "nt":
@@ -480,13 +490,25 @@ def _run_process(timeout, msys_present, msys_value, input_path, cmd):
     process_options = {}
     job = _create_kill_on_close_job()
     proc = None
+    previous_signal_handlers = {}
+    previous_signal_mask = None
     if os.name == "nt":
         process_options["creationflags"] = (
             subprocess.CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED
         )
     else:
         process_options["start_new_session"] = True
+        for signal_name in ("SIGINT", "SIGHUP", "SIGTERM"):
+            signum = getattr(signal, signal_name, None)
+            if signum is not None:
+                previous_signal_handlers[signum] = signal.getsignal(signum)
+        if previous_signal_handlers and hasattr(signal, "pthread_sigmask"):
+            previous_signal_mask = signal.pthread_sigmask(
+                signal.SIG_BLOCK, previous_signal_handlers
+            )
     try:
+        for signum in previous_signal_handlers:
+            signal.signal(signum, _raise_process_cancellation)
         proc = subprocess.Popen(
             cmd,
             cwd=os.getcwd(),
@@ -500,6 +522,9 @@ def _run_process(timeout, msys_present, msys_value, input_path, cmd):
             env=_child_environment(msys_present, msys_value),
             **process_options,
         )
+        if previous_signal_mask is not None:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_signal_mask)
+            previous_signal_mask = None
         if os.name == "nt" and not _kernel32.AssignProcessToJobObject(
             job, wintypes.HANDLE(int(proc._handle))
         ):
@@ -527,7 +552,22 @@ def _run_process(timeout, msys_present, msys_value, input_path, cmd):
             out, err = _bounded_timeout_cleanup(proc, job)
             timed_out = True
         return proc, out or "", err or "", timed_out
+    except BaseException:
+        for signum in previous_signal_handlers:
+            signal.signal(signum, signal.SIG_IGN)
+        if previous_signal_mask is not None:
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_signal_mask)
+            previous_signal_mask = None
+        if proc is not None:
+            _bounded_timeout_cleanup(proc, job)
+        raise
     finally:
+        if previous_signal_mask is not None:
+            for signum in previous_signal_handlers:
+                signal.signal(signum, signal.SIG_IGN)
+            signal.pthread_sigmask(signal.SIG_SETMASK, previous_signal_mask)
+        for signum, previous_handler in previous_signal_handlers.items():
+            signal.signal(signum, previous_handler)
         if input_handle is not None:
             input_handle.close()
         _close_job(job)
@@ -577,6 +617,10 @@ def main():
         proc, out, err, timed_out = _run_process(
             timeout, msys_present, msys_value, input_path, cmd
         )
+    except _ProcessCancellation as exc:
+        return 128 + exc.signum
+    except KeyboardInterrupt:
+        return 130
     except (OSError, ValueError) as exc:
         if mode == "probe":
             print(f"{label}_status=spawn_failed")
@@ -1084,4 +1128,4 @@ claude_runtime_check_launcher_dependency() {
   return 0
 }
 
-# claude-review-helper-complete: runtime_v11
+# claude-review-helper-complete: runtime_v12

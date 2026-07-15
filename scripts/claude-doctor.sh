@@ -594,7 +594,7 @@ fi
 
 if ! load_required_claude_helper \
   "$RUNTIME_HELPER" \
-  "# claude-review-helper-complete: runtime_v11" \
+  "# claude-review-helper-complete: runtime_v12" \
   claude_runtime_check_launcher_dependency \
   claude_runtime_read_bounded_shebang_line \
   claude_runtime_build_command \
@@ -624,7 +624,7 @@ if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v6" ]; then
   exit 0
 fi
 
-if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v11" ]; then
+if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v12" ]; then
   print_kv "doctor_status" "bridge_installation_incomplete"
   print_kv "bridge_component" "claude-runtime.sh"
   print_kv "bridge_guidance" "Reinstall or update the complete claude-review skill, then retry."
