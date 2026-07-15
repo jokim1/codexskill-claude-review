@@ -547,7 +547,7 @@ from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
-marker = "# claude-review-helper-complete: locator_v2"
+marker = "# claude-review-helper-complete: locator_v3"
 replacement = "claude_locator_resolve_trusted_utility() { return 1; }\n\n" + marker
 path.write_text(path.read_text().replace(marker, replacement))
 PY
@@ -693,13 +693,13 @@ run_bootstrap_case() {
     missing_locator) rm -f "$skill/scripts/claude-locator.sh" ;;
     missing_runtime) rm -f "$skill/scripts/claude-runtime.sh" ;;
     invalid_config) printf 'if then\n# claude-review-helper-complete: config_v1\n' > "$skill/scripts/claude-config.sh" ;;
-    invalid_locator) printf 'if then\n# claude-review-helper-complete: locator_v2\n' > "$skill/scripts/claude-locator.sh" ;;
+    invalid_locator) printf 'if then\n# claude-review-helper-complete: locator_v3\n' > "$skill/scripts/claude-locator.sh" ;;
     empty_runtime) : > "$skill/scripts/claude-runtime.sh" ;;
     no_marker_config) printf 'readonly CLAUDE_CONFIG_CONTRACT="config_v1"\nclaude_config_load_file() { :; }\nclaude_config_main() { :; }\n' > "$skill/scripts/claude-config.sh" ;;
     no_marker_runtime) printf 'claude_runtime_build_command() { :; }\nclaude_runtime_check_launcher_dependency() { :; }\nclaude_runtime_scrub_environment() { :; }\n' > "$skill/scripts/claude-runtime.sh" ;;
     missing_symbol_config) sed 's/^claude_config_load_file()/claude_config_load_file_missing()/' "$REPO_ROOT/scripts/claude-config.sh" > "$skill/scripts/claude-config.sh" ;;
     missing_symbol_locator) sed 's/^claude_locator_validate_candidate()/claude_locator_validate_candidate_missing()/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
-    stale_locator) sed -e 's/bounded_path_native_homebrew_v2/bounded_path_native_homebrew_v1/' -e 's/locator_v2/locator_v1/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
+    stale_locator) sed -e 's/bounded_path_native_homebrew_v3/bounded_path_native_homebrew_v2/' -e 's/locator_v3/locator_v2/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
     stale_runtime) sed -e 's/direct_inherited_path_v3/direct_inherited_path_v2/' -e 's/runtime_v3/runtime_v2/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
   esac
   output="$(run_runner "$skill" "$REPO_ROOT" "$REPO_ROOT" "$HOME" "$path_root/bin:$SYSTEM_PATH" "$candidate_log" 2>&1)"

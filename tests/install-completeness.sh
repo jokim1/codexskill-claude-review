@@ -41,7 +41,7 @@ for helper in scripts/claude-config.sh scripts/claude-locator.sh scripts/claude-
   [ -x "$ROOT/$helper" ] || fail "$helper is not executable"
   case "$helper" in
     *config*) tail -n 1 "$ROOT/$helper" | grep -Fqx '# claude-review-helper-complete: config_v1' || fail "$helper marker" ;;
-    *locator*) tail -n 1 "$ROOT/$helper" | grep -Fqx '# claude-review-helper-complete: locator_v2' || fail "$helper marker" ;;
+    *locator*) tail -n 1 "$ROOT/$helper" | grep -Fqx '# claude-review-helper-complete: locator_v3' || fail "$helper marker" ;;
     *runtime*) tail -n 1 "$ROOT/$helper" | grep -Fqx '# claude-review-helper-complete: runtime_v3' || fail "$helper marker" ;;
   esac
   if git -C "$ROOT" ls-files --error-unmatch "$helper" >/dev/null 2>&1; then

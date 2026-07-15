@@ -613,6 +613,9 @@ ordinary Claude setup may work even when bridge subscription auth is unavailable
 Runner and doctor bound their version, auth-status, and live-probe calls with the
 configured preflight timeout. Doctor reports `claude_runtime_status=timeout` or
 `claude_auth_status=timeout` instead of waiting indefinitely.
+The legacy `plain_print_probe_status` key remains present as
+`skipped_redundant_hardened_probe`; doctor makes one bounded hardened live call
+under `safe_mode_print_probe` rather than issuing duplicate Claude requests.
 
 ## Sandbox And Claude State
 

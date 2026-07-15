@@ -339,6 +339,25 @@ EOF
 
 normalize_path() {
   local path="$1"
+  local cygpath_bin=""
+
+  case "${OSTYPE:-}" in
+    msys*|mingw*|cygwin*)
+      case "$path" in
+        [A-Za-z]:[\\/]*)
+          if [ -x /usr/bin/cygpath ]; then
+            cygpath_bin=/usr/bin/cygpath
+          elif [ -x /usr/bin/cygpath.exe ]; then
+            cygpath_bin=/usr/bin/cygpath.exe
+          else
+            return 1
+          fi
+          "$cygpath_bin" -u "$path"
+          return
+          ;;
+      esac
+      ;;
+  esac
 
   case "$path" in
     ''|/*)
@@ -487,7 +506,7 @@ fi
 
 if ! load_required_claude_helper \
   "$LOCATOR_HELPER" \
-  "# claude-review-helper-complete: locator_v2" \
+  "# claude-review-helper-complete: locator_v3" \
   claude_locator_path_candidate \
   claude_locator_native_supported \
   claude_locator_native_path \
@@ -524,7 +543,7 @@ if ! load_required_claude_helper \
   exit 0
 fi
 
-if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v2" ]; then
+if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v3" ]; then
   print_kv "doctor_status" "bridge_installation_incomplete"
   print_kv "bridge_component" "claude-locator.sh"
   print_kv "bridge_guidance" "Reinstall or update the complete claude-review skill, then retry."
@@ -1009,20 +1028,7 @@ fi
 
 print_kv "probe_timeout_seconds" "$PROBE_TIMEOUT_SECONDS"
 
-run_probe \
-  "plain_print_probe" \
-  "$claude_bin" \
-  -p \
-  --safe-mode \
-  --output-format json \
-  --tools "" \
-  --strict-mcp-config \
-  --setting-sources local \
-  --disable-slash-commands \
-  --no-session-persistence \
-  --permission-mode dontAsk \
-  --effort low \
-  --max-budget-usd 0.15
+print_kv "plain_print_probe_status" "skipped_redundant_hardened_probe"
 
 run_probe \
   "safe_mode_print_probe" \

@@ -3,7 +3,7 @@
 # Shared Claude launcher discovery and trust validation. This file must remain
 # source-pure: definitions and readonly contract constants only.
 
-readonly CLAUDE_LOCATOR_CONTRACT="bounded_path_native_homebrew_v2"
+readonly CLAUDE_LOCATOR_CONTRACT="bounded_path_native_homebrew_v3"
 readonly CLAUDE_LOCATOR_TRUSTED_STORE_ROOT="/nix/store"
 
 claude_locator_native_supported() {
@@ -489,17 +489,14 @@ claude_locator_parent_world_writable() {
   [ -n "$parent" ] || parent="/"
   stat_bin="$(claude_locator_resolve_trusted_utility stat 2>/dev/null)" || return 2
   while :; do
-    if mode="$("$stat_bin" -f '%Lp' "$parent" 2>/dev/null)"; then
-      :
-    elif mode="$("$stat_bin" -c '%a' "$parent" 2>/dev/null)"; then
-      :
-    else
-      return 2
-    fi
+    mode="$("$stat_bin" -f '%Lp' "$parent" 2>/dev/null)" || mode=""
     case "$mode" in
       ''|*[!0-7]*)
-        return 2
+        mode="$("$stat_bin" -c '%a' "$parent" 2>/dev/null)" || return 2
         ;;
+    esac
+    case "$mode" in
+      ''|*[!0-7]*) return 2 ;;
     esac
     last_digit="${mode#${mode%?}}"
     case "$last_digit" in
@@ -521,17 +518,14 @@ claude_locator_file_world_writable() {
   local last_digit=""
 
   stat_bin="$(claude_locator_resolve_trusted_utility stat 2>/dev/null)" || return 2
-  if mode="$("$stat_bin" -f '%Lp' "$path" 2>/dev/null)"; then
-    :
-  elif mode="$("$stat_bin" -c '%a' "$path" 2>/dev/null)"; then
-    :
-  else
-    return 2
-  fi
+  mode="$("$stat_bin" -f '%Lp' "$path" 2>/dev/null)" || mode=""
   case "$mode" in
     ''|*[!0-7]*)
-      return 2
+      mode="$("$stat_bin" -c '%a' "$path" 2>/dev/null)" || return 2
       ;;
+  esac
+  case "$mode" in
+    ''|*[!0-7]*) return 2 ;;
   esac
   last_digit="${mode#${mode%?}}"
   case "$last_digit" in
@@ -736,4 +730,4 @@ claude_locator_validate_launcher_dependency() {
   [ "$dependency_valid" = true ]
 }
 
-# claude-review-helper-complete: locator_v2
+# claude-review-helper-complete: locator_v3

@@ -229,14 +229,14 @@ assert_line "$basic_output" "claude_auth_context=subscription_only_credentials_s
 assert_line "$basic_output" "python_runtime_status=safe" "trusted Python status"
 assert_line "$basic_output" "python_validation_scope=none" "trusted Python scope"
 assert_line "$basic_output" "python_validation_reason=none" "trusted Python reason"
-assert_line "$basic_output" "plain_print_probe_status=completed" "plain probe"
+assert_line "$basic_output" "plain_print_probe_status=skipped_redundant_hardened_probe" "legacy plain probe status"
 assert_line "$basic_output" "safe_mode_print_probe_status=completed" "safe probe"
 probe_safe_mode_count="$(grep -Fc 'arg=[--safe-mode]' "$path_log" || true)"
 probe_empty_tools_count="$(grep -Fc 'arg=[--tools]' "$path_log" || true)"
 probe_no_session_count="$(grep -Fc 'arg=[--no-session-persistence]' "$path_log" || true)"
-[ "$probe_safe_mode_count" -eq 2 ] || fail "both doctor probes require safe mode"
-[ "$probe_empty_tools_count" -eq 2 ] || fail "both doctor probes disable tools"
-[ "$probe_no_session_count" -eq 2 ] || fail "both doctor probes disable session persistence"
+[ "$probe_safe_mode_count" -eq 1 ] || fail "doctor live probe requires safe mode"
+[ "$probe_empty_tools_count" -eq 1 ] || fail "doctor live probe disables tools"
+[ "$probe_no_session_count" -eq 1 ] || fail "doctor live probe disables session persistence"
 assert_line "$basic_output" "runner_safe_mode=ok" "runner safe-mode contract"
 assert_line "$basic_output" "runner_strict_mcp_config=ok" "runner strict-MCP contract"
 assert_line "$basic_output" "router_present=ok" "router presence"
@@ -670,7 +670,7 @@ from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
-marker = "# claude-review-helper-complete: locator_v2"
+marker = "# claude-review-helper-complete: locator_v3"
 replacement = "claude_locator_resolve_trusted_utility() { return 1; }\n\n" + marker
 path.write_text(path.read_text().replace(marker, replacement))
 PY
@@ -839,13 +839,13 @@ run_bootstrap_case() {
     missing_locator) rm -f "$skill/scripts/claude-locator.sh" ;;
     missing_runtime) rm -f "$skill/scripts/claude-runtime.sh" ;;
     invalid_config) printf 'if then\n# claude-review-helper-complete: config_v1\n' > "$skill/scripts/claude-config.sh" ;;
-    invalid_locator) printf 'if then\n# claude-review-helper-complete: locator_v2\n' > "$skill/scripts/claude-locator.sh" ;;
+    invalid_locator) printf 'if then\n# claude-review-helper-complete: locator_v3\n' > "$skill/scripts/claude-locator.sh" ;;
     empty_runtime) : > "$skill/scripts/claude-runtime.sh" ;;
     no_marker_config) printf 'readonly CLAUDE_CONFIG_CONTRACT="config_v1"\nclaude_config_load_file() { :; }\nclaude_config_main() { :; }\n' > "$skill/scripts/claude-config.sh" ;;
     no_marker_runtime) printf 'claude_runtime_build_command() { :; }\nclaude_runtime_check_launcher_dependency() { :; }\n' > "$skill/scripts/claude-runtime.sh" ;;
     missing_symbol_config) sed 's/^claude_config_load_file()/claude_config_load_file_missing()/' "$REPO_ROOT/scripts/claude-config.sh" > "$skill/scripts/claude-config.sh" ;;
     missing_symbol_locator) sed 's/^claude_locator_validate_candidate()/claude_locator_validate_candidate_missing()/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
-    stale_locator) sed -e 's/bounded_path_native_homebrew_v2/bounded_path_native_homebrew_v1/' -e 's/locator_v2/locator_v1/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
+    stale_locator) sed -e 's/bounded_path_native_homebrew_v3/bounded_path_native_homebrew_v2/' -e 's/locator_v3/locator_v2/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
     stale_runtime) sed -e 's/direct_inherited_path_v3/direct_inherited_path_v2/' -e 's/runtime_v3/runtime_v2/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
   esac
   output="$(run_doctor "$skill" "$REPO_ROOT" "$REPO_ROOT" "$HOME" "$path_value" "$candidate_log" --skip-probes 2>&1)"

@@ -227,11 +227,24 @@ if [ -n "$gnu_stat" ]; then
     else
       [ "$?" -eq 1 ] || exit 1
     fi
+    mkdir -p "$TEST_ROOT/gnu-stat-cwd"
+    : > "$TEST_ROOT/gnu-stat-cwd/%Lp"
+    cd "$TEST_ROOT/gnu-stat-cwd"
+    if claude_locator_parent_world_writable /usr/bin/env; then
+      exit 1
+    else
+      [ "$?" -eq 1 ] || exit 1
+    fi
+    if claude_locator_file_world_writable /usr/bin/env; then
+      exit 1
+    else
+      [ "$?" -eq 1 ] || exit 1
+    fi
     cp "$TEST_ROOT/trusted/bin/claude" "$TEST_ROOT/trusted/bin/gnu-world-writable"
     chmod 777 "$TEST_ROOT/trusted/bin/gnu-world-writable"
     claude_locator_file_world_writable "$TEST_ROOT/trusted/bin/gnu-world-writable" || exit 1
   ) || fail "GNU stat mode parsing"
-  pass "GNU stat fallback discards failed BSD-probe output"
+  pass "GNU stat fallback discards failed and invalid BSD-probe output"
 else
   pass "GNU stat fallback test skipped when GNU stat is unavailable"
 fi

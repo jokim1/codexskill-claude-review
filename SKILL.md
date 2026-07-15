@@ -742,6 +742,9 @@ Treat symlink loops and inaccessible targets as fail-closed
 `validation_unavailable` results, not dangling fallbacks. Only a bounded resolution
 that proves an absent final target may be reported as `dangling_symlink` and defer
 to a later fixed fallback.
+Keep the legacy `plain_print_probe_status` key in doctor output as
+`skipped_redundant_hardened_probe`; only `safe_mode_print_probe` performs the
+bounded hardened live call.
 Do not replace it with a hand-written `claude -p` probe.
 
 ### `/claude-review update`

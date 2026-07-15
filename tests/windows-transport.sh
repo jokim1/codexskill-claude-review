@@ -410,11 +410,50 @@ doctor_output="$({
 })"
 printf '%s\n' "$doctor_output" | grep -Fqx 'doctor_status=ok' || fail "production doctor did not complete"
 printf '%s\n' "$doctor_output" | grep -Fqx 'claude_path_status=available' || fail "production doctor did not select PATH shim"
-printf '%s\n' "$doctor_output" | grep -Fqx 'plain_print_probe_status=completed' || fail "doctor plain probe missed native-Python transport"
+printf '%s\n' "$doctor_output" | grep -Fqx 'plain_print_probe_status=skipped_redundant_hardened_probe' || fail "doctor legacy plain probe status drifted"
 printf '%s\n' "$doctor_output" | grep -Fqx 'safe_mode_print_probe_status=completed' || fail "doctor safe-mode probe missed native-Python transport"
 if grep -Fq 'msys=*' "$shim_log"; then
   fail "doctor transport leaked its internal MSYS conversion override"
 fi
+
+root_drive="$($cygpath_bin -am "$ROOT")"
+artifact_file_drive="$($cygpath_bin -am "$artifact_file")"
+base_prompt_drive="$($cygpath_bin -am "$ROOT/prompts/code-review.base.md")"
+schema_drive="$($cygpath_bin -am "$ROOT/schemas/review-output.json")"
+config_drive="$($cygpath_bin -am "$ROOT/.codex/claude/config.env")"
+drive_runner_output="$({
+  cd "$ROOT"
+  PATH="$shim_root:$PATH" \
+  WINDOWS_SHIM_LOG="$shim_log" \
+  BASH_ENV= ENV= /bin/bash --noprofile --norc -p scripts/run-review.sh \
+    --mode code \
+    --artifact-file "$artifact_file_drive" \
+    --base-prompt "$base_prompt_drive" \
+    --schema-file "$schema_drive" \
+    --repo-root "$root_drive" \
+    --branch windows-drive-test \
+    --base-branch main
+})"
+RUNNER_OUTPUT="$drive_runner_output" "$python_bin" -I - <<'PY'
+import json
+import os
+
+data = json.loads(os.environ["RUNNER_OUTPUT"])
+assert data["status"] == "clean", data
+PY
+drive_doctor_output="$({
+  cd "$ROOT"
+  PATH="$shim_root:$PATH" \
+  WINDOWS_SHIM_LOG="$shim_log" \
+  BASH_ENV= ENV= /bin/bash --noprofile --norc -p scripts/claude-doctor.sh \
+    --repo-root "$root_drive" \
+    --skill-root "$root_drive" \
+    --config-file "$config_drive" \
+    --probe-timeout 10 \
+    --skip-probes \
+    --skip-update-check
+})"
+printf '%s\n' "$drive_doctor_output" | grep -Fqx 'doctor_status=ok' || fail "doctor rejected drive-form path arguments"
 
 rm -f "$shim_log"
 inherited_msys_runner_output="$({
