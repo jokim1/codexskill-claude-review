@@ -162,7 +162,10 @@ claude_runtime_resolve_trusted_python "$ROOT" "$PWD" "$runtime_cwd" || fail "tru
 [ "$CLAUDE_RUNTIME_PYTHON_STATUS" = "safe" ] || fail "trusted Windows Python status"
 process_driver="$runtime_cwd/process-driver.py"
 claude_runtime_write_python_driver "$process_driver"
-COMPlus_StartupHooks=untrusted-runtime-hook "$python_bin" - "$process_driver" <<'PY'
+COMPlus_StartupHooks=untrusted-runtime-hook \
+CLAUDE_RUNTIME_CANCELLATION_REQUEST_FILE=untrusted-cancel-request \
+CLAUDE_RUNTIME_CANCELLATION_ACTIVE_FILE=untrusted-driver-active \
+  "$python_bin" - "$process_driver" <<'PY'
 import importlib.util
 import os
 import sys
@@ -189,6 +192,19 @@ leaked_openssl = [
 ]
 if leaked_openssl:
     raise SystemExit(f"Windows OpenSSL startup variables leaked to child: {leaked_openssl!r}")
+leaked_cancellation_control = [
+    name
+    for name in (
+        "CLAUDE_RUNTIME_CANCELLATION_REQUEST_FILE",
+        "CLAUDE_RUNTIME_CANCELLATION_ACTIVE_FILE",
+    )
+    if name in child_env
+]
+if leaked_cancellation_control:
+    raise SystemExit(
+        "Windows wrapper cancellation controls leaked to child: "
+        f"{leaked_cancellation_control!r}"
+    )
 expected = "windows-unicode-☃-東京\n"
 proc, out, err, timed_out = driver._run_process(
     10,

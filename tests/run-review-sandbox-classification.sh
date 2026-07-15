@@ -795,11 +795,26 @@ EOF
 
   (
     cd "$REPO_ROOT"
-    PATH="$fake_root/bin:$PATH" \
+    exec /usr/bin/env \
+      PATH="$fake_root/bin:$PATH" \
       FAKE_CLAUDE_DRIVER_PID_FILE="$tmpdir/driver.pid" \
       FAKE_CLAUDE_CHILD_PID_FILE="$tmpdir/child.pid" \
       REVIEW_TIMEOUT_SECONDS=30 \
-      bash --noprofile --norc -p scripts/run-review.sh \
+      BASH_ENV= \
+      ENV= \
+      LD_PRELOAD= \
+      LD_AUDIT= \
+      LD_LIBRARY_PATH= \
+      GCONV_PATH= \
+      DYLD_INSERT_LIBRARIES= \
+      DYLD_LIBRARY_PATH= \
+      DYLD_FRAMEWORK_PATH= \
+      DYLD_FALLBACK_LIBRARY_PATH= \
+      DYLD_FALLBACK_FRAMEWORK_PATH= \
+      DYLD_FORCE_FLAT_NAMESPACE= \
+      DYLD_IMAGE_SUFFIX= \
+      DYLD_ROOT_PATH= \
+      /bin/bash --noprofile --norc -p scripts/run-review.sh \
         --mode code \
         --artifact-file "$tmpdir/claude-review-artifact.txt" \
         --base-prompt prompts/code-review.base.md \
@@ -823,7 +838,7 @@ EOF
 
   driver_pid="$(cat "$tmpdir/driver.pid")"
   child_pid="$(cat "$tmpdir/child.pid")"
-  kill -TERM "$driver_pid"
+  kill -TERM "$runner_pid"
   set +e
   wait "$runner_pid"
   runner_status=$?
@@ -838,6 +853,11 @@ EOF
     rm -rf "$fake_root" "$tmpdir"
     fail "run-review converted cancellation into blocked recovery UX"
   fi
+  if kill -0 "$driver_pid" 2>/dev/null; then
+    kill -KILL "$driver_pid" 2>/dev/null || true
+    rm -rf "$fake_root" "$tmpdir"
+    fail "top-level review cancellation left runtime driver $driver_pid running"
+  fi
   for ((attempt = 0; attempt < 50; attempt++)); do
     kill -0 "$child_pid" 2>/dev/null || break
     sleep 0.1
@@ -849,7 +869,7 @@ EOF
   fi
 
   rm -rf "$fake_root" "$tmpdir"
-  printf 'ok: review cancellation propagates without recovery UX\n'
+  printf 'ok: top-level review cancellation cleans the process tree without recovery UX\n'
 }
 
 run_safe_mode_args_case() {

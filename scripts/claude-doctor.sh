@@ -594,7 +594,10 @@ fi
 
 if ! load_required_claude_helper \
   "$RUNTIME_HELPER" \
-  "# claude-review-helper-complete: runtime_v13" \
+  "# claude-review-helper-complete: runtime_v14" \
+  claude_runtime_forward_wrapper_cancellation \
+  claude_runtime_handle_wrapper_cancellation \
+  claude_runtime_pending_cancellation_status \
   claude_runtime_check_launcher_dependency \
   claude_runtime_read_bounded_shebang_line \
   claude_runtime_build_command \
@@ -610,6 +613,7 @@ if ! load_required_claude_helper \
   claude_runtime_run_with_timeout \
   claude_runtime_windows_executable_path \
   claude_runtime_scrub_environment \
+  claude_runtime_status_is_cancellation \
   claude_runtime_write_python_driver; then
   print_kv "doctor_status" "bridge_installation_incomplete"
   print_kv "bridge_component" "claude-runtime.sh"
@@ -624,7 +628,7 @@ if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v6" ]; then
   exit 0
 fi
 
-if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v13" ]; then
+if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v14" ]; then
   print_kv "doctor_status" "bridge_installation_incomplete"
   print_kv "bridge_component" "claude-runtime.sh"
   print_kv "bridge_guidance" "Reinstall or update the complete claude-review skill, then retry."
@@ -633,6 +637,15 @@ fi
 
 CLAUDE_RUNTIME_CWD="$(mktemp -d /tmp/claude-review-runtime-XXXXXX)"
 chmod 700 "$CLAUDE_RUNTIME_CWD"
+CLAUDE_RUNTIME_CANCELLATION_REQUEST_FILE="$CLAUDE_RUNTIME_CWD/cancel.request"
+CLAUDE_RUNTIME_CANCELLATION_ACTIVE_FILE="$CLAUDE_RUNTIME_CWD/driver.active"
+CLAUDE_RUNTIME_ACTIVE_TRANSPORT_PID=""
+CLAUDE_RUNTIME_TRANSPORT_STARTING="false"
+export CLAUDE_RUNTIME_CANCELLATION_REQUEST_FILE
+export CLAUDE_RUNTIME_CANCELLATION_ACTIVE_FILE
+trap 'claude_runtime_handle_wrapper_cancellation 129' HUP
+trap 'claude_runtime_handle_wrapper_cancellation 130' INT
+trap 'claude_runtime_handle_wrapper_cancellation 143' TERM
 trap 'rm -rf "$CLAUDE_RUNTIME_CWD"' EXIT
 CLAUDE_PROCESS_DRIVER="$CLAUDE_RUNTIME_CWD/process-driver.py"
 if claude_runtime_resolve_trusted_python "$REPO_ROOT" "$INVOCATION_CWD" "$CLAUDE_RUNTIME_CWD"; then
@@ -673,21 +686,11 @@ redacted_env_presence() {
   fi
 }
 
-runtime_status_is_cancellation() {
-  case "${1:-}" in
-    129|130|143)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
 inherited_home_status() {
   local inherited_home="${HOME:-}"
   local passwd_status=""
   local passwd_status_code=0
+  local passwd_output_file="$CLAUDE_RUNTIME_CWD/passwd-home.out"
 
   case "$inherited_home" in
     /*)
@@ -702,14 +705,13 @@ inherited_home_status() {
     return 0
   fi
   set +e
-  passwd_status="$(
-    claude_runtime_run_with_timeout \
-      "$CLAUDE_RUNTIME_PYTHON_BIN" \
-      "$CLAUDE_PROCESS_DRIVER" \
-      "$CLAUDE_RUNTIME_CWD" \
-      "$PROBE_TIMEOUT_SECONDS" \
-      - \
-      "$CLAUDE_RUNTIME_PYTHON_BIN" -I -S -c '
+  claude_runtime_run_with_timeout \
+    "$CLAUDE_RUNTIME_PYTHON_BIN" \
+    "$CLAUDE_PROCESS_DRIVER" \
+    "$CLAUDE_RUNTIME_CWD" \
+    "$PROBE_TIMEOUT_SECONDS" \
+    - \
+    "$CLAUDE_RUNTIME_PYTHON_BIN" -I -S -c '
 import os
 import sys
 
@@ -720,14 +722,14 @@ except Exception:
     print("passwd_unavailable")
 else:
     print("matches_passwd" if passwd_home == sys.argv[1] else "differs_passwd")
-' "$inherited_home" 2>/dev/null
-  )"
+' "$inherited_home" > "$passwd_output_file" 2>/dev/null
   passwd_status_code=$?
   set -e
-  if runtime_status_is_cancellation "$passwd_status_code"; then
+  if claude_runtime_status_is_cancellation "$passwd_status_code"; then
     exit "$passwd_status_code"
   fi
   if [ "$passwd_status_code" -eq 0 ]; then
+    passwd_status="$(cat "$passwd_output_file")"
     case "$passwd_status" in
       matches_passwd|differs_passwd|passwd_unavailable)
         printf '%s' "$passwd_status"
@@ -800,7 +802,7 @@ run_probe() {
     "${CLAUDE_RUNTIME_COMMAND[@]}"
   probe_status=$?
   set -e
-  if runtime_status_is_cancellation "$probe_status"; then
+  if claude_runtime_status_is_cancellation "$probe_status"; then
     exit "$probe_status"
   fi
   if [ "$probe_status" -ne 0 ]; then
@@ -934,7 +936,9 @@ if claude_locator_native_supported "${OSTYPE:-}"; then
       ;;
   esac
 fi
-home_status="$(inherited_home_status)"
+home_status_file="$CLAUDE_RUNTIME_CWD/inherited-home-status.out"
+inherited_home_status > "$home_status_file"
+home_status="$(cat "$home_status_file")"
 print_kv "checked_native_path" "$checked_native_path"
 print_kv "inherited_home_status" "$home_status"
 if [ "$home_status" = "differs_passwd" ]; then
@@ -1096,20 +1100,22 @@ if [ "$candidate_safe" != "true" ]; then
 fi
 
 version_status=0
+version_output_file="$CLAUDE_RUNTIME_CWD/claude-version.out"
 set +e
-version_output="$(run_doctor_claude_with_timeout "$PROBE_TIMEOUT_SECONDS" "$claude_bin" --version 2>/dev/null)"
+run_doctor_claude_with_timeout "$PROBE_TIMEOUT_SECONDS" "$claude_bin" --version > "$version_output_file" 2>/dev/null
 version_status=$?
-if runtime_status_is_cancellation "$version_status"; then
+if claude_runtime_status_is_cancellation "$version_status"; then
   exit "$version_status"
 fi
 if [ "$version_status" -ne 0 ] && [ "$version_status" -ne 124 ]; then
-  version_output="$(run_doctor_claude_with_timeout "$PROBE_TIMEOUT_SECONDS" "$claude_bin" -v 2>/dev/null)"
+  run_doctor_claude_with_timeout "$PROBE_TIMEOUT_SECONDS" "$claude_bin" -v > "$version_output_file" 2>/dev/null
   version_status=$?
-  if runtime_status_is_cancellation "$version_status"; then
+  if claude_runtime_status_is_cancellation "$version_status"; then
     exit "$version_status"
   fi
 fi
 set -e
+version_output="$(cat "$version_output_file")"
 version_output="$(printf '%s' "$version_output" | sed -n '1p' | cut -c 1-160)"
 if [ "$version_status" -eq 124 ]; then
   print_kv "claude_version" "unknown"
@@ -1125,33 +1131,37 @@ else
 fi
 
 auth_status_code=0
+auth_status_file="$CLAUDE_RUNTIME_CWD/claude-auth-status.out"
 set +e
-auth_status="$(run_doctor_claude_with_timeout "$PROBE_TIMEOUT_SECONDS" "$claude_bin" auth status 2>/dev/null)"
+run_doctor_claude_with_timeout "$PROBE_TIMEOUT_SECONDS" "$claude_bin" auth status > "$auth_status_file" 2>/dev/null
 auth_status_code=$?
 set -e
-if runtime_status_is_cancellation "$auth_status_code"; then
+if claude_runtime_status_is_cancellation "$auth_status_code"; then
   exit "$auth_status_code"
 fi
 if [ "$auth_status_code" -eq 124 ]; then
   print_kv "claude_auth_status" "timeout"
   print_kv "claude_auth_guidance" "The auth status check timed out; inspect credential/keychain access and network reachability or increase --probe-timeout."
-elif [ -n "$auth_status" ]; then
-  if [ -n "${CLAUDE_RUNTIME_PYTHON_BIN:-}" ]; then
-    auth_logged_in=""
-    auth_provider=""
-    if auth_logged_in="$(parse_auth_status_field "$auth_status" "loggedIn" 2>/dev/null)" && \
-      auth_provider="$(parse_auth_status_field "$auth_status" "apiProvider" 2>/dev/null)"; then
-      print_kv "claude_auth_logged_in" "$auth_logged_in"
-      print_kv "claude_auth_provider" "$auth_provider"
+else
+  auth_status="$(cat "$auth_status_file")"
+  if [ -n "$auth_status" ]; then
+    if [ -n "${CLAUDE_RUNTIME_PYTHON_BIN:-}" ]; then
+      auth_logged_in=""
+      auth_provider=""
+      if auth_logged_in="$(parse_auth_status_field "$auth_status" "loggedIn" 2>/dev/null)" && \
+        auth_provider="$(parse_auth_status_field "$auth_status" "apiProvider" 2>/dev/null)"; then
+        print_kv "claude_auth_logged_in" "$auth_logged_in"
+        print_kv "claude_auth_provider" "$auth_provider"
+      else
+        print_kv "claude_auth_status" "present_unparsed"
+      fi
     else
       print_kv "claude_auth_status" "present_unparsed"
     fi
   else
-    print_kv "claude_auth_status" "present_unparsed"
+    print_kv "claude_auth_status" "empty"
+    print_kv "claude_auth_guidance" "The bridge tests subscription auth with API credentials intentionally scrubbed; an API-key-only ordinary CLI may still work."
   fi
-else
-  print_kv "claude_auth_status" "empty"
-  print_kv "claude_auth_guidance" "The bridge tests subscription auth with API credentials intentionally scrubbed; an API-key-only ordinary CLI may still work."
 fi
 
 if [ "$SKIP_PROBES" = "true" ]; then

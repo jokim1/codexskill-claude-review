@@ -3,7 +3,7 @@
 # Shared direct Claude command transport. This file must remain source-pure:
 # definitions and readonly contract constants only.
 
-readonly CLAUDE_RUNTIME_CONTRACT="direct_inherited_path_v13"
+readonly CLAUDE_RUNTIME_CONTRACT="direct_inherited_path_v14"
 readonly CLAUDE_RUNTIME_SCRUBBED_ENV_NAMES="ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH DYLD_FORCE_FLAT_NAMESPACE DYLD_IMAGE_SUFFIX DYLD_ROOT_PATH GCONV_PATH NODE_OPTIONS NODE_PATH OPENSSL_CONF OPENSSL_CONF_INCLUDE OPENSSL_ENGINES OPENSSL_MODULES PYTHONHOME PYTHONPATH PYTHONSTARTUP PYTHONINSPECT PYTHONBREAKPOINT PYTHONWARNINGS PYTHONUSERBASE RUBYOPT RUBYLIB RUBYGEMS_GEMDEPS GEM_HOME GEM_PATH BUNDLE_GEMFILE PERL5OPT PERL5LIB PERLLIB PERL_LOCAL_LIB_ROOT ZDOTDIR FPATH LUA_INIT LUA_PATH LUA_CPATH JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS CLASSPATH DOTNET_STARTUP_HOOKS CORECLR_ENABLE_PROFILING CORECLR_PROFILER CORECLR_PROFILER_PATH COR_ENABLE_PROFILING COR_PROFILER PHPRC PHP_INI_SCAN_DIR AWKPATH AWKLIBPATH TCLLIBPATH"
 
 claude_runtime_scrub_environment() {
@@ -12,6 +12,79 @@ claude_runtime_scrub_environment() {
   for scrubbed_name in $CLAUDE_RUNTIME_SCRUBBED_ENV_NAMES; do
     unset "$scrubbed_name"
   done
+}
+
+claude_runtime_status_is_cancellation() {
+  case "${1:-}" in
+    129|130|143)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+claude_runtime_cancellation_signal_name() {
+  case "${1:-}" in
+    129) printf 'HUP' ;;
+    130) printf 'INT' ;;
+    143) printf 'TERM' ;;
+    *) return 1 ;;
+  esac
+}
+
+claude_runtime_pending_cancellation_status() {
+  local request_file="${CLAUDE_RUNTIME_CANCELLATION_REQUEST_FILE:-}"
+  local status=""
+
+  [ -n "$request_file" ] && [ -r "$request_file" ] || return 1
+  IFS= read -r status < "$request_file" || return 1
+  claude_runtime_status_is_cancellation "$status" || return 1
+  printf '%s' "$status"
+}
+
+claude_runtime_forward_wrapper_cancellation() {
+  local status="$1"
+  local request_file="${CLAUDE_RUNTIME_CANCELLATION_REQUEST_FILE:-}"
+  local active_file="${CLAUDE_RUNTIME_CANCELLATION_ACTIVE_FILE:-}"
+  local signal_name=""
+  local active_value=""
+  local transport_pid="${CLAUDE_RUNTIME_ACTIVE_TRANSPORT_PID:-}"
+
+  signal_name="$(claude_runtime_cancellation_signal_name "$status")" || return 0
+  [ -n "$request_file" ] && [ -n "$active_file" ] || return 0
+  umask 077
+  printf '%s\n' "$status" > "$request_file" 2>/dev/null || return 0
+  if [ -r "$active_file" ]; then
+    IFS= read -r active_value < "$active_file" || true
+    case "$active_value" in
+      ''|*[!0-9]*) ;;
+      *) kill "-$signal_name" "$active_value" 2>/dev/null || true ;;
+    esac
+  fi
+  case "$transport_pid" in
+    ''|*[!0-9]*) ;;
+    *) wait "$transport_pid" 2>/dev/null || true ;;
+  esac
+  return 0
+}
+
+claude_runtime_handle_wrapper_cancellation() {
+  local status="$1"
+  local transport_pid="${CLAUDE_RUNTIME_ACTIVE_TRANSPORT_PID:-}"
+
+  if [ "${CLAUDE_RUNTIME_TRANSPORT_STARTING:-false}" = "true" ]; then
+    case "$transport_pid" in
+      ''|*[!0-9]*)
+        claude_runtime_forward_wrapper_cancellation "$status" || true
+        return 0
+        ;;
+    esac
+  fi
+  trap - HUP INT TERM
+  claude_runtime_forward_wrapper_cancellation "$status" || true
+  exit "$status"
 }
 
 claude_runtime_invoke_trusted_python() {
@@ -393,6 +466,8 @@ def _child_environment(msys_present, msys_value):
         "BASH_ENV",
         "BUNDLE_GEMFILE",
         "CLASSPATH",
+        "CLAUDE_RUNTIME_CANCELLATION_ACTIVE_FILE",
+        "CLAUDE_RUNTIME_CANCELLATION_REQUEST_FILE",
         "CORECLR_ENABLE_PROFILING",
         "CORECLR_PROFILER",
         "CORECLR_PROFILER_PATH",
@@ -689,6 +764,13 @@ claude_runtime_invoke_python_driver() {
   local driver_transport=""
   local input_transport="$input_path"
   local inherited_path=""
+  local cancellation_control="false"
+  local cancellation_status=""
+  local cancellation_signal=""
+  local driver_pid=""
+  local driver_status=0
+  local transport_pid=""
+  local transport_status=0
   shift 7
 
   if [ "${CLAUDE_RUNTIME_INHERITED_PATH+x}" = "x" ]; then
@@ -706,13 +788,30 @@ claude_runtime_invoke_python_driver() {
       input_transport="$(claude_runtime_python_transport_path "$input_path")" || return 126
       ;;
   esac
+  if [ -n "${CLAUDE_RUNTIME_CANCELLATION_REQUEST_FILE:-}" ] && \
+    [ -n "${CLAUDE_RUNTIME_CANCELLATION_ACTIVE_FILE:-}" ]; then
+    cancellation_control="true"
+  fi
 
+  CLAUDE_RUNTIME_TRANSPORT_STARTING="true"
   (
     claude_runtime_scrub_environment
     PATH="$inherited_path"
     export PATH
     unset CLAUDE_RUNTIME_INHERITED_PATH
     cd -P -- "$runtime_cwd" || exit 1
+    if [ "$cancellation_control" = "true" ]; then
+      cancellation_status=""
+      if cancellation_status="$(claude_runtime_pending_cancellation_status)"; then
+        exit "$cancellation_status"
+      fi
+      printf '%s\n' 'starting' > "$CLAUDE_RUNTIME_CANCELLATION_ACTIVE_FILE" || exit 125
+      if cancellation_status="$(claude_runtime_pending_cancellation_status)"; then
+        rm -f "$CLAUDE_RUNTIME_CANCELLATION_ACTIVE_FILE"
+        exit "$cancellation_status"
+      fi
+    fi
+    set +e
     MSYS2_ARG_CONV_EXCL='*' "$python_bin" -I -S "$driver_transport" \
       "$mode" \
       "$label" \
@@ -720,8 +819,40 @@ claude_runtime_invoke_python_driver() {
       "$msys_arg_conv_present" \
       "$msys_arg_conv_value" \
       "$input_transport" \
-      "${CLAUDE_RUNTIME_PYTHON_ARGV[@]}"
-  )
+      "${CLAUDE_RUNTIME_PYTHON_ARGV[@]}" &
+    driver_pid=$!
+    if [ "$cancellation_control" = "true" ]; then
+      printf '%s\n' "$driver_pid" > "$CLAUDE_RUNTIME_CANCELLATION_ACTIVE_FILE"
+      cancellation_status=""
+      if cancellation_status="$(claude_runtime_pending_cancellation_status)"; then
+        cancellation_signal="$(claude_runtime_cancellation_signal_name "$cancellation_status")" || cancellation_signal=""
+        if [ -n "$cancellation_signal" ]; then
+          kill "-$cancellation_signal" "$driver_pid" 2>/dev/null || true
+        fi
+      fi
+    fi
+    wait "$driver_pid"
+    driver_status=$?
+    if [ "$cancellation_control" = "true" ]; then
+      cancellation_status=""
+      if cancellation_status="$(claude_runtime_pending_cancellation_status)"; then
+        rm -f "$CLAUDE_RUNTIME_CANCELLATION_ACTIVE_FILE"
+        exit "$cancellation_status"
+      fi
+      rm -f "$CLAUDE_RUNTIME_CANCELLATION_ACTIVE_FILE"
+    fi
+    exit "$driver_status"
+  ) &
+  transport_pid=$!
+  CLAUDE_RUNTIME_ACTIVE_TRANSPORT_PID="$transport_pid"
+  CLAUDE_RUNTIME_TRANSPORT_STARTING="false"
+  if wait "$transport_pid"; then
+    transport_status=0
+  else
+    transport_status=$?
+  fi
+  CLAUDE_RUNTIME_ACTIVE_TRANSPORT_PID=""
+  return "$transport_status"
 }
 
 claude_runtime_run_with_timeout() {
@@ -1138,4 +1269,4 @@ claude_runtime_check_launcher_dependency() {
   return 0
 }
 
-# claude-review-helper-complete: runtime_v13
+# claude-review-helper-complete: runtime_v14

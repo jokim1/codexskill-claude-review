@@ -62,6 +62,9 @@ if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-v" ]; then
     if [ -n "${FAKE_CLAUDE_PARENT_PID_FILE:-}" ]; then
       printf '%s\n' "$PPID" > "$FAKE_CLAUDE_PARENT_PID_FILE"
     fi
+    if [ -n "${FAKE_CLAUDE_CHILD_PID_FILE:-}" ]; then
+      printf '%s\n' "$$" > "$FAKE_CLAUDE_CHILD_PID_FILE"
+    fi
     while :; do :; done
   fi
   printf '2.test.0 (Claude Code fake)\n'
@@ -104,6 +107,7 @@ run_doctor() {
     FAKE_CLAUDE_LOG="$fake_log" \
     FAKE_CLAUDE_AUTH_JSON="${FAKE_CLAUDE_AUTH_JSON:-}" \
     FAKE_CLAUDE_PARENT_PID_FILE="${FAKE_CLAUDE_PARENT_PID_FILE:-}" \
+    FAKE_CLAUDE_CHILD_PID_FILE="${FAKE_CLAUDE_CHILD_PID_FILE:-}" \
     PRESERVED_SENTINEL="preserved-value" \
     ANTHROPIC_API_KEY="api-secret" \
     ANTHROPIC_AUTH_TOKEN="auth-secret" \
@@ -259,7 +263,7 @@ assert_line "$basic_output" "claude_bin=$path_bin/claude" "absolute launch path"
 assert_line "$basic_output" "claude_target=$path_bin/claude" "canonical target"
 assert_line "$basic_output" "claude_trust_scope=none" "safe trust scope"
 assert_line "$basic_output" "claude_trust_reason=none" "safe trust reason"
-assert_line "$basic_output" "claude_runtime_contract=direct_inherited_path_v13" "runtime contract"
+assert_line "$basic_output" "claude_runtime_contract=direct_inherited_path_v14" "runtime contract"
 assert_line "$basic_output" "claude_version=2.test.0 (Claude Code fake)" "version"
 assert_line "$basic_output" "claude_auth_logged_in=True" "auth state"
 assert_line "$basic_output" "claude_auth_provider=firstParty" "auth provider"
@@ -493,29 +497,51 @@ pass "doctor bounds version and auth-status preflight calls"
 doctor_cancel_output="$TEST_ROOT/doctor-cancel.out"
 doctor_cancel_error="$TEST_ROOT/doctor-cancel.err"
 doctor_cancel_driver_pid_file="$TEST_ROOT/doctor-cancel-driver.pid"
+doctor_cancel_child_pid_file="$TEST_ROOT/doctor-cancel-child.pid"
 doctor_cancel_log="$TEST_ROOT/doctor-cancel.log"
-FAKE_CLAUDE_HANG_STAGE="version" \
-FAKE_CLAUDE_PARENT_PID_FILE="$doctor_cancel_driver_pid_file" \
-  run_doctor \
-    "$REPO_ROOT" \
-    "$REPO_ROOT" \
-    "$REPO_ROOT" \
-    "$HOME" \
-    "$path_value" \
-    "$doctor_cancel_log" \
-    --probe-timeout 5 \
-    --skip-probes >"$doctor_cancel_output" 2>"$doctor_cancel_error" &
+(
+  cd "$REPO_ROOT"
+  exec /usr/bin/env \
+    HOME="$HOME" \
+    PATH="$path_value" \
+    FAKE_CLAUDE_LOG="$doctor_cancel_log" \
+    FAKE_CLAUDE_HANG_STAGE="version" \
+    FAKE_CLAUDE_PARENT_PID_FILE="$doctor_cancel_driver_pid_file" \
+    FAKE_CLAUDE_CHILD_PID_FILE="$doctor_cancel_child_pid_file" \
+    BASH_ENV= \
+    ENV= \
+    LD_PRELOAD= \
+    LD_AUDIT= \
+    LD_LIBRARY_PATH= \
+    GCONV_PATH= \
+    DYLD_INSERT_LIBRARIES= \
+    DYLD_LIBRARY_PATH= \
+    DYLD_FRAMEWORK_PATH= \
+    DYLD_FALLBACK_LIBRARY_PATH= \
+    DYLD_FALLBACK_FRAMEWORK_PATH= \
+    DYLD_FORCE_FLAT_NAMESPACE= \
+    DYLD_IMAGE_SUFFIX= \
+    DYLD_ROOT_PATH= \
+    /bin/bash --noprofile --norc -p "$REPO_ROOT/scripts/claude-doctor.sh" \
+      --repo-root "$REPO_ROOT" \
+      --skill-root "$REPO_ROOT" \
+      --config-file "$REPO_ROOT/.codex/claude/config.env" \
+      --probe-timeout 5 \
+      --skip-probes
+) >"$doctor_cancel_output" 2>"$doctor_cancel_error" &
 doctor_cancel_pid=$!
 for ((attempt = 0; attempt < 100; attempt++)); do
-  [ -s "$doctor_cancel_driver_pid_file" ] && break
+  [ -s "$doctor_cancel_driver_pid_file" ] && [ -s "$doctor_cancel_child_pid_file" ] && break
   sleep 0.05
 done
-if [ ! -s "$doctor_cancel_driver_pid_file" ]; then
+if [ ! -s "$doctor_cancel_driver_pid_file" ] || [ ! -s "$doctor_cancel_child_pid_file" ]; then
   kill -TERM "$doctor_cancel_pid" 2>/dev/null || true
   wait "$doctor_cancel_pid" 2>/dev/null || true
-  fail "doctor cancellation driver PID was not recorded"
+  fail "doctor cancellation process IDs were not recorded"
 fi
-kill -TERM "$(cat "$doctor_cancel_driver_pid_file")"
+doctor_cancel_driver_pid="$(cat "$doctor_cancel_driver_pid_file")"
+doctor_cancel_child_pid="$(cat "$doctor_cancel_child_pid_file")"
+kill -TERM "$doctor_cancel_pid"
 set +e
 wait "$doctor_cancel_pid"
 doctor_cancel_status=$?
@@ -526,7 +552,11 @@ set -e
   fail "doctor launched additional Claude commands after cancellation"
 grep -q '^call=--version$' "$doctor_cancel_log" || \
   fail "doctor cancellation did not occur during the version command"
-pass "doctor propagates cancellation without fallback or later probes"
+kill -0 "$doctor_cancel_driver_pid" 2>/dev/null && \
+  fail "doctor top-level cancellation left runtime driver $doctor_cancel_driver_pid running"
+kill -0 "$doctor_cancel_child_pid" 2>/dev/null && \
+  fail "doctor top-level cancellation left Claude child $doctor_cancel_child_pid running"
+pass "doctor top-level cancellation cleans the process tree without later probes"
 
 # Native discovery and inherited HOME diagnostics.
 native_home="$TEST_ROOT/remapped-home"
@@ -844,7 +874,7 @@ from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
-marker = "# claude-review-helper-complete: runtime_v13"
+marker = "# claude-review-helper-complete: runtime_v14"
 replacement = "claude_runtime_is_native_executable() { return 2; }\n\n" + marker
 path.write_text(path.read_text().replace(marker, replacement))
 PY
@@ -956,7 +986,7 @@ run_bootstrap_case() {
     missing_symbol_config) sed 's/^claude_config_load_file()/claude_config_load_file_missing()/' "$REPO_ROOT/scripts/claude-config.sh" > "$skill/scripts/claude-config.sh" ;;
     missing_symbol_locator) sed 's/^claude_locator_validate_candidate()/claude_locator_validate_candidate_missing()/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
     stale_locator) sed -e 's/bounded_path_native_homebrew_v6/bounded_path_native_homebrew_v5/' -e 's/locator_v6/locator_v5/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
-    stale_runtime) sed -e 's/direct_inherited_path_v13/direct_inherited_path_v12/' -e 's/runtime_v13/runtime_v12/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
+    stale_runtime) sed -e 's/direct_inherited_path_v14/direct_inherited_path_v13/' -e 's/runtime_v14/runtime_v13/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
   esac
   output="$(run_doctor "$skill" "$REPO_ROOT" "$REPO_ROOT" "$HOME" "$path_value" "$candidate_log" --skip-probes 2>&1)"
   assert_line "$output" "doctor_status=bridge_installation_incomplete" "$case_name status"

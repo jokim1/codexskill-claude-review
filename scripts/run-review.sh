@@ -687,7 +687,10 @@ fi
 
 if ! load_required_claude_helper \
   "$CLAUDE_RUNTIME_HELPER" \
-  "# claude-review-helper-complete: runtime_v13" \
+  "# claude-review-helper-complete: runtime_v14" \
+  claude_runtime_forward_wrapper_cancellation \
+  claude_runtime_handle_wrapper_cancellation \
+  claude_runtime_pending_cancellation_status \
   claude_runtime_check_launcher_dependency \
   claude_runtime_read_bounded_shebang_line \
   claude_runtime_build_command \
@@ -703,6 +706,7 @@ if ! load_required_claude_helper \
   claude_runtime_run_with_timeout \
   claude_runtime_windows_executable_path \
   claude_runtime_scrub_environment \
+  claude_runtime_status_is_cancellation \
   claude_runtime_write_python_driver; then
   emit_bridge_installation_incomplete "claude-runtime.sh"
   exit 0
@@ -713,13 +717,22 @@ if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v6" ]; then
   exit 0
 fi
 
-if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v13" ]; then
+if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v14" ]; then
   emit_bridge_installation_incomplete "claude-runtime.sh"
   exit 0
 fi
 
 CLAUDE_RUNTIME_CWD="$(mktemp -d /tmp/claude-review-runtime-XXXXXX)"
 chmod 700 "$CLAUDE_RUNTIME_CWD"
+CLAUDE_RUNTIME_CANCELLATION_REQUEST_FILE="$CLAUDE_RUNTIME_CWD/cancel.request"
+CLAUDE_RUNTIME_CANCELLATION_ACTIVE_FILE="$CLAUDE_RUNTIME_CWD/driver.active"
+CLAUDE_RUNTIME_ACTIVE_TRANSPORT_PID=""
+CLAUDE_RUNTIME_TRANSPORT_STARTING="false"
+export CLAUDE_RUNTIME_CANCELLATION_REQUEST_FILE
+export CLAUDE_RUNTIME_CANCELLATION_ACTIVE_FILE
+trap 'claude_runtime_handle_wrapper_cancellation 129' HUP
+trap 'claude_runtime_handle_wrapper_cancellation 130' INT
+trap 'claude_runtime_handle_wrapper_cancellation 143' TERM
 trap 'rm -rf "$CLAUDE_RUNTIME_CWD"' EXIT
 CLAUDE_PROCESS_DRIVER="$CLAUDE_RUNTIME_CWD/process-driver.py"
 if claude_runtime_resolve_trusted_python "$REPO_ROOT" "$CLAUDE_INVOCATION_CWD" "$CLAUDE_RUNTIME_CWD"; then
@@ -957,17 +970,6 @@ append_doctor_offer() {
   local existing_guidance="$1"
 
   printf '%s\n\nRun /claude-review doctor now?\nReply Y to run diagnostics, or N to stop.' "$existing_guidance"
-}
-
-runtime_status_is_cancellation() {
-  case "${1:-}" in
-    129|130|143)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
 }
 
 build_claude_cmd() {
@@ -1348,7 +1350,9 @@ probe_runner_usability() {
   local claude_bin="$1"
   local description="$2"
   local auth_status=""
+  local auth_status_file="$CLAUDE_RUNTIME_CWD/auth-status.out"
   local probe_output=""
+  local probe_output_file="$CLAUDE_RUNTIME_CWD/preflight-output.out"
   local probe_status=0
   local version_status=0
   local auth_status_code=0
@@ -1425,7 +1429,7 @@ probe_runner_usability() {
   run_candidate_claude_with_timeout "$probe_timeout_seconds" "$claude_bin" -v >/dev/null 2>&1
   version_status=$?
   set -e
-  if runtime_status_is_cancellation "$version_status"; then
+  if claude_runtime_status_is_cancellation "$version_status"; then
     exit "$version_status"
   fi
   if [ "$version_status" -eq 124 ]; then
@@ -1444,10 +1448,10 @@ probe_runner_usability() {
   fi
 
   set +e
-  auth_status="$(run_candidate_claude_with_timeout "$probe_timeout_seconds" "$claude_bin" auth status 2>/dev/null)"
+  run_candidate_claude_with_timeout "$probe_timeout_seconds" "$claude_bin" auth status > "$auth_status_file" 2>/dev/null
   auth_status_code=$?
   set -e
-  if runtime_status_is_cancellation "$auth_status_code"; then
+  if claude_runtime_status_is_cancellation "$auth_status_code"; then
     exit "$auth_status_code"
   fi
   if [ "$auth_status_code" -eq 124 ]; then
@@ -1457,6 +1461,7 @@ probe_runner_usability() {
       "The review was not started. Check Claude credential/keychain access and network reachability, or retry after increasing LIVE_PROBE_TIMEOUT_SECONDS."
     return 1
   fi
+  auth_status="$(cat "$auth_status_file")"
   if non_first_party_state "$auth_status"; then
     record_failure \
       "subscription_auth_unavailable" \
@@ -1496,13 +1501,14 @@ probe_runner_usability() {
   fi
 
   set +e
-  probe_output="$(run_candidate_claude_with_timeout_input "$probe_timeout_seconds" "$probe_prompt_file" "$claude_bin" "${probe_args[@]}" 2>&1)"
+  run_candidate_claude_with_timeout_input "$probe_timeout_seconds" "$probe_prompt_file" "$claude_bin" "${probe_args[@]}" > "$probe_output_file" 2>&1
   probe_status=$?
   set -e
 
-  if runtime_status_is_cancellation "$probe_status"; then
+  if claude_runtime_status_is_cancellation "$probe_status"; then
     exit "$probe_status"
   fi
+  probe_output="$(cat "$probe_output_file")"
 
   if [ "$probe_status" -eq 0 ]; then
     if result_is_error "$probe_output"; then
@@ -1817,27 +1823,30 @@ fi
 
 REVIEW_TIMEOUT_ATTEMPTS="1"
 REVIEW_TIMEOUT_ATTEMPT_SECONDS="${REVIEW_EFFECTIVE_TIMEOUT_SECONDS}s"
+review_output_file="$CLAUDE_RUNTIME_CWD/review-output.out"
 
 set +e
-output="$(run_selected_claude_with_timeout_input "$REVIEW_EFFECTIVE_TIMEOUT_SECONDS" "$review_prompt_file" "${cmd_args[@]}" 2>&1)"
+run_selected_claude_with_timeout_input "$REVIEW_EFFECTIVE_TIMEOUT_SECONDS" "$review_prompt_file" "${cmd_args[@]}" > "$review_output_file" 2>&1
 run_status=$?
 set -e
 
-if runtime_status_is_cancellation "$run_status"; then
+if claude_runtime_status_is_cancellation "$run_status"; then
   exit "$run_status"
 fi
+output="$(cat "$review_output_file")"
 
 if [ "$run_status" -eq 124 ] && [ "$REVIEW_RETRY_TIMEOUT_SECONDS" -gt "$REVIEW_EFFECTIVE_TIMEOUT_SECONDS" ]; then
   REVIEW_TIMEOUT_ATTEMPTS="2"
   REVIEW_TIMEOUT_ATTEMPT_SECONDS="${REVIEW_EFFECTIVE_TIMEOUT_SECONDS}s, ${REVIEW_RETRY_TIMEOUT_SECONDS}s"
 
   set +e
-  output="$(run_selected_claude_with_timeout_input "$REVIEW_RETRY_TIMEOUT_SECONDS" "$review_prompt_file" "${cmd_args[@]}" 2>&1)"
+  run_selected_claude_with_timeout_input "$REVIEW_RETRY_TIMEOUT_SECONDS" "$review_prompt_file" "${cmd_args[@]}" > "$review_output_file" 2>&1
   run_status=$?
   set -e
-  if runtime_status_is_cancellation "$run_status"; then
+  if claude_runtime_status_is_cancellation "$run_status"; then
     exit "$run_status"
   fi
+  output="$(cat "$review_output_file")"
 fi
 
 if [ "$run_status" -ne 0 ]; then
