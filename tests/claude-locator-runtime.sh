@@ -622,6 +622,8 @@ chmod 755 "$mz_python_root/bin/python3"
 [ ! -e "$TEST_ROOT/mz-text-python-executed" ] || fail "MZ-prefixed text Python executed during resolution"
 pass "Python bootstrap requires a native executable header"
 
+claude_runtime_resolve_trusted_python "$ROOT" "$TEST_ROOT/work" "$TEST_ROOT/work" || \
+  fail "trusted Python direct transport resolution"
 ENV_LOG="$TEST_ROOT/env.log"
 ARGV_LOG="$TEST_ROOT/argv.log"
 CWD_LOG="$TEST_ROOT/cwd.log"
@@ -657,7 +659,15 @@ original_path="$PATH"
   NODE_EXTRA_CA_CERTS="$TEST_ROOT/runtime-ca"
   CDPATH="$TEST_ROOT/runtime-cdpath-one:$TEST_ROOT/runtime-cdpath-two"
   export HOME TMPDIR LC_ALL HTTPS_PROXY NO_PROXY NODE_EXTRA_CA_CERTS CDPATH
-  claude_runtime_run_direct "$TEST_ROOT/work" "$TEST_ROOT/trusted/bin/claude-env" "space arg" "" "equals=value"
+  claude_runtime_run_direct \
+    "$TEST_ROOT/work" \
+    "$CLAUDE_RUNTIME_PYTHON_BIN" \
+    "$python_driver" \
+    - \
+    "$TEST_ROOT/trusted/bin/claude-env" \
+    "space arg" \
+    "" \
+    "equals=value"
 )
 assert_eq "$original_path" "$(cat "$ENV_LOG.path")" "PATH preserved byte-for-byte"
 assert_eq "$TEST_ROOT/work" "$(cat "$CWD_LOG")" "isolated runtime CWD"
@@ -675,7 +685,47 @@ grep -Fq "CDPATH=$TEST_ROOT/runtime-cdpath-one:$TEST_ROOT/runtime-cdpath-two" "$
 [ "$(sed -n '1p' "$ARGV_LOG")" = "space arg" ] || fail "space argv preserved"
 [ "$(sed -n '2p' "$ARGV_LOG")" = "" ] || fail "empty argv preserved"
 [ "$(sed -n '3p' "$ARGV_LOG")" = "equals=value" ] || fail "equals argv preserved"
-pass "direct runtime preserves PATH/argv/env and scrubs only pinned variables"
+pass "direct runtime preserves PATH/argv/env and scrubs pinned variables"
+
+exported_function_launcher="$TEST_ROOT/trusted/bin/exported-function-launcher"
+exported_function_marker="$TEST_ROOT/exported-function-executed"
+cat > "$exported_function_launcher" <<'SH'
+#!/usr/bin/env bash
+if declare -F claude_runtime_exported_function_probe >/dev/null 2>&1; then
+  claude_runtime_exported_function_probe
+  exit 91
+fi
+printf safe
+SH
+chmod 755 "$exported_function_launcher"
+export EXPORTED_FUNCTION_MARKER="$exported_function_marker"
+claude_runtime_exported_function_probe() {
+  /usr/bin/printf imported > "${EXPORTED_FUNCTION_MARKER:?}"
+}
+export -f claude_runtime_exported_function_probe
+direct_function_output="$(
+  claude_runtime_run_direct \
+    "$TEST_ROOT/work" \
+    "$CLAUDE_RUNTIME_PYTHON_BIN" \
+    "$python_driver" \
+    - \
+    "$exported_function_launcher"
+)"
+timeout_function_output="$(
+  claude_runtime_run_with_timeout \
+    "$CLAUDE_RUNTIME_PYTHON_BIN" \
+    "$python_driver" \
+    "$TEST_ROOT/work" \
+    5 \
+    - \
+    "$exported_function_launcher"
+)"
+unset -f claude_runtime_exported_function_probe
+unset EXPORTED_FUNCTION_MARKER
+assert_eq "safe" "$direct_function_output" "direct exported-function filter"
+assert_eq "safe" "$timeout_function_output" "timeout exported-function filter"
+[ ! -e "$exported_function_marker" ] || fail "validated Bash launcher imported an exported function"
+pass "direct and timeout transports strip exported Bash functions"
 
 timeout_cdpath="$TEST_ROOT/timeout-cdpath-one:$TEST_ROOT/timeout-cdpath-two"
 claude_runtime_resolve_trusted_python "$ROOT" "$TEST_ROOT/work" "$TEST_ROOT/work" || fail "trusted Python CDPATH transport resolution"
@@ -912,7 +962,12 @@ SH
 chmod 755 "$TEST_ROOT/trusted/bin/startup-check"
 export BASH_ENV="$TEST_ROOT/bash-env-sentinel.sh"
 export ENV="$TEST_ROOT/env-sentinel.sh"
-claude_runtime_run_direct "$TEST_ROOT/work" "$TEST_ROOT/trusted/bin/startup-check"
+claude_runtime_run_direct \
+  "$TEST_ROOT/work" \
+  "$CLAUDE_RUNTIME_PYTHON_BIN" \
+  "$python_driver" \
+  - \
+  "$TEST_ROOT/trusted/bin/startup-check"
 [ ! -e "$TEST_ROOT/bash-env-loaded" ] || fail "candidate sourced BASH_ENV"
 [ ! -e "$TEST_ROOT/env-loaded" ] || fail "candidate sourced ENV"
 unset BASH_ENV ENV
@@ -956,7 +1011,15 @@ parity_path="$PATH"
   export BASH_ENV="$TEST_ROOT/nonexistent-bash-env" ENV="$TEST_ROOT/nonexistent-env"
   export TMPDIR="$TEST_ROOT/parity-tmp" CLAUDE_CONFIG_DIR="$TEST_ROOT/parity-config"
   export HTTPS_PROXY="https://parity-proxy" PRESERVED_SENTINEL="same"
-  claude_runtime_run_direct "$parity_new" "$parity_candidate" "space arg" "" "equals=value"
+  claude_runtime_run_direct \
+    "$parity_new" \
+    "$CLAUDE_RUNTIME_PYTHON_BIN" \
+    "$python_driver" \
+    - \
+    "$parity_candidate" \
+    "space arg" \
+    "" \
+    "equals=value"
 )
 cmp "$parity_old/result.argv" "$parity_new/result.argv" >/dev/null || fail "legacy/runtime argv parity"
 for name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN HOME PATH TMPDIR CLAUDE_CONFIG_DIR HTTPS_PROXY PRESERVED_SENTINEL; do
@@ -990,7 +1053,12 @@ chmod 755 "$TEST_ROOT/trusted/bin/descendant-claude"
 (
   PATH="$descendant_tools:$PATH"
   export PATH
-  claude_runtime_run_direct "$TEST_ROOT/work" "$TEST_ROOT/trusted/bin/descendant-claude"
+  claude_runtime_run_direct \
+    "$TEST_ROOT/work" \
+    "$CLAUDE_RUNTIME_PYTHON_BIN" \
+    "$python_driver" \
+    - \
+    "$TEST_ROOT/trusted/bin/descendant-claude"
 )
 [ -e "$TEST_ROOT/descendant-ran" ] || fail "inherited descendant helper did not run"
 rm -f "$TEST_ROOT/descendant-ran"
@@ -1003,7 +1071,12 @@ set +e
   PATH="/usr/bin:/bin"
   BASH_ENV="$TEST_ROOT/profile-only.sh"
   export PATH BASH_ENV
-  claude_runtime_run_direct "$TEST_ROOT/work" "$TEST_ROOT/trusted/bin/descendant-claude"
+  claude_runtime_run_direct \
+    "$TEST_ROOT/work" \
+    "$CLAUDE_RUNTIME_PYTHON_BIN" \
+    "$python_driver" \
+    - \
+    "$TEST_ROOT/trusted/bin/descendant-claude"
 ) >/dev/null 2>&1
 descendant_status=$?
 set -e
@@ -1023,7 +1096,12 @@ chmod 755 "$TEST_ROOT/trusted/bin/empty-path-claude"
   PATH="/usr/bin:/bin"
   CLAUDE_RUNTIME_INHERITED_PATH=""
   export PATH CLAUDE_RUNTIME_INHERITED_PATH
-  claude_runtime_run_direct "$TEST_ROOT/work" "$TEST_ROOT/trusted/bin/empty-path-claude"
+  claude_runtime_run_direct \
+    "$TEST_ROOT/work" \
+    "$CLAUDE_RUNTIME_PYTHON_BIN" \
+    "$python_driver" \
+    - \
+    "$TEST_ROOT/trusted/bin/empty-path-claude"
   [ -z "$(claude_runtime_resolve_path_dependency env "$TEST_ROOT/work")" ] || exit 1
 ) || fail "direct runtime must preserve an empty inherited PATH"
 [ ! -s "$EMPTY_PATH_LOG" ] || fail "direct runtime replaced an empty inherited PATH"
@@ -1071,5 +1149,5 @@ if before_files != after_files:
 PY
 pass "bounded helper source purity"
 
-assert_eq "direct_inherited_path_v3" "$CLAUDE_RUNTIME_CONTRACT" "runtime contract label"
+assert_eq "direct_inherited_path_v4" "$CLAUDE_RUNTIME_CONTRACT" "runtime contract label"
 pass "shared helper contracts"

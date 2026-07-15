@@ -3,7 +3,7 @@
 # Shared direct Claude command transport. This file must remain source-pure:
 # definitions and readonly contract constants only.
 
-readonly CLAUDE_RUNTIME_CONTRACT="direct_inherited_path_v3"
+readonly CLAUDE_RUNTIME_CONTRACT="direct_inherited_path_v4"
 
 claude_runtime_scrub_environment() {
   unset BASH_ENV
@@ -307,11 +307,28 @@ def _bounded_timeout_cleanup(proc, job):
 
 def _child_environment(msys_present, msys_value):
     child_env = os.environ.copy()
+    for name in tuple(child_env):
+        if name.startswith("BASH_FUNC_"):
+            child_env.pop(name, None)
     if msys_present:
         child_env["MSYS2_ARG_CONV_EXCL"] = msys_value
     else:
         child_env.pop("MSYS2_ARG_CONV_EXCL", None)
     return child_env
+
+
+def _exec_process(msys_present, msys_value, input_path, cmd):
+    input_handle = None
+    try:
+        if input_path == "@probe":
+            raise ValueError("direct execution does not accept probe input")
+        if input_path != "-":
+            input_handle = open(input_path, "rb")
+            os.dup2(input_handle.fileno(), 0)
+        os.execvpe(cmd[0], cmd, _child_environment(msys_present, msys_value))
+    finally:
+        if input_handle is not None:
+            input_handle.close()
 
 
 def _run_process(timeout, msys_present, msys_value, input_path, cmd):
@@ -405,7 +422,7 @@ def _write_utf8(stream, value):
 
 
 def main():
-    if len(sys.argv) < 8 or sys.argv[1] not in {"run", "probe"}:
+    if len(sys.argv) < 8 or sys.argv[1] not in {"exec", "run", "probe"}:
         raise SystemExit(2)
     mode = sys.argv[1]
     label = sys.argv[2]
@@ -414,6 +431,12 @@ def main():
     msys_value = sys.argv[5]
     input_path = sys.argv[6]
     cmd = sys.argv[7:]
+    if mode == "exec":
+        try:
+            _exec_process(msys_present, msys_value, input_path, cmd)
+        except (OSError, ValueError) as exc:
+            print(f"{type(exc).__name__}: {exc}", file=sys.stderr)
+            return 126
     started = time.monotonic()
     try:
         proc, out, err, timed_out = _run_process(
@@ -530,25 +553,21 @@ claude_runtime_probe_with_timeout() {
 
 claude_runtime_run_direct() {
   local runtime_cwd="$1"
-  local launch_path="$2"
-  local inherited_path=""
-  shift 2
+  local python_bin="$2"
+  local driver_path="$3"
+  local input_path="$4"
+  shift 4
 
-  if [ "${CLAUDE_RUNTIME_INHERITED_PATH+x}" = "x" ]; then
-    inherited_path="$CLAUDE_RUNTIME_INHERITED_PATH"
-  else
-    inherited_path="${PATH-}"
-  fi
-
-  claude_runtime_build_command "$launch_path" "$@"
-  (
-    claude_runtime_scrub_environment
-    PATH="$inherited_path"
-    export PATH
-    unset CLAUDE_RUNTIME_INHERITED_PATH
-    cd -P -- "$runtime_cwd" || exit 1
-    exec "${CLAUDE_RUNTIME_COMMAND[@]}"
-  )
+  [ -n "$python_bin" ] && [ -r "$driver_path" ] || return 125
+  claude_runtime_invoke_python_driver \
+    exec \
+    - \
+    "$python_bin" \
+    "$driver_path" \
+    "$runtime_cwd" \
+    0 \
+    "$input_path" \
+    "$@"
 }
 
 claude_runtime_add_dependency_path() {
@@ -840,4 +859,4 @@ claude_runtime_check_launcher_dependency() {
   return 0
 }
 
-# claude-review-helper-complete: runtime_v3
+# claude-review-helper-complete: runtime_v4

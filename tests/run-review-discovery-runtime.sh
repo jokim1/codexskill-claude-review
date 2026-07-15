@@ -68,10 +68,15 @@ PY
 
 write_success_claude() {
   local target="$1"
+  local shebang="${2:-/bin/bash}"
   mkdir -p "$(dirname "$target")"
-  cat > "$target" <<'SH'
-#!/bin/bash
+  printf '#!%s\n' "$shebang" > "$target"
+  cat >> "$target" <<'SH'
 set -euo pipefail
+
+if declare -F claude_runtime_exported_function_probe >/dev/null 2>&1; then
+  claude_runtime_exported_function_probe
+fi
 
 {
   printf 'executable=%s\n' "$0"
@@ -264,6 +269,30 @@ assert_json_status "$bootstrap_output" clean ok
 [ ! -e "$bootstrap_tool_marker" ] || fail "runner bootstrap executed a caller-PATH utility"
 [ "$(grep '^path=' "$bootstrap_log" | sort -u)" = "path=$bootstrap_hostile_bin:$SYSTEM_PATH" ] || fail "runner did not restore inherited PATH for Claude"
 pass "fixed-shell bootstrap rejects startup hooks and caller-PATH utilities"
+
+exported_function_home="$TEST_ROOT/exported-function-home"
+exported_function_log="$TEST_ROOT/exported-function.log"
+exported_function_marker="$TEST_ROOT/exported-function-executed"
+write_success_claude "$exported_function_home/.local/bin/claude" "/usr/bin/env bash"
+export EXPORTED_FUNCTION_MARKER="$exported_function_marker"
+claude_runtime_exported_function_probe() {
+  /usr/bin/printf imported > "${EXPORTED_FUNCTION_MARKER:?}"
+}
+export -f claude_runtime_exported_function_probe
+exported_function_output="$(
+  run_runner \
+    "$REPO_ROOT" \
+    "$REPO_ROOT" \
+    "$REPO_ROOT" \
+    "$exported_function_home" \
+    "$SYSTEM_PATH" \
+    "$exported_function_log"
+)"
+unset -f claude_runtime_exported_function_probe
+unset EXPORTED_FUNCTION_MARKER
+assert_json_status "$exported_function_output" clean ok
+[ ! -e "$exported_function_marker" ] || fail "runner Bash-shebang launcher imported an exported function"
+pass "runner strips exported functions before validated Bash-shebang execution"
 
 near_limit_artifact="$ARTIFACT_ROOT/claude-review-near-argv-limit.txt"
 near_limit_log="$TEST_ROOT/near-limit.log"
@@ -700,7 +729,7 @@ run_bootstrap_case() {
     missing_symbol_config) sed 's/^claude_config_load_file()/claude_config_load_file_missing()/' "$REPO_ROOT/scripts/claude-config.sh" > "$skill/scripts/claude-config.sh" ;;
     missing_symbol_locator) sed 's/^claude_locator_validate_candidate()/claude_locator_validate_candidate_missing()/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
     stale_locator) sed -e 's/bounded_path_native_homebrew_v3/bounded_path_native_homebrew_v2/' -e 's/locator_v3/locator_v2/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
-    stale_runtime) sed -e 's/direct_inherited_path_v3/direct_inherited_path_v2/' -e 's/runtime_v3/runtime_v2/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
+    stale_runtime) sed -e 's/direct_inherited_path_v4/direct_inherited_path_v3/' -e 's/runtime_v4/runtime_v3/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
   esac
   output="$(run_runner "$skill" "$REPO_ROOT" "$REPO_ROOT" "$HOME" "$path_root/bin:$SYSTEM_PATH" "$candidate_log" 2>&1)"
   assert_json_status "$output" blocked "installation is incomplete"

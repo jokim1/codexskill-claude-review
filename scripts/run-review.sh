@@ -646,7 +646,7 @@ fi
 
 if ! load_required_claude_helper \
   "$CLAUDE_RUNTIME_HELPER" \
-  "# claude-review-helper-complete: runtime_v3" \
+  "# claude-review-helper-complete: runtime_v4" \
   claude_runtime_check_launcher_dependency \
   claude_runtime_build_command \
   claude_runtime_is_native_executable \
@@ -669,7 +669,7 @@ if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v3" ]; then
   exit 0
 fi
 
-if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v3" ]; then
+if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v4" ]; then
   emit_bridge_installation_incomplete "claude-runtime.sh"
   exit 0
 fi
@@ -935,18 +935,13 @@ run_built_claude_cmd_with_timeout() {
   shift 2
 
   if [ -z "$timeout_seconds" ] || [ "${timeout_seconds:-0}" -le 0 ]; then
-    if [ "$input_path" = "-" ]; then
-      claude_runtime_run_direct "$CLAUDE_RUNTIME_CWD" "$@"
-    else
-      claude_runtime_build_command "$@"
-      (
-        claude_runtime_scrub_environment
-        CDPATH=
-        cd -P -- "$CLAUDE_RUNTIME_CWD" || exit 1
-        "${CLAUDE_RUNTIME_COMMAND[@]}" < "$input_path"
-      )
-    fi
-    return
+    claude_runtime_run_direct \
+      "$CLAUDE_RUNTIME_CWD" \
+      "$CLAUDE_RUNTIME_PYTHON_BIN" \
+      "$CLAUDE_PROCESS_DRIVER" \
+      "$input_path" \
+      "$@"
+    return $?
   fi
   [ -n "${CLAUDE_RUNTIME_PYTHON_BIN:-}" ] && [ -r "$CLAUDE_PROCESS_DRIVER" ] || return 125
   claude_runtime_run_with_timeout \
