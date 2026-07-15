@@ -1405,5 +1405,5 @@ if before_files != after_files:
 PY
 pass "bounded helper source purity"
 
-assert_eq "direct_inherited_path_v9" "$CLAUDE_RUNTIME_CONTRACT" "runtime contract label"
+assert_eq "direct_inherited_path_v10" "$CLAUDE_RUNTIME_CONTRACT" "runtime contract label"
 pass "shared helper contracts"

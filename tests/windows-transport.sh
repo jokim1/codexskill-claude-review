@@ -18,6 +18,8 @@ import sys
 text = Path(sys.argv[1]).read_text()
 for token in (
     "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE",
+    '"COMPLUS_"',
+    '"COMPlus_"',
     "CREATE_SUSPENDED",
     "AssignProcessToJobObject",
     "NtResumeProcess",
@@ -155,13 +157,21 @@ claude_runtime_resolve_trusted_python "$ROOT" "$PWD" "$runtime_cwd" || fail "tru
 [ "$CLAUDE_RUNTIME_PYTHON_STATUS" = "safe" ] || fail "trusted Windows Python status"
 process_driver="$runtime_cwd/process-driver.py"
 claude_runtime_write_python_driver "$process_driver"
-"$python_bin" - "$process_driver" <<'PY'
+COMPlus_StartupHooks=untrusted-runtime-hook "$python_bin" - "$process_driver" <<'PY'
 import importlib.util
+import os
 import sys
 
 spec = importlib.util.spec_from_file_location("claude_runtime_driver", sys.argv[1])
 driver = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(driver)
+parent_complus = [name for name in os.environ if name.upper().startswith("COMPLUS_")]
+if not parent_complus:
+    raise SystemExit("Windows COMPlus_ transport precondition was not observed")
+child_env = driver._child_environment(False, "")
+leaked_complus = [name for name in child_env if name.upper().startswith("COMPLUS_")]
+if leaked_complus:
+    raise SystemExit(f"Windows COMPlus_ variables leaked to child: {leaked_complus!r}")
 expected = "windows-unicode-☃-東京\n"
 proc, out, err, timed_out = driver._run_process(
     10,
