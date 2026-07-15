@@ -3,7 +3,7 @@
 # Shared Claude launcher discovery and trust validation. This file must remain
 # source-pure: definitions and readonly contract constants only.
 
-readonly CLAUDE_LOCATOR_CONTRACT="bounded_path_native_homebrew_v3"
+readonly CLAUDE_LOCATOR_CONTRACT="bounded_path_native_homebrew_v4"
 readonly CLAUDE_LOCATOR_TRUSTED_STORE_ROOT="/nix/store"
 
 claude_locator_native_supported() {
@@ -557,14 +557,11 @@ claude_locator_boundary_status() {
   for temporary_root in "${temporary_roots[@]}"; do
     case "${OSTYPE:-}:$temporary_root" in
       msys*:[A-Za-z]:[\\/]*|mingw*:[A-Za-z]:[\\/]*|cygwin*:[A-Za-z]:[\\/]*)
-        if [ -x /usr/bin/cygpath ]; then
-          temporary_root="$(/usr/bin/cygpath -au "$temporary_root" 2>/dev/null || true)"
-        elif [ -x /usr/bin/cygpath.exe ]; then
-          temporary_root="$(/usr/bin/cygpath.exe -au "$temporary_root" 2>/dev/null || true)"
-        else
+        if [ ! -x "${CLAUDE_RUNTIME_CYGPATH_BIN:-}" ]; then
           CLAUDE_LOCATOR_BOUNDARY_STATUS="validation_unavailable"
           return 1
         fi
+        temporary_root="$("$CLAUDE_RUNTIME_CYGPATH_BIN" -au "$temporary_root" 2>/dev/null || true)"
         ;;
     esac
     case "$temporary_root" in
@@ -730,4 +727,4 @@ claude_locator_validate_launcher_dependency() {
   [ "$dependency_valid" = true ]
 }
 
-# claude-review-helper-complete: locator_v3
+# claude-review-helper-complete: locator_v4

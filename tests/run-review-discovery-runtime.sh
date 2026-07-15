@@ -83,7 +83,7 @@ fi
   printf 'call=%s\n' "${1:-none}"
   printf 'cwd=%s\n' "$(pwd -P)"
   printf 'path=%s\n' "$PATH"
-  for name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV; do
+  for name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV NODE_OPTIONS NODE_PATH PYTHONPATH RUBYOPT PERL5OPT ZDOTDIR; do
     if /usr/bin/env | /usr/bin/grep -q "^${name}="; then printf '%s=present\n' "$name"; else printf '%s=absent\n' "$name"; fi
   done
   printf 'preserved=%s\n' "${PRESERVED_SENTINEL:-missing}"
@@ -134,6 +134,12 @@ run_runner() {
     ANTHROPIC_BEARER_TOKEN="bearer-secret" \
     ANTHROPIC_CONSOLE_API_KEY="console-secret" \
     ANTHROPIC_CONSOLE_AUTH_TOKEN="console-auth-secret" \
+    NODE_OPTIONS="--require=$TEST_ROOT/runner-node-injection.js" \
+    NODE_PATH="$TEST_ROOT/runner-node-path" \
+    PYTHONPATH="$TEST_ROOT/runner-python-path" \
+    RUBYOPT="-r$TEST_ROOT/runner-ruby-injection.rb" \
+    PERL5OPT="-M$TEST_ROOT/runner-perl-injection" \
+    ZDOTDIR="$TEST_ROOT/runner-zdotdir" \
     BASH_ENV= \
     ENV= \
     /bin/bash --noprofile --norc -p "$skill_root/scripts/run-review.sh" \
@@ -232,7 +238,7 @@ native_output="$(run_runner "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$native_home
 assert_json_status "$native_output" clean ok
 grep -Fq "executable=$native_home/.local/bin/claude" "$native_log" || fail "native launch path not executed"
 [ "$(grep '^call=' "$native_log" | wc -l | tr -d ' ')" = "4" ] || fail "runner did not execute version/auth/preflight/review"
-for scrubbed_name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV; do
+for scrubbed_name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV NODE_OPTIONS NODE_PATH PYTHONPATH RUBYOPT PERL5OPT ZDOTDIR; do
   grep -q "^${scrubbed_name}=absent$" "$native_log" || fail "runner did not scrub $scrubbed_name"
 done
 grep -q '^preserved=runner-preserved$' "$native_log" || fail "runner dropped non-sensitive inherited environment"
@@ -293,6 +299,36 @@ unset EXPORTED_FUNCTION_MARKER
 assert_json_status "$exported_function_output" clean ok
 [ ! -e "$exported_function_marker" ] || fail "runner Bash-shebang launcher imported an exported function"
 pass "runner strips exported functions before validated Bash-shebang execution"
+
+node_injection_home="$TEST_ROOT/node-injection-home"
+node_injection_tools="$TEST_ROOT/node-injection-tools"
+node_injection_log="$TEST_ROOT/node-injection.log"
+node_injection_marker="$TEST_ROOT/node-interpreter-startup-executed"
+mkdir -p "$node_injection_tools"
+write_success_claude "$node_injection_home/.local/bin/claude" "/usr/bin/env node"
+cat > "$node_injection_tools/node" <<'SH'
+#!/bin/bash
+if [ -n "${NODE_OPTIONS+x}" ] || [ -n "${NODE_PATH+x}" ]; then
+  /usr/bin/printf imported > "${INTERPRETER_INJECTION_MARKER:?}"
+  exit 92
+fi
+exec /bin/bash "$@"
+SH
+chmod 755 "$node_injection_tools/node"
+export INTERPRETER_INJECTION_MARKER="$node_injection_marker"
+node_injection_output="$(
+  run_runner \
+    "$REPO_ROOT" \
+    "$REPO_ROOT" \
+    "$REPO_ROOT" \
+    "$node_injection_home" \
+    "$node_injection_tools:$SYSTEM_PATH" \
+    "$node_injection_log"
+)"
+unset INTERPRETER_INJECTION_MARKER
+assert_json_status "$node_injection_output" clean ok
+[ ! -e "$node_injection_marker" ] || fail "runner interpreter loaded inherited Node startup code"
+pass "runner strips interpreter startup injection before shebang execution"
 
 near_limit_artifact="$ARTIFACT_ROOT/claude-review-near-argv-limit.txt"
 near_limit_log="$TEST_ROOT/near-limit.log"
@@ -576,7 +612,7 @@ from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
-marker = "# claude-review-helper-complete: locator_v3"
+marker = "# claude-review-helper-complete: locator_v4"
 replacement = "claude_locator_resolve_trusted_utility() { return 1; }\n\n" + marker
 path.write_text(path.read_text().replace(marker, replacement))
 PY
@@ -722,14 +758,14 @@ run_bootstrap_case() {
     missing_locator) rm -f "$skill/scripts/claude-locator.sh" ;;
     missing_runtime) rm -f "$skill/scripts/claude-runtime.sh" ;;
     invalid_config) printf 'if then\n# claude-review-helper-complete: config_v1\n' > "$skill/scripts/claude-config.sh" ;;
-    invalid_locator) printf 'if then\n# claude-review-helper-complete: locator_v3\n' > "$skill/scripts/claude-locator.sh" ;;
+    invalid_locator) printf 'if then\n# claude-review-helper-complete: locator_v4\n' > "$skill/scripts/claude-locator.sh" ;;
     empty_runtime) : > "$skill/scripts/claude-runtime.sh" ;;
     no_marker_config) printf 'readonly CLAUDE_CONFIG_CONTRACT="config_v1"\nclaude_config_load_file() { :; }\nclaude_config_main() { :; }\n' > "$skill/scripts/claude-config.sh" ;;
     no_marker_runtime) printf 'claude_runtime_build_command() { :; }\nclaude_runtime_check_launcher_dependency() { :; }\nclaude_runtime_scrub_environment() { :; }\n' > "$skill/scripts/claude-runtime.sh" ;;
     missing_symbol_config) sed 's/^claude_config_load_file()/claude_config_load_file_missing()/' "$REPO_ROOT/scripts/claude-config.sh" > "$skill/scripts/claude-config.sh" ;;
     missing_symbol_locator) sed 's/^claude_locator_validate_candidate()/claude_locator_validate_candidate_missing()/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
-    stale_locator) sed -e 's/bounded_path_native_homebrew_v3/bounded_path_native_homebrew_v2/' -e 's/locator_v3/locator_v2/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
-    stale_runtime) sed -e 's/direct_inherited_path_v4/direct_inherited_path_v3/' -e 's/runtime_v4/runtime_v3/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
+    stale_locator) sed -e 's/bounded_path_native_homebrew_v4/bounded_path_native_homebrew_v3/' -e 's/locator_v4/locator_v3/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
+    stale_runtime) sed -e 's/direct_inherited_path_v5/direct_inherited_path_v4/' -e 's/runtime_v5/runtime_v4/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
   esac
   output="$(run_runner "$skill" "$REPO_ROOT" "$REPO_ROOT" "$HOME" "$path_root/bin:$SYSTEM_PATH" "$candidate_log" 2>&1)"
   assert_json_status "$output" blocked "installation is incomplete"

@@ -50,7 +50,7 @@ set -euo pipefail
   printf 'call=%s\n' "${1:-none}"
   printf 'cwd=%s\n' "$(pwd -P)"
   printf 'path=%s\n' "$PATH"
-  for name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV; do
+  for name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV NODE_OPTIONS NODE_PATH PYTHONPATH RUBYOPT PERL5OPT ZDOTDIR; do
     if /usr/bin/env | /usr/bin/grep -q "^${name}="; then printf '%s=present\n' "$name"; else printf '%s=absent\n' "$name"; fi
   done
   printf 'preserved=%s\n' "${PRESERVED_SENTINEL:-missing}"
@@ -210,6 +210,12 @@ basic_output="$({
   CLAUDE_CODE_CLIENT_CERT="doctor-cert-secret" \
   CLAUDE_CODE_CLIENT_KEY="doctor-key-secret" \
   CLAUDE_CODE_CLIENT_KEY_PASSPHRASE="doctor-passphrase-secret" \
+  NODE_OPTIONS="--require=doctor-node-options-secret" \
+  NODE_PATH="doctor-node-path-secret" \
+  PYTHONPATH="doctor-python-path-secret" \
+  RUBYOPT="-rdoctor-rubyopt-secret" \
+  PERL5OPT="-Mdoctor-perl5opt-secret" \
+  ZDOTDIR="doctor-zdotdir-secret" \
   run_doctor "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$passwd_home" "$path_value" "$path_log"
 })"
 
@@ -221,7 +227,7 @@ assert_line "$basic_output" "claude_bin=$path_bin/claude" "absolute launch path"
 assert_line "$basic_output" "claude_target=$path_bin/claude" "canonical target"
 assert_line "$basic_output" "claude_trust_scope=none" "safe trust scope"
 assert_line "$basic_output" "claude_trust_reason=none" "safe trust reason"
-assert_line "$basic_output" "claude_runtime_contract=direct_inherited_path_v4" "runtime contract"
+assert_line "$basic_output" "claude_runtime_contract=direct_inherited_path_v5" "runtime contract"
 assert_line "$basic_output" "claude_version=2.test.0 (Claude Code fake)" "version"
 assert_line "$basic_output" "claude_auth_logged_in=True" "auth state"
 assert_line "$basic_output" "claude_auth_provider=firstParty" "auth provider"
@@ -246,12 +252,16 @@ assert_line "$basic_output" "login_profile_loaded=false" "profile contract"
 for inherited_name in CLAUDE_CONFIG_DIR HTTP_PROXY HTTPS_PROXY NO_PROXY NODE_EXTRA_CA_CERTS CLAUDE_CODE_CERT_STORE CLAUDE_CODE_CLIENT_CERT CLAUDE_CODE_CLIENT_KEY CLAUDE_CODE_CLIENT_KEY_PASSPHRASE; do
   assert_line "$basic_output" "inherited_env_${inherited_name}=present" "presence-only $inherited_name"
 done
-for secret in doctor-auth-secret doctor-probe-secret-stdout doctor-probe-secret-stderr doctor-config-secret doctor-proxy-secret doctor-ca-secret doctor-store-secret doctor-cert-secret doctor-key-secret doctor-passphrase-secret api-secret auth-secret bearer-secret console-secret; do
+for scrubbed_name in NODE_OPTIONS NODE_PATH PYTHONPATH RUBYOPT PERL5OPT ZDOTDIR; do
+  assert_line "$basic_output" "scrubbed_env_${scrubbed_name}=present" "presence-only scrubbed $scrubbed_name"
+done
+assert_contains "$basic_output" "removed before the validated Claude interpreter chain starts" "scrubbed environment guidance"
+for secret in doctor-auth-secret doctor-probe-secret-stdout doctor-probe-secret-stderr doctor-config-secret doctor-proxy-secret doctor-ca-secret doctor-store-secret doctor-cert-secret doctor-key-secret doctor-passphrase-secret doctor-node-options-secret doctor-node-path-secret doctor-python-path-secret doctor-rubyopt-secret doctor-perl5opt-secret doctor-zdotdir-secret api-secret auth-secret bearer-secret console-secret; do
   assert_not_contains "$basic_output" "$secret" "redaction for $secret"
 done
 assert_not_contains "$basic_output" "stdout_head" "raw stdout excerpt removed"
 assert_not_contains "$basic_output" "stderr_head" "raw stderr excerpt removed"
-for scrubbed_name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN; do
+for scrubbed_name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN NODE_OPTIONS NODE_PATH PYTHONPATH RUBYOPT PERL5OPT ZDOTDIR; do
   grep -q "^${scrubbed_name}=absent$" "$path_log" || fail "doctor version/auth/probes did not scrub $scrubbed_name"
 done
 grep -q '^BASH_ENV=absent$' "$path_log" || fail "doctor runtime scrubs BASH_ENV"
@@ -670,7 +680,7 @@ from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
-marker = "# claude-review-helper-complete: locator_v3"
+marker = "# claude-review-helper-complete: locator_v4"
 replacement = "claude_locator_resolve_trusted_utility() { return 1; }\n\n" + marker
 path.write_text(path.read_text().replace(marker, replacement))
 PY
@@ -736,7 +746,7 @@ from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
-marker = "# claude-review-helper-complete: runtime_v4"
+marker = "# claude-review-helper-complete: runtime_v5"
 replacement = "claude_runtime_is_native_executable() { return 2; }\n\n" + marker
 path.write_text(path.read_text().replace(marker, replacement))
 PY
@@ -839,14 +849,14 @@ run_bootstrap_case() {
     missing_locator) rm -f "$skill/scripts/claude-locator.sh" ;;
     missing_runtime) rm -f "$skill/scripts/claude-runtime.sh" ;;
     invalid_config) printf 'if then\n# claude-review-helper-complete: config_v1\n' > "$skill/scripts/claude-config.sh" ;;
-    invalid_locator) printf 'if then\n# claude-review-helper-complete: locator_v3\n' > "$skill/scripts/claude-locator.sh" ;;
+    invalid_locator) printf 'if then\n# claude-review-helper-complete: locator_v4\n' > "$skill/scripts/claude-locator.sh" ;;
     empty_runtime) : > "$skill/scripts/claude-runtime.sh" ;;
     no_marker_config) printf 'readonly CLAUDE_CONFIG_CONTRACT="config_v1"\nclaude_config_load_file() { :; }\nclaude_config_main() { :; }\n' > "$skill/scripts/claude-config.sh" ;;
     no_marker_runtime) printf 'claude_runtime_build_command() { :; }\nclaude_runtime_check_launcher_dependency() { :; }\n' > "$skill/scripts/claude-runtime.sh" ;;
     missing_symbol_config) sed 's/^claude_config_load_file()/claude_config_load_file_missing()/' "$REPO_ROOT/scripts/claude-config.sh" > "$skill/scripts/claude-config.sh" ;;
     missing_symbol_locator) sed 's/^claude_locator_validate_candidate()/claude_locator_validate_candidate_missing()/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
-    stale_locator) sed -e 's/bounded_path_native_homebrew_v3/bounded_path_native_homebrew_v2/' -e 's/locator_v3/locator_v2/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
-    stale_runtime) sed -e 's/direct_inherited_path_v4/direct_inherited_path_v3/' -e 's/runtime_v4/runtime_v3/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
+    stale_locator) sed -e 's/bounded_path_native_homebrew_v4/bounded_path_native_homebrew_v3/' -e 's/locator_v4/locator_v3/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
+    stale_runtime) sed -e 's/direct_inherited_path_v5/direct_inherited_path_v4/' -e 's/runtime_v5/runtime_v4/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
   esac
   output="$(run_doctor "$skill" "$REPO_ROOT" "$REPO_ROOT" "$HOME" "$path_value" "$candidate_log" --skip-probes 2>&1)"
   assert_line "$output" "doctor_status=bridge_installation_incomplete" "$case_name status"

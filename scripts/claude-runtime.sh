@@ -3,16 +3,25 @@
 # Shared direct Claude command transport. This file must remain source-pure:
 # definitions and readonly contract constants only.
 
-readonly CLAUDE_RUNTIME_CONTRACT="direct_inherited_path_v4"
+readonly CLAUDE_RUNTIME_CONTRACT="direct_inherited_path_v5"
+readonly CLAUDE_RUNTIME_SCRUBBED_ENV_NAMES="ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH GCONV_PATH NODE_OPTIONS NODE_PATH PYTHONHOME PYTHONPATH PYTHONSTARTUP PYTHONINSPECT PYTHONBREAKPOINT PYTHONWARNINGS PYTHONUSERBASE RUBYOPT RUBYLIB RUBYGEMS_GEMDEPS GEM_HOME GEM_PATH BUNDLE_GEMFILE PERL5OPT PERL5LIB PERLLIB PERL_LOCAL_LIB_ROOT ZDOTDIR FPATH LUA_INIT LUA_PATH LUA_CPATH JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS CLASSPATH DOTNET_STARTUP_HOOKS CORECLR_ENABLE_PROFILING CORECLR_PROFILER CORECLR_PROFILER_PATH COR_ENABLE_PROFILING COR_PROFILER PHPRC PHP_INI_SCAN_DIR AWKPATH AWKLIBPATH TCLLIBPATH"
 
 claude_runtime_scrub_environment() {
-  unset BASH_ENV
-  unset ENV
-  unset ANTHROPIC_API_KEY
-  unset ANTHROPIC_AUTH_TOKEN
-  unset ANTHROPIC_BEARER_TOKEN
-  unset ANTHROPIC_CONSOLE_API_KEY
-  unset ANTHROPIC_CONSOLE_AUTH_TOKEN
+  local scrubbed_name=""
+
+  for scrubbed_name in $CLAUDE_RUNTIME_SCRUBBED_ENV_NAMES; do
+    unset "$scrubbed_name"
+  done
+}
+
+claude_runtime_invoke_trusted_python() {
+  local python_bin="$1"
+  shift
+
+  (
+    claude_runtime_scrub_environment
+    MSYS2_ARG_CONV_EXCL='*' "$python_bin" -I "$@"
+  )
 }
 
 claude_runtime_build_command() {
@@ -23,7 +32,7 @@ claude_runtime_build_command() {
 }
 
 claude_runtime_prepare_python_argv() {
-  local cygpath_bin=""
+  local cygpath_bin="${CLAUDE_RUNTIME_CYGPATH_BIN:-}"
   local converted_path=""
   local original_argv=()
   local transport_argv=()
@@ -36,13 +45,7 @@ claude_runtime_prepare_python_argv() {
 
   case "${OSTYPE:-}" in
     msys*|mingw*|cygwin*)
-      if [ -x /usr/bin/cygpath ]; then
-        cygpath_bin=/usr/bin/cygpath
-      elif [ -x /usr/bin/cygpath.exe ]; then
-        cygpath_bin=/usr/bin/cygpath.exe
-      else
-        return 1
-      fi
+      [ -x "$cygpath_bin" ] || return 1
       original_argv=("${CLAUDE_RUNTIME_PYTHON_ARGV[@]}")
       transport_argv=("${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[@]+"${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[@]}"}")
       if [ "${#transport_argv[@]}" -eq 0 ]; then
@@ -307,8 +310,77 @@ def _bounded_timeout_cleanup(proc, job):
 
 def _child_environment(msys_present, msys_value):
     child_env = os.environ.copy()
+    scrubbed_names = {
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BEARER_TOKEN",
+        "ANTHROPIC_CONSOLE_API_KEY",
+        "ANTHROPIC_CONSOLE_AUTH_TOKEN",
+        "AWKLIBPATH",
+        "AWKPATH",
+        "BASH_ENV",
+        "BUNDLE_GEMFILE",
+        "CLASSPATH",
+        "CORECLR_ENABLE_PROFILING",
+        "CORECLR_PROFILER",
+        "CORECLR_PROFILER_PATH",
+        "COR_ENABLE_PROFILING",
+        "COR_PROFILER",
+        "DOTNET_STARTUP_HOOKS",
+        "DYLD_FALLBACK_FRAMEWORK_PATH",
+        "DYLD_FALLBACK_LIBRARY_PATH",
+        "DYLD_FRAMEWORK_PATH",
+        "DYLD_INSERT_LIBRARIES",
+        "DYLD_LIBRARY_PATH",
+        "ENV",
+        "FPATH",
+        "GCONV_PATH",
+        "GEM_HOME",
+        "GEM_PATH",
+        "JAVA_TOOL_OPTIONS",
+        "JDK_JAVA_OPTIONS",
+        "LD_AUDIT",
+        "LD_LIBRARY_PATH",
+        "LD_PRELOAD",
+        "LUA_CPATH",
+        "LUA_INIT",
+        "LUA_PATH",
+        "NODE_OPTIONS",
+        "NODE_PATH",
+        "PERL5LIB",
+        "PERL5OPT",
+        "PERLLIB",
+        "PERL_LOCAL_LIB_ROOT",
+        "PHPRC",
+        "PHP_INI_SCAN_DIR",
+        "PYTHONBREAKPOINT",
+        "PYTHONHOME",
+        "PYTHONINSPECT",
+        "PYTHONPATH",
+        "PYTHONSTARTUP",
+        "PYTHONUSERBASE",
+        "PYTHONWARNINGS",
+        "RUBYGEMS_GEMDEPS",
+        "RUBYLIB",
+        "RUBYOPT",
+        "TCLLIBPATH",
+        "ZDOTDIR",
+        "_JAVA_OPTIONS",
+    }
+    scrubbed_prefixes = (
+        "BASH_FUNC_",
+        "COMPlus_",
+        "CORECLR_",
+        "COR_",
+        "DYLD_",
+        "LD_",
+        "LUA_CPATH_",
+        "LUA_INIT_",
+        "LUA_PATH_",
+        "PYTHON",
+    )
     for name in tuple(child_env):
-        if name.startswith("BASH_FUNC_"):
+        if name in scrubbed_names or name.startswith(scrubbed_prefixes):
             child_env.pop(name, None)
     if msys_present:
         child_env["MSYS2_ARG_CONV_EXCL"] = msys_value
@@ -474,17 +546,11 @@ PY
 
 claude_runtime_python_transport_path() {
   local path="$1"
-  local cygpath_bin=""
+  local cygpath_bin="${CLAUDE_RUNTIME_CYGPATH_BIN:-}"
 
   case "${OSTYPE:-}" in
     msys*|mingw*|cygwin*)
-      if [ -x /usr/bin/cygpath ]; then
-        cygpath_bin=/usr/bin/cygpath
-      elif [ -x /usr/bin/cygpath.exe ]; then
-        cygpath_bin=/usr/bin/cygpath.exe
-      else
-        return 1
-      fi
+      [ -x "$cygpath_bin" ] || return 1
       claude_runtime_windows_executable_path "$path" "$cygpath_bin"
       ;;
     *)
@@ -859,4 +925,4 @@ claude_runtime_check_launcher_dependency() {
   return 0
 }
 
-# claude-review-helper-complete: runtime_v4
+# claude-review-helper-complete: runtime_v5

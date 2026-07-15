@@ -140,12 +140,16 @@ The bridge keeps a strict division of labor:
    fixed-FHS executable or an inode-verified immutable-store target; it is never
    executed to validate itself. Other FHS utility links may traverse only a
    bounded fixed-FHS or `/etc/alternatives` chain whose final executable remains
-   in `/usr/bin` or `/bin`.
+   in `/usr/bin` or `/bin`. On Git Bash, the exact fixed
+   `/usr/bin/cygpath[.exe]` entry must pass that validation before any path
+   conversion occurs.
 4. The runner selects Claude from inherited PATH, the official native-user
    launcher, or the documented platform-default Homebrew launcher and validates
    both its launch path and canonical target.
 5. The shared direct runtime preserves inherited PATH and configuration/network
-   environment while scrubbing Anthropic API credentials plus `BASH_ENV`/`ENV`.
+   environment while scrubbing Anthropic API credentials, shell startup hooks,
+   exported Bash functions, and standard interpreter/dynamic-loader startup-code
+   variables.
 6. The runner performs a tiny subscription-auth preflight through the local
    `claude` CLI.
 7. Claude receives only the artifact and bundled prompt, with no tools.
@@ -540,12 +544,17 @@ for Claude and its descendants; they do not prepend the launcher directory, star
 a login shell, source profiles, or retry through an interactive shell. They unset
 `BASH_ENV`, `ENV`, and the five Anthropic API credential variables used to enforce
 subscription-only review, and they strip inherited exported Bash-function entries
-(`BASH_FUNC_*`) before Claude starts. Other inherited environment data remains
-available. `scripts/claude-subscription-env.sh` remains as a compatible legacy
-entry point, but runner and doctor share `claude-runtime.sh`.
+(`BASH_FUNC_*`) before Claude starts. Standard code-loading variables for Node,
+Python, Ruby, Perl, zsh, Lua, Java, .NET, PHP, Tcl, awk, and native dynamic loaders
+are also removed. Proxy, certificate, Claude config, locale, HOME, temp, and other
+non-code-loading inherited environment data remain available. Doctor reports only
+presence through `scrubbed_env_<NAME>` keys; it never prints those values.
+`scripts/claude-subscription-env.sh` remains as a compatible legacy entry point,
+but runner and doctor share `claude-runtime.sh`.
 For Git Bash timeout/probe calls through native Python, that shared runtime converts
 the validated launcher and validated executable paths in its shebang execution
-chain with the fixed `/usr/bin/cygpath` utility. It passes the interpreter chain,
+chain with the bootstrap-validated, pinned `/usr/bin/cygpath[.exe]` utility. It
+passes the interpreter chain,
 optional `env NAME` token, launcher, and unchanged remaining arguments as discrete
 argv. The bridge disables automatic MSYS conversion only while entering native
 Python, then restores the inherited setting for Claude; it does not build a shell

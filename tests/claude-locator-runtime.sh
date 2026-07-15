@@ -630,7 +630,7 @@ CWD_LOG="$TEST_ROOT/cwd.log"
 cat > "$TEST_ROOT/trusted/bin/claude-env" <<'SH'
 #!/usr/bin/env bash
 printf '%s' "$PATH" > "$ENV_LOG.path"
-for name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV; do
+for name in ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV NODE_OPTIONS NODE_PATH PYTHONPATH RUBYOPT PERL5OPT ZDOTDIR; do
   if [ -n "${!name+x}" ]; then printf '%s=present\n' "$name" >> "$ENV_LOG"; else printf '%s=absent\n' "$name" >> "$ENV_LOG"; fi
 done
 printf '%s' "${PRESERVED_SENTINEL:-}" >> "$ENV_LOG"
@@ -657,8 +657,14 @@ original_path="$PATH"
   HTTPS_PROXY="https://runtime-proxy"
   NO_PROXY="runtime-no-proxy"
   NODE_EXTRA_CA_CERTS="$TEST_ROOT/runtime-ca"
+  NODE_OPTIONS="--require=$TEST_ROOT/runtime-node-injection.js"
+  NODE_PATH="$TEST_ROOT/runtime-node-path"
+  PYTHONPATH="$TEST_ROOT/runtime-python-path"
+  RUBYOPT="-r$TEST_ROOT/runtime-ruby-injection.rb"
+  PERL5OPT="-M$TEST_ROOT/runtime-perl-injection"
+  ZDOTDIR="$TEST_ROOT/runtime-zdotdir"
   CDPATH="$TEST_ROOT/runtime-cdpath-one:$TEST_ROOT/runtime-cdpath-two"
-  export HOME TMPDIR LC_ALL HTTPS_PROXY NO_PROXY NODE_EXTRA_CA_CERTS CDPATH
+  export HOME TMPDIR LC_ALL HTTPS_PROXY NO_PROXY NODE_EXTRA_CA_CERTS NODE_OPTIONS NODE_PATH PYTHONPATH RUBYOPT PERL5OPT ZDOTDIR CDPATH
   claude_runtime_run_direct \
     "$TEST_ROOT/work" \
     "$CLAUDE_RUNTIME_PYTHON_BIN" \
@@ -674,6 +680,9 @@ assert_eq "$TEST_ROOT/work" "$(cat "$CWD_LOG")" "isolated runtime CWD"
 grep -q '^ANTHROPIC_API_KEY=absent$' "$ENV_LOG" || fail "API key scrubbed"
 grep -q '^BASH_ENV=absent$' "$ENV_LOG" || fail "BASH_ENV scrubbed"
 grep -q '^ENV=absent$' "$ENV_LOG" || fail "ENV scrubbed"
+for scrubbed_name in NODE_OPTIONS NODE_PATH PYTHONPATH RUBYOPT PERL5OPT ZDOTDIR; do
+  grep -q "^${scrubbed_name}=absent$" "$ENV_LOG" || fail "$scrubbed_name scrubbed"
+done
 grep -q 'preserved$' "$ENV_LOG" || fail "unrelated env preserved"
 grep -Fq "HOME=$TEST_ROOT/runtime-home" "$ENV_LOG" || fail "HOME preserved"
 grep -Fq "TMPDIR=$TEST_ROOT/runtime-tmp" "$ENV_LOG" || fail "TMPDIR preserved"
@@ -726,6 +735,47 @@ assert_eq "safe" "$direct_function_output" "direct exported-function filter"
 assert_eq "safe" "$timeout_function_output" "timeout exported-function filter"
 [ ! -e "$exported_function_marker" ] || fail "validated Bash launcher imported an exported function"
 pass "direct and timeout transports strip exported Bash functions"
+
+python_injection_launcher="$TEST_ROOT/trusted/bin/python-injection-launcher"
+python_injection_path="$TEST_ROOT/interpreter-python-path"
+python_interpreter_marker="$TEST_ROOT/interpreter-python-startup-executed"
+mkdir -p "$python_injection_path"
+cat > "$python_injection_path/sitecustomize.py" <<'PY'
+from pathlib import Path
+import os
+
+Path(os.environ["INTERPRETER_INJECTION_MARKER"]).write_text("executed")
+PY
+cat > "$python_injection_launcher" <<'PY'
+#!/usr/bin/env python3
+print("safe")
+PY
+chmod 755 "$python_injection_launcher"
+direct_python_output="$(
+  PYTHONPATH="$python_injection_path" \
+  INTERPRETER_INJECTION_MARKER="$python_interpreter_marker" \
+  claude_runtime_run_direct \
+    "$TEST_ROOT/work" \
+    "$CLAUDE_RUNTIME_PYTHON_BIN" \
+    "$python_driver" \
+    - \
+    "$python_injection_launcher"
+)"
+timeout_python_output="$(
+  PYTHONPATH="$python_injection_path" \
+  INTERPRETER_INJECTION_MARKER="$python_interpreter_marker" \
+  claude_runtime_run_with_timeout \
+    "$CLAUDE_RUNTIME_PYTHON_BIN" \
+    "$python_driver" \
+    "$TEST_ROOT/work" \
+    5 \
+    - \
+    "$python_injection_launcher"
+)"
+assert_eq "safe" "$direct_python_output" "direct Python startup filter"
+assert_eq "safe" "$timeout_python_output" "timeout Python startup filter"
+[ ! -e "$python_interpreter_marker" ] || fail "validated Python launcher loaded inherited startup code"
+pass "direct and timeout transports strip interpreter startup injection"
 
 timeout_cdpath="$TEST_ROOT/timeout-cdpath-one:$TEST_ROOT/timeout-cdpath-two"
 claude_runtime_resolve_trusted_python "$ROOT" "$TEST_ROOT/work" "$TEST_ROOT/work" || fail "trusted Python CDPATH transport resolution"
@@ -1149,5 +1199,5 @@ if before_files != after_files:
 PY
 pass "bounded helper source purity"
 
-assert_eq "direct_inherited_path_v4" "$CLAUDE_RUNTIME_CONTRACT" "runtime contract label"
+assert_eq "direct_inherited_path_v5" "$CLAUDE_RUNTIME_CONTRACT" "runtime contract label"
 pass "shared helper contracts"

@@ -718,6 +718,10 @@ or shell configuration, create a symlink, refresh a Git index, execute a Git
 fsmonitor hook, or otherwise mutate the user's system. Checkout diagnostics must
 disable optional locks and ignore inherited Git repository/config routing and
 trace-output variables.
+Treat `scrubbed_env_<NAME>=present` as a presence-only diagnostic: the value was
+inherited by doctor but is deliberately removed before the validated Claude
+interpreter chain starts. Never ask the user to reveal the value or recommend
+restoring a scrubbed code-loading variable as a runtime fix.
 Treat `claude_trust_reason=validation_unavailable` as a fail-closed unsafe-candidate
 diagnosis; do not recommend bypassing trust validation or using a mutable PATH
 utility in order to continue.

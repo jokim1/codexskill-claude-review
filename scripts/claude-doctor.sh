@@ -206,6 +206,7 @@ claude_build_trusted_bootstrap_path() {
   local trusted_path=""
   local required_utility=""
   local optional_utility=""
+  local trusted_cygpath=""
   local trusted_readlink=""
   local trusted_windows_roots=()
 
@@ -234,6 +235,14 @@ claude_build_trusted_bootstrap_path() {
           *) trusted_path="${trusted_path:+$trusted_path:}$physical_path" ;;
         esac
       done
+      if [ -x "$fhs_usr_bin/cygpath" ]; then
+        trusted_cygpath="$fhs_usr_bin/cygpath"
+      elif [ -x "$fhs_usr_bin/cygpath.exe" ]; then
+        trusted_cygpath="$fhs_usr_bin/cygpath.exe"
+      else
+        printf 'Missing fixed Git Bash bootstrap utility: cygpath\n' >&2
+        return 1
+      fi
       ;;
   esac
 
@@ -280,6 +289,18 @@ claude_build_trusted_bootstrap_path() {
       return 1
     fi
   done
+  if [ -n "$trusted_cygpath" ] && ! claude_bootstrap_utility_safe \
+    cygpath \
+    "$trusted_cygpath" \
+    "$trusted_store_root" \
+    "$fhs_usr_bin" \
+    "$fhs_bin" \
+    "/etc/alternatives" \
+    "$trusted_readlink" \
+    "${trusted_windows_roots[@]+"${trusted_windows_roots[@]}"}"; then
+    printf 'Unsafe bootstrap utility entry: cygpath\n' >&2
+    return 1
+  fi
   for optional_utility in jq; do
     candidate_path="$(type -P "$optional_utility" 2>/dev/null || true)"
     [ -n "$candidate_path" ] || continue
@@ -304,6 +325,20 @@ PATH="$(claude_build_trusted_bootstrap_path "$CLAUDE_RUNTIME_INHERITED_PATH" "/n
   exit 2
 }
 export PATH
+CLAUDE_RUNTIME_CYGPATH_BIN=""
+case "${OSTYPE:-}" in
+  msys*|mingw*|cygwin*)
+    if [ -x /usr/bin/cygpath ]; then
+      CLAUDE_RUNTIME_CYGPATH_BIN=/usr/bin/cygpath
+    elif [ -x /usr/bin/cygpath.exe ]; then
+      CLAUDE_RUNTIME_CYGPATH_BIN=/usr/bin/cygpath.exe
+    else
+      printf '%s\n' 'Validated Git Bash cygpath disappeared after bootstrap.' >&2
+      exit 2
+    fi
+    ;;
+esac
+export CLAUDE_RUNTIME_CYGPATH_BIN
 unset -f claude_build_trusted_bootstrap_path
 unset -f claude_bootstrap_readlink_safe
 unset -f claude_bootstrap_utility_safe
@@ -339,19 +374,13 @@ EOF
 
 normalize_path() {
   local path="$1"
-  local cygpath_bin=""
+  local cygpath_bin="${CLAUDE_RUNTIME_CYGPATH_BIN:-}"
 
   case "${OSTYPE:-}" in
     msys*|mingw*|cygwin*)
       case "$path" in
         [A-Za-z]:[\\/]*)
-          if [ -x /usr/bin/cygpath ]; then
-            cygpath_bin=/usr/bin/cygpath
-          elif [ -x /usr/bin/cygpath.exe ]; then
-            cygpath_bin=/usr/bin/cygpath.exe
-          else
-            return 1
-          fi
+          [ -x "$cygpath_bin" ] || return 1
           "$cygpath_bin" -u "$path"
           return
           ;;
@@ -506,7 +535,7 @@ fi
 
 if ! load_required_claude_helper \
   "$LOCATOR_HELPER" \
-  "# claude-review-helper-complete: locator_v3" \
+  "# claude-review-helper-complete: locator_v4" \
   claude_locator_path_candidate \
   claude_locator_native_supported \
   claude_locator_native_path \
@@ -523,9 +552,10 @@ fi
 
 if ! load_required_claude_helper \
   "$RUNTIME_HELPER" \
-  "# claude-review-helper-complete: runtime_v4" \
+  "# claude-review-helper-complete: runtime_v5" \
   claude_runtime_check_launcher_dependency \
   claude_runtime_build_command \
+  claude_runtime_invoke_trusted_python \
   claude_runtime_is_native_executable \
   claude_runtime_probe_with_timeout \
   claude_runtime_prepare_python_argv \
@@ -543,14 +573,14 @@ if ! load_required_claude_helper \
   exit 0
 fi
 
-if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v3" ]; then
+if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v4" ]; then
   print_kv "doctor_status" "bridge_installation_incomplete"
   print_kv "bridge_component" "claude-locator.sh"
   print_kv "bridge_guidance" "Reinstall or update the complete claude-review skill, then retry."
   exit 0
 fi
 
-if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v4" ]; then
+if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v5" ]; then
   print_kv "doctor_status" "bridge_installation_incomplete"
   print_kv "bridge_component" "claude-runtime.sh"
   print_kv "bridge_guidance" "Reinstall or update the complete claude-review skill, then retry."
@@ -564,7 +594,7 @@ CLAUDE_PROCESS_DRIVER="$CLAUDE_RUNTIME_CWD/process-driver.py"
 if claude_runtime_resolve_trusted_python "$REPO_ROOT" "$INVOCATION_CWD" "$CLAUDE_RUNTIME_CWD"; then
   if ! claude_runtime_write_python_driver "$CLAUDE_PROCESS_DRIVER" || \
     ! CLAUDE_PROCESS_DRIVER_TRANSPORT="$(claude_runtime_python_transport_path "$CLAUDE_PROCESS_DRIVER")" || \
-    ! MSYS2_ARG_CONV_EXCL='*' "$CLAUDE_RUNTIME_PYTHON_BIN" -I - "$CLAUDE_PROCESS_DRIVER_TRANSPORT" <<'PY' >/dev/null 2>&1
+    ! claude_runtime_invoke_trusted_python "$CLAUDE_RUNTIME_PYTHON_BIN" - "$CLAUDE_PROCESS_DRIVER_TRANSPORT" <<'PY' >/dev/null 2>&1
 from pathlib import Path
 import sys
 
@@ -790,9 +820,13 @@ for inherited_name in \
   CLAUDE_CODE_CLIENT_KEY_PASSPHRASE; do
   print_kv "inherited_env_${inherited_name}" "$(redacted_env_presence "$inherited_name")"
 done
+for scrubbed_name in $CLAUDE_RUNTIME_SCRUBBED_ENV_NAMES; do
+  print_kv "scrubbed_env_${scrubbed_name}" "$(redacted_env_presence "$scrubbed_name")"
+done
 print_kv "login_profile_loaded" "false"
 print_kv "inherited_env_note" "absent means not inherited by Codex; doctor does not source profiles or inspect Claude settings.json"
 print_kv "inherited_env_guidance" "Put required config, proxy, CA, certificate-store, and mTLS values in Codex's launch environment or Claude settings.json; do not rely on profile sourcing."
+print_kv "scrubbed_env_note" "present means inherited by doctor but removed before the validated Claude interpreter chain starts; values are never printed"
 print_kv "claude_auth_context" "subscription_only_credentials_scrubbed"
 print_kv "python_runtime_status" "${CLAUDE_RUNTIME_PYTHON_STATUS:-missing}"
 print_kv "python_validation_scope" "${CLAUDE_RUNTIME_PYTHON_VALIDATION_SCOPE:-none}"
@@ -1000,7 +1034,7 @@ if [ "$auth_status_code" -eq 124 ]; then
   print_kv "claude_auth_guidance" "The auth status check timed out; inspect credential/keychain access and network reachability or increase --probe-timeout."
 elif [ -n "$auth_status" ]; then
   if [ -n "${CLAUDE_RUNTIME_PYTHON_BIN:-}" ]; then
-    AUTH_STATUS="$auth_status" "$CLAUDE_RUNTIME_PYTHON_BIN" -I - <<'PY' 2>/dev/null || print_kv "claude_auth_status" "present_unparsed"
+    AUTH_STATUS="$auth_status" claude_runtime_invoke_trusted_python "$CLAUDE_RUNTIME_PYTHON_BIN" - <<'PY' 2>/dev/null || print_kv "claude_auth_status" "present_unparsed"
 import json
 import os
 

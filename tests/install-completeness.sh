@@ -41,8 +41,8 @@ for helper in scripts/claude-config.sh scripts/claude-locator.sh scripts/claude-
   [ -x "$ROOT/$helper" ] || fail "$helper is not executable"
   case "$helper" in
     *config*) tail -n 1 "$ROOT/$helper" | grep -Fqx '# claude-review-helper-complete: config_v1' || fail "$helper marker" ;;
-    *locator*) tail -n 1 "$ROOT/$helper" | grep -Fqx '# claude-review-helper-complete: locator_v3' || fail "$helper marker" ;;
-    *runtime*) tail -n 1 "$ROOT/$helper" | grep -Fqx '# claude-review-helper-complete: runtime_v4' || fail "$helper marker" ;;
+    *locator*) tail -n 1 "$ROOT/$helper" | grep -Fqx '# claude-review-helper-complete: locator_v4' || fail "$helper marker" ;;
+    *runtime*) tail -n 1 "$ROOT/$helper" | grep -Fqx '# claude-review-helper-complete: runtime_v5' || fail "$helper marker" ;;
   esac
   if git -C "$ROOT" ls-files --error-unmatch "$helper" >/dev/null 2>&1; then
     mode="$(git -C "$ROOT" ls-files -s "$helper" | awk '{print $1}')"
@@ -56,6 +56,7 @@ done
 for runtime_symbol in \
   claude_runtime_resolve_trusted_python \
   claude_runtime_is_native_executable \
+  claude_runtime_invoke_trusted_python \
   claude_runtime_write_python_driver \
   claude_runtime_python_transport_path \
   claude_runtime_run_with_timeout \
@@ -124,7 +125,7 @@ doctor_output="$({
       --skip-update-check
 })"
 printf '%s\n' "$doctor_output" | grep -Fqx 'doctor_status=ok' || fail "doctor bootstrap from checkout"
-printf '%s\n' "$doctor_output" | grep -Fqx 'claude_runtime_contract=direct_inherited_path_v4' || fail "doctor runtime helper bootstrap"
+printf '%s\n' "$doctor_output" | grep -Fqx 'claude_runtime_contract=direct_inherited_path_v5' || fail "doctor runtime helper bootstrap"
 printf '%s\n' "$doctor_output" | grep -Fqx 'python_runtime_status=safe' || fail "doctor trusted Python bootstrap"
 
 printf 'artifact\n' > "$TEST_ROOT/claude-review-artifact.txt"
@@ -314,6 +315,8 @@ windows_bootstrap_skill="$TEST_ROOT/windows-bootstrap-skill"
 windows_bootstrap_usr="$TEST_ROOT/windows-bootstrap/usr/bin"
 windows_bootstrap_bin="$TEST_ROOT/windows-bootstrap/bin"
 windows_git_bin="$TEST_ROOT/windows-bootstrap/mingw64/bin"
+windows_cygpath_external="$TEST_ROOT/windows-bootstrap/external-cygpath"
+windows_cygpath_marker="$TEST_ROOT/windows-bootstrap/cygpath-executed"
 mkdir -p "$windows_bootstrap_skill/scripts" "$windows_bootstrap_usr" "$windows_bootstrap_bin" "$windows_git_bin"
 cp "$ROOT"/scripts/*.sh "$windows_bootstrap_skill/scripts/"
 chmod 755 "$windows_bootstrap_skill"/scripts/*.sh
@@ -333,6 +336,13 @@ tool_path="$(type -P git 2>/dev/null || true)"
   printf 'exec %q "$@"\n' "$tool_path"
 } > "$windows_git_bin/git"
 chmod 755 "$windows_git_bin/git"
+cat > "$windows_cygpath_external" <<SH
+#!/bin/bash
+printf executed > "$windows_cygpath_marker"
+exit 99
+SH
+chmod 755 "$windows_cygpath_external"
+ln -s "$windows_cygpath_external" "$windows_bootstrap_usr/cygpath"
 python3 - \
   "$windows_bootstrap_skill/scripts/run-review.sh" \
   "$windows_bootstrap_usr" \
@@ -351,10 +361,24 @@ if old not in text:
     raise SystemExit("production bootstrap root call not found")
 path.write_text(text.replace(old, new, 1))
 PY
+set +e
+HOME="$TEST_ROOT/home" PATH="$windows_bootstrap_usr:$windows_git_bin" \
+  BASH_ENV= ENV= /bin/bash --noprofile --norc -p \
+  "$windows_bootstrap_skill/scripts/run-review.sh" --help >/dev/null 2>&1
+hostile_cygpath_status=$?
+set -e
+[ "$hostile_cygpath_status" -ne 0 ] || fail "Windows bootstrap accepted a cygpath symlink outside fixed FHS roots"
+[ ! -e "$windows_cygpath_marker" ] || fail "Windows bootstrap executed an untrusted cygpath"
+rm "$windows_bootstrap_usr/cygpath"
+cat > "$windows_bootstrap_usr/cygpath" <<'SH'
+#!/bin/bash
+exit 0
+SH
+chmod 755 "$windows_bootstrap_usr/cygpath"
 HOME="$TEST_ROOT/home" PATH="$windows_bootstrap_usr:$windows_git_bin" \
   BASH_ENV= ENV= /bin/bash --noprofile --norc -p \
   "$windows_bootstrap_skill/scripts/run-review.sh" --help >/dev/null
-pass "runner admits git only from the fixed Git-for-Windows root"
+pass "runner admits fixed Git-for-Windows utilities and rejects hostile cygpath symlinks"
 
 # Simulate the whole-tree Git fast-forward used by the updater: an installed
 # checkout at commit one receives both helpers from commit two without a manifest.

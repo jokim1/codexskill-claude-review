@@ -50,6 +50,8 @@ for script in "$ROOT/scripts/run-review.sh" "$ROOT/scripts/claude-doctor.sh"; do
   if grep -Fq '"$CLAUDE_RUNTIME_PYTHON_BIN" -I - "$CLAUDE_PROCESS_DRIVER"' "$script"; then
     fail "$(basename "$script") retains an unconverted early native-Python path"
   fi
+  grep -Fq 'Unsafe bootstrap utility entry: cygpath' "$script" || \
+    fail "$(basename "$script") does not validate fixed cygpath during bootstrap"
 done
 
 case "${OSTYPE:-}" in
@@ -65,6 +67,11 @@ esac
 source "$ROOT/scripts/claude-locator.sh"
 # shellcheck source=/dev/null
 source "$ROOT/scripts/claude-runtime.sh"
+
+cygpath_bin="$(type -P cygpath 2>/dev/null || true)"
+[ -n "$cygpath_bin" ] || fail "trusted cygpath unavailable"
+CLAUDE_RUNTIME_CYGPATH_BIN="$cygpath_bin"
+export CLAUDE_RUNTIME_CYGPATH_BIN
 
 for platform in msys mingw64_nt cygwin; do
   if claude_locator_native_supported "$platform"; then
@@ -94,8 +101,6 @@ if ! claude_locator_validate_candidate "$CLAUDE_LOCATOR_CANDIDATE_PATH" "$ROOT" 
   fail "Windows .exe trust validation: $CLAUDE_LOCATOR_VALIDATION_SCOPE:$CLAUDE_LOCATOR_VALIDATION_STATUS"
 fi
 
-cygpath_bin="$(type -P cygpath 2>/dev/null || true)"
-[ -n "$cygpath_bin" ] || fail "trusted cygpath unavailable"
 windows_temp_root="$("$cygpath_bin" -aw "$fixture_root")"
 if TEMP="$windows_temp_root" claude_locator_validate_candidate "$CLAUDE_LOCATOR_CANDIDATE_PATH" "$ROOT" "$PWD"; then
   fail "Windows-form TEMP root passed trust validation"
