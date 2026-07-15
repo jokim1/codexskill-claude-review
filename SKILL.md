@@ -217,13 +217,16 @@ review probes and review invocations. Both helpers own the hardened Claude flags
 
 Runner and doctor must use only the exact `python3` accepted by
 `claude_runtime_resolve_trusted_python`, and every bridge Python invocation must
-retain isolated mode (`-I`). The resolver applies the Claude trust policy to the
-Python launch path and rejects script-shaped Python launchers so `-I` cannot be
+retain isolated/no-site mode (`-I -S`). The resolver applies the Claude trust policy to the
+Python launch path and rejects script-shaped Python launchers so these options cannot be
 reinterpreted as a script argument. A shebangless candidate is accepted only when
 its binary header identifies ELF, Mach-O, or PE; shebangless text and malformed
 PE-like wrappers fail closed. Do not fall back to a second PATH lookup.
 Temporary trust boundaries include inherited absolute `TMPDIR`, `TEMP`, and `TMP`
 roots plus the macOS `/var/folders` namespace.
+The explicit launcher transport applies `-I -S` to validated Python shebangs and
+`-f` to validated zsh shebangs, preventing retained HOME from loading user startup
+code before the launcher.
 
 The shared runtime driver owns bounded child-process lifetime. On Windows it creates
 the child suspended, assigns it to a kill-on-close Job Object, and only then resumes
@@ -249,9 +252,11 @@ boundary:
 approved prefix: ["<trusted-bash>", "--noprofile", "--norc", "-p", "<skill-dir>/scripts/run-review.sh"]
 ```
 
-Every runner and doctor invocation must set `BASH_ENV=` and `ENV=` before starting
-an exact trusted Bash with `--noprofile --norc -p`. Privileged mode prevents Bash
-from importing exported functions before the bridge bootstrap. Use `/bin/bash` when present; on
+Every runner and doctor invocation must set `BASH_ENV=`, `ENV=`, `LD_PRELOAD=`,
+`LD_AUDIT=`, `LD_LIBRARY_PATH=`, `GCONV_PATH=`, and the documented `DYLD_*`
+loader variables to empty before starting an exact trusted Bash with
+`--noprofile --norc -p`. This prevents native loader injection before line 1;
+privileged mode prevents Bash from importing exported functions before the bridge bootstrap. Use `/bin/bash` when present; on
 NixOS use an absolute, non-symlink Bash whose physical path is inside `/nix/store`.
 Never use a bare `bash` or a mutable custom PATH result. The bridge captures the
 caller's PATH as data, then builds its utility PATH only from fixed `/usr/bin` and
@@ -369,7 +374,7 @@ RECOMMENDATION: Create or paste a plan, or run /claude-review plan <path-to-plan
 6. Invoke:
 
 ```bash
-BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/run-review.sh \
+BASH_ENV= ENV= LD_PRELOAD= LD_AUDIT= LD_LIBRARY_PATH= GCONV_PATH= DYLD_INSERT_LIBRARIES= DYLD_LIBRARY_PATH= DYLD_FRAMEWORK_PATH= DYLD_FALLBACK_LIBRARY_PATH= DYLD_FALLBACK_FRAMEWORK_PATH= DYLD_FORCE_FLAT_NAMESPACE= DYLD_IMAGE_SUFFIX= DYLD_ROOT_PATH= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/run-review.sh \
   --mode plan \
   --artifact-file <temp-plan-file> \
   --base-prompt <skill-dir>/prompts/plan-review.base.md \
@@ -418,7 +423,7 @@ RECOMMENDATION: Ensure the repo has a reachable base branch or use /claude-revie
    base branch, and inline instructions for every listed part. Otherwise invoke:
 
 ```bash
-BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/run-review.sh \
+BASH_ENV= ENV= LD_PRELOAD= LD_AUDIT= LD_LIBRARY_PATH= GCONV_PATH= DYLD_INSERT_LIBRARIES= DYLD_LIBRARY_PATH= DYLD_FRAMEWORK_PATH= DYLD_FALLBACK_LIBRARY_PATH= DYLD_FALLBACK_FRAMEWORK_PATH= DYLD_FORCE_FLAT_NAMESPACE= DYLD_IMAGE_SUFFIX= DYLD_ROOT_PATH= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/run-review.sh \
   --mode code \
   --artifact-file <temp-artifact-file> \
   --base-prompt <skill-dir>/prompts/code-review.base.md \
@@ -452,7 +457,7 @@ Equivalent to `/claude-review challenge code [inline challenge focus]`.
    part. Otherwise invoke:
 
 ```bash
-BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/run-review.sh \
+BASH_ENV= ENV= LD_PRELOAD= LD_AUDIT= LD_LIBRARY_PATH= GCONV_PATH= DYLD_INSERT_LIBRARIES= DYLD_LIBRARY_PATH= DYLD_FRAMEWORK_PATH= DYLD_FALLBACK_LIBRARY_PATH= DYLD_FALLBACK_FRAMEWORK_PATH= DYLD_FORCE_FLAT_NAMESPACE= DYLD_IMAGE_SUFFIX= DYLD_ROOT_PATH= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/run-review.sh \
   --mode challenge_code \
   --artifact-file <temp-artifact-file> \
   --base-prompt <skill-dir>/prompts/challenge-code.base.md \
@@ -478,7 +483,7 @@ BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/run-revi
 3. Invoke:
 
 ```bash
-BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/run-review.sh \
+BASH_ENV= ENV= LD_PRELOAD= LD_AUDIT= LD_LIBRARY_PATH= GCONV_PATH= DYLD_INSERT_LIBRARIES= DYLD_LIBRARY_PATH= DYLD_FRAMEWORK_PATH= DYLD_FALLBACK_LIBRARY_PATH= DYLD_FALLBACK_FRAMEWORK_PATH= DYLD_FORCE_FLAT_NAMESPACE= DYLD_IMAGE_SUFFIX= DYLD_ROOT_PATH= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/run-review.sh \
   --mode challenge_plan \
   --artifact-file <temp-plan-file> \
   --base-prompt <skill-dir>/prompts/challenge-plan.base.md \
@@ -700,7 +705,7 @@ Print the returned effective values.
 Run:
 
 ```bash
-BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/claude-doctor.sh \
+BASH_ENV= ENV= LD_PRELOAD= LD_AUDIT= LD_LIBRARY_PATH= GCONV_PATH= DYLD_INSERT_LIBRARIES= DYLD_LIBRARY_PATH= DYLD_FRAMEWORK_PATH= DYLD_FALLBACK_LIBRARY_PATH= DYLD_FALLBACK_FRAMEWORK_PATH= DYLD_FORCE_FLAT_NAMESPACE= DYLD_IMAGE_SUFFIX= DYLD_ROOT_PATH= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/claude-doctor.sh \
   --repo-root <repo-root> \
   --skill-root <skill-dir> \
   --config-file <repo>/.codex/claude/config.env

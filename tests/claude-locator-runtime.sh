@@ -333,6 +333,21 @@ assert_eq "$newline_target" "$CLAUDE_LOCATOR_CANONICAL_TARGET" "trailing newline
 assert_eq "world_writable_file" "$CLAUDE_LOCATOR_VALIDATION_STATUS" "newline-bearing target receives its own trust result"
 pass "canonical symlink resolution preserves trailing newlines exactly"
 
+newline_parent="$TEST_ROOT/trusted/newline-parent"$'\n'
+trimmed_parent="$TEST_ROOT/trusted/newline-parent"
+mkdir -p "$newline_parent" "$trimmed_parent"
+cp "$TEST_ROOT/trusted/bin/claude" "$newline_parent/claude"
+cp "$TEST_ROOT/trusted/bin/claude" "$trimmed_parent/claude"
+chmod 777 "$newline_parent/claude"
+chmod 755 "$trimmed_parent/claude"
+ln -s "$newline_parent/claude" "$TEST_ROOT/trusted/bin/claude-newline-parent-link"
+if claude_locator_validate_candidate "$TEST_ROOT/trusted/bin/claude-newline-parent-link" "$ROOT" "$TEST_ROOT/work"; then
+  fail "newline-bearing parent was validated as its trimmed sibling"
+fi
+assert_eq "$newline_parent/claude" "$CLAUDE_LOCATOR_CANONICAL_TARGET" "trailing newline remains part of canonical parent"
+assert_eq "world_writable_file" "$CLAUDE_LOCATOR_VALIDATION_STATUS" "newline-parent target receives its own trust result"
+pass "canonical parent resolution preserves trailing newlines exactly"
+
 mkdir -p "$TEST_ROOT/intermediate-world"
 chmod 777 "$TEST_ROOT/intermediate-world"
 ln -s "$TEST_ROOT/trusted/bin/claude" "$TEST_ROOT/intermediate-world/claude-hop"
@@ -739,43 +754,89 @@ pass "direct and timeout transports strip exported Bash functions"
 python_injection_launcher="$TEST_ROOT/trusted/bin/python-injection-launcher"
 python_injection_path="$TEST_ROOT/interpreter-python-path"
 python_interpreter_marker="$TEST_ROOT/interpreter-python-startup-executed"
-mkdir -p "$python_injection_path"
+python_injection_home="$TEST_ROOT/interpreter-python-home"
+python_home_marker="$TEST_ROOT/interpreter-python-home-startup-executed"
+python_user_site="$(HOME="$python_injection_home" "$CLAUDE_RUNTIME_PYTHON_BIN" -I -S -c 'import site; print(site.getusersitepackages())')"
+mkdir -p "$python_injection_path" "$python_user_site"
 cat > "$python_injection_path/sitecustomize.py" <<'PY'
 from pathlib import Path
 import os
 
 Path(os.environ["INTERPRETER_INJECTION_MARKER"]).write_text("executed")
 PY
+cat > "$python_user_site/sitecustomize.py" <<'PY'
+from pathlib import Path
+import os
+
+Path(os.environ["INTERPRETER_HOME_MARKER"]).write_text("executed")
+PY
 cat > "$python_injection_launcher" <<'PY'
 #!/usr/bin/env python3
 print("safe")
 PY
 chmod 755 "$python_injection_launcher"
+claude_runtime_check_launcher_dependency "$python_injection_launcher" || fail "Python launcher dependency transport"
+claude_runtime_build_command "$python_injection_launcher"
+python_injection_command=("${CLAUDE_RUNTIME_COMMAND[@]}")
 direct_python_output="$(
+  HOME="$python_injection_home" \
   PYTHONPATH="$python_injection_path" \
   INTERPRETER_INJECTION_MARKER="$python_interpreter_marker" \
+  INTERPRETER_HOME_MARKER="$python_home_marker" \
   claude_runtime_run_direct \
     "$TEST_ROOT/work" \
     "$CLAUDE_RUNTIME_PYTHON_BIN" \
     "$python_driver" \
     - \
-    "$python_injection_launcher"
+    "${python_injection_command[@]}"
 )"
 timeout_python_output="$(
+  HOME="$python_injection_home" \
   PYTHONPATH="$python_injection_path" \
   INTERPRETER_INJECTION_MARKER="$python_interpreter_marker" \
+  INTERPRETER_HOME_MARKER="$python_home_marker" \
   claude_runtime_run_with_timeout \
     "$CLAUDE_RUNTIME_PYTHON_BIN" \
     "$python_driver" \
     "$TEST_ROOT/work" \
     5 \
     - \
-    "$python_injection_launcher"
+    "${python_injection_command[@]}"
 )"
 assert_eq "safe" "$direct_python_output" "direct Python startup filter"
 assert_eq "safe" "$timeout_python_output" "timeout Python startup filter"
 [ ! -e "$python_interpreter_marker" ] || fail "validated Python launcher loaded inherited startup code"
+[ ! -e "$python_home_marker" ] || fail "validated Python launcher loaded HOME user-site startup code"
 pass "direct and timeout transports strip interpreter startup injection"
+
+zsh_bin="$(type -P zsh 2>/dev/null || true)"
+if [ -n "$zsh_bin" ]; then
+  zsh_injection_home="$TEST_ROOT/interpreter-zsh-home"
+  zsh_injection_marker="$TEST_ROOT/interpreter-zsh-startup-executed"
+  zsh_injection_launcher="$TEST_ROOT/trusted/bin/zsh-injection-launcher"
+  mkdir -p "$zsh_injection_home"
+  cat > "$zsh_injection_home/.zshenv" <<SH
+printf executed > "$zsh_injection_marker"
+SH
+  printf '#!%s\nprintf safe\n' "$zsh_bin" > "$zsh_injection_launcher"
+  chmod 755 "$zsh_injection_launcher"
+  claude_runtime_check_launcher_dependency "$zsh_injection_launcher" || fail "zsh launcher dependency transport"
+  claude_runtime_build_command "$zsh_injection_launcher"
+  zsh_injection_command=("${CLAUDE_RUNTIME_COMMAND[@]}")
+  zsh_output="$(
+    HOME="$zsh_injection_home" \
+    claude_runtime_run_with_timeout \
+      "$CLAUDE_RUNTIME_PYTHON_BIN" \
+      "$python_driver" \
+      "$TEST_ROOT/work" \
+      5 \
+      - \
+      "${zsh_injection_command[@]}"
+  )"
+  assert_eq "safe" "$zsh_output" "zsh startup filter"
+  [ ! -e "$zsh_injection_marker" ] || fail "validated zsh launcher loaded HOME startup code"
+fi
+pass "validated zsh launcher suppresses HOME startup files"
 
 timeout_cdpath="$TEST_ROOT/timeout-cdpath-one:$TEST_ROOT/timeout-cdpath-two"
 claude_runtime_resolve_trusted_python "$ROOT" "$TEST_ROOT/work" "$TEST_ROOT/work" || fail "trusted Python CDPATH transport resolution"
@@ -1199,5 +1260,5 @@ if before_files != after_files:
 PY
 pass "bounded helper source purity"
 
-assert_eq "direct_inherited_path_v5" "$CLAUDE_RUNTIME_CONTRACT" "runtime contract label"
+assert_eq "direct_inherited_path_v6" "$CLAUDE_RUNTIME_CONTRACT" "runtime contract label"
 pass "shared helper contracts"

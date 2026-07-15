@@ -3,14 +3,24 @@
 case "$-" in
   *p*) ;;
   *)
-    builtin printf '%s\n' 'claude-doctor.sh requires Bash privileged mode before line 1; invoke it with: BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <installed-doctor>' >&2
+    builtin printf '%s\n' 'claude-doctor.sh requires Bash privileged mode before line 1; use the documented loader-scrubbed trusted-Bash invocation.' >&2
     builtin exit 2
     ;;
 esac
 if [[ -n "${BASH_ENV-}" || -n "${ENV-}" ]]; then
-  builtin printf '%s\n' 'claude-doctor.sh requires BASH_ENV and ENV to be empty before Bash starts; invoke it with: BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <installed-doctor>' >&2
+  builtin printf '%s\n' 'claude-doctor.sh requires BASH_ENV and ENV to be empty before Bash starts; use the documented loader-scrubbed trusted-Bash invocation.' >&2
   builtin exit 2
 fi
+
+CLAUDE_BOOTSTRAP_LOADER_ENV_NAMES="LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH GCONV_PATH DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH DYLD_FORCE_FLAT_NAMESPACE DYLD_IMAGE_SUFFIX DYLD_ROOT_PATH"
+for claude_bootstrap_env_name in $CLAUDE_BOOTSTRAP_LOADER_ENV_NAMES; do
+  if [[ -n "${!claude_bootstrap_env_name-}" ]]; then
+    builtin printf 'claude-doctor.sh requires %s to be empty before Bash starts; use the documented loader-scrubbed trusted-Bash invocation.\n' "$claude_bootstrap_env_name" >&2
+    builtin exit 2
+  fi
+done
+unset $CLAUDE_BOOTSTRAP_LOADER_ENV_NAMES
+unset CLAUDE_BOOTSTRAP_LOADER_ENV_NAMES claude_bootstrap_env_name
 
 CLAUDE_RUNTIME_INHERITED_PATH="${PATH-}"
 export CLAUDE_RUNTIME_INHERITED_PATH
@@ -535,13 +545,14 @@ fi
 
 if ! load_required_claude_helper \
   "$LOCATOR_HELPER" \
-  "# claude-review-helper-complete: locator_v4" \
+  "# claude-review-helper-complete: locator_v5" \
   claude_locator_path_candidate \
   claude_locator_native_supported \
   claude_locator_native_path \
   claude_locator_homebrew_paths \
   claude_locator_first_present_fallback \
   claude_locator_is_dangling_symlink \
+  claude_locator_physical_directory \
   claude_locator_validate_candidate \
   claude_locator_validate_launcher_dependency; then
   print_kv "doctor_status" "bridge_installation_incomplete"
@@ -552,9 +563,10 @@ fi
 
 if ! load_required_claude_helper \
   "$RUNTIME_HELPER" \
-  "# claude-review-helper-complete: runtime_v5" \
+  "# claude-review-helper-complete: runtime_v6" \
   claude_runtime_check_launcher_dependency \
   claude_runtime_build_command \
+  claude_runtime_interpreter_startup_args \
   claude_runtime_invoke_trusted_python \
   claude_runtime_is_native_executable \
   claude_runtime_probe_with_timeout \
@@ -573,14 +585,14 @@ if ! load_required_claude_helper \
   exit 0
 fi
 
-if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v4" ]; then
+if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v5" ]; then
   print_kv "doctor_status" "bridge_installation_incomplete"
   print_kv "bridge_component" "claude-locator.sh"
   print_kv "bridge_guidance" "Reinstall or update the complete claude-review skill, then retry."
   exit 0
 fi
 
-if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v5" ]; then
+if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v6" ]; then
   print_kv "doctor_status" "bridge_installation_incomplete"
   print_kv "bridge_component" "claude-runtime.sh"
   print_kv "bridge_guidance" "Reinstall or update the complete claude-review skill, then retry."
@@ -824,8 +836,8 @@ for scrubbed_name in $CLAUDE_RUNTIME_SCRUBBED_ENV_NAMES; do
   print_kv "scrubbed_env_${scrubbed_name}" "$(redacted_env_presence "$scrubbed_name")"
 done
 print_kv "login_profile_loaded" "false"
-print_kv "inherited_env_note" "absent means not inherited by Codex; doctor does not source profiles or inspect Claude settings.json"
-print_kv "inherited_env_guidance" "Put required config, proxy, CA, certificate-store, and mTLS values in Codex's launch environment or Claude settings.json; do not rely on profile sourcing."
+print_kv "inherited_env_note" "absent means not inherited by Codex; doctor does not source profiles or inspect Claude settings files"
+print_kv "inherited_env_guidance" "Put required config, proxy, CA, certificate-store, and mTLS values in Codex's launch environment; hardened local-only probes run from a private runtime directory and do not consume user/project Claude settings."
 print_kv "scrubbed_env_note" "present means inherited by doctor but removed before the validated Claude interpreter chain starts; values are never printed"
 print_kv "claude_auth_context" "subscription_only_credentials_scrubbed"
 print_kv "python_runtime_status" "${CLAUDE_RUNTIME_PYTHON_STATUS:-missing}"

@@ -103,6 +103,18 @@ run_doctor() {
     ANTHROPIC_CONSOLE_AUTH_TOKEN="console-auth-secret" \
     BASH_ENV= \
     ENV= \
+    LD_PRELOAD= \
+    LD_AUDIT= \
+    LD_LIBRARY_PATH= \
+    GCONV_PATH= \
+    DYLD_INSERT_LIBRARIES= \
+    DYLD_LIBRARY_PATH= \
+    DYLD_FRAMEWORK_PATH= \
+    DYLD_FALLBACK_LIBRARY_PATH= \
+    DYLD_FALLBACK_FRAMEWORK_PATH= \
+    DYLD_FORCE_FLAT_NAMESPACE= \
+    DYLD_IMAGE_SUFFIX= \
+    DYLD_ROOT_PATH= \
     /bin/bash --noprofile --norc -p "$skill_root/scripts/claude-doctor.sh" \
       --repo-root "$repo_root" \
       --skill-root "$skill_root" \
@@ -227,7 +239,7 @@ assert_line "$basic_output" "claude_bin=$path_bin/claude" "absolute launch path"
 assert_line "$basic_output" "claude_target=$path_bin/claude" "canonical target"
 assert_line "$basic_output" "claude_trust_scope=none" "safe trust scope"
 assert_line "$basic_output" "claude_trust_reason=none" "safe trust reason"
-assert_line "$basic_output" "claude_runtime_contract=direct_inherited_path_v5" "runtime contract"
+assert_line "$basic_output" "claude_runtime_contract=direct_inherited_path_v6" "runtime contract"
 assert_line "$basic_output" "claude_version=2.test.0 (Claude Code fake)" "version"
 assert_line "$basic_output" "claude_auth_logged_in=True" "auth state"
 assert_line "$basic_output" "claude_auth_provider=firstParty" "auth provider"
@@ -680,7 +692,7 @@ from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
-marker = "# claude-review-helper-complete: locator_v4"
+marker = "# claude-review-helper-complete: locator_v5"
 replacement = "claude_locator_resolve_trusted_utility() { return 1; }\n\n" + marker
 path.write_text(path.read_text().replace(marker, replacement))
 PY
@@ -746,7 +758,7 @@ from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
-marker = "# claude-review-helper-complete: runtime_v5"
+marker = "# claude-review-helper-complete: runtime_v6"
 replacement = "claude_runtime_is_native_executable() { return 2; }\n\n" + marker
 path.write_text(path.read_text().replace(marker, replacement))
 PY
@@ -829,7 +841,9 @@ profile_output="$(run_doctor "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$profile_ho
 assert_line "$profile_output" "inherited_env_HTTPS_PROXY=absent" "profile-only proxy absent"
 assert_line "$profile_output" "inherited_env_NODE_EXTRA_CA_CERTS=absent" "profile-only CA absent"
 assert_line "$profile_output" "inherited_env_CLAUDE_CONFIG_DIR=absent" "profile-only config absent"
-assert_contains "$profile_output" "Codex's launch environment or Claude settings.json" "profile recovery guidance"
+assert_contains "$profile_output" "Codex's launch environment" "profile recovery guidance"
+assert_contains "$profile_output" "do not consume user/project Claude settings" "local-only settings guidance"
+assert_not_contains "$profile_output" "launch environment or Claude settings.json" "excluded settings recovery guidance"
 [ ! -e "$profile_marker" ] || fail "doctor sourced a login profile"
 assert_not_contains "$profile_output" "profile-proxy-secret" "profile value redaction"
 pass "doctor never sources login profiles for config or network variables"
@@ -849,14 +863,14 @@ run_bootstrap_case() {
     missing_locator) rm -f "$skill/scripts/claude-locator.sh" ;;
     missing_runtime) rm -f "$skill/scripts/claude-runtime.sh" ;;
     invalid_config) printf 'if then\n# claude-review-helper-complete: config_v1\n' > "$skill/scripts/claude-config.sh" ;;
-    invalid_locator) printf 'if then\n# claude-review-helper-complete: locator_v4\n' > "$skill/scripts/claude-locator.sh" ;;
+    invalid_locator) printf 'if then\n# claude-review-helper-complete: locator_v5\n' > "$skill/scripts/claude-locator.sh" ;;
     empty_runtime) : > "$skill/scripts/claude-runtime.sh" ;;
     no_marker_config) printf 'readonly CLAUDE_CONFIG_CONTRACT="config_v1"\nclaude_config_load_file() { :; }\nclaude_config_main() { :; }\n' > "$skill/scripts/claude-config.sh" ;;
     no_marker_runtime) printf 'claude_runtime_build_command() { :; }\nclaude_runtime_check_launcher_dependency() { :; }\n' > "$skill/scripts/claude-runtime.sh" ;;
     missing_symbol_config) sed 's/^claude_config_load_file()/claude_config_load_file_missing()/' "$REPO_ROOT/scripts/claude-config.sh" > "$skill/scripts/claude-config.sh" ;;
     missing_symbol_locator) sed 's/^claude_locator_validate_candidate()/claude_locator_validate_candidate_missing()/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
-    stale_locator) sed -e 's/bounded_path_native_homebrew_v4/bounded_path_native_homebrew_v3/' -e 's/locator_v4/locator_v3/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
-    stale_runtime) sed -e 's/direct_inherited_path_v5/direct_inherited_path_v4/' -e 's/runtime_v5/runtime_v4/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
+    stale_locator) sed -e 's/bounded_path_native_homebrew_v5/bounded_path_native_homebrew_v4/' -e 's/locator_v5/locator_v4/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
+    stale_runtime) sed -e 's/direct_inherited_path_v6/direct_inherited_path_v5/' -e 's/runtime_v6/runtime_v5/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
   esac
   output="$(run_doctor "$skill" "$REPO_ROOT" "$REPO_ROOT" "$HOME" "$path_value" "$candidate_log" --skip-probes 2>&1)"
   assert_line "$output" "doctor_status=bridge_installation_incomplete" "$case_name status"

@@ -142,6 +142,18 @@ run_runner() {
     ZDOTDIR="$TEST_ROOT/runner-zdotdir" \
     BASH_ENV= \
     ENV= \
+    LD_PRELOAD= \
+    LD_AUDIT= \
+    LD_LIBRARY_PATH= \
+    GCONV_PATH= \
+    DYLD_INSERT_LIBRARIES= \
+    DYLD_LIBRARY_PATH= \
+    DYLD_FRAMEWORK_PATH= \
+    DYLD_FALLBACK_LIBRARY_PATH= \
+    DYLD_FALLBACK_FRAMEWORK_PATH= \
+    DYLD_FORCE_FLAT_NAMESPACE= \
+    DYLD_IMAGE_SUFFIX= \
+    DYLD_ROOT_PATH= \
     /bin/bash --noprofile --norc -p "$skill_root/scripts/run-review.sh" \
       --mode code \
       --artifact-file "$artifact_file" \
@@ -268,6 +280,10 @@ SH
 chmod 755 "$bootstrap_hostile_bin/dirname"
 bootstrap_output="$({
   export BASH_ENV="$bootstrap_hook" ENV="$bootstrap_hook"
+  export LD_PRELOAD="$TEST_ROOT/loader-preload" LD_AUDIT="$TEST_ROOT/loader-audit" LD_LIBRARY_PATH="$TEST_ROOT/loader-path"
+  export GCONV_PATH="$TEST_ROOT/gconv-path" DYLD_INSERT_LIBRARIES="$TEST_ROOT/dyld-insert" DYLD_LIBRARY_PATH="$TEST_ROOT/dyld-library"
+  export DYLD_FRAMEWORK_PATH="$TEST_ROOT/dyld-framework" DYLD_FALLBACK_LIBRARY_PATH="$TEST_ROOT/dyld-fallback-library"
+  export DYLD_FALLBACK_FRAMEWORK_PATH="$TEST_ROOT/dyld-fallback-framework" DYLD_FORCE_FLAT_NAMESPACE=1 DYLD_IMAGE_SUFFIX=_hostile DYLD_ROOT_PATH="$TEST_ROOT/dyld-root"
   run_runner "$REPO_ROOT" "$REPO_ROOT" "$REPO_ROOT" "$native_home" "$bootstrap_hostile_bin:$SYSTEM_PATH" "$bootstrap_log"
 })"
 assert_json_status "$bootstrap_output" clean ok
@@ -275,6 +291,17 @@ assert_json_status "$bootstrap_output" clean ok
 [ ! -e "$bootstrap_tool_marker" ] || fail "runner bootstrap executed a caller-PATH utility"
 [ "$(grep '^path=' "$bootstrap_log" | sort -u)" = "path=$bootstrap_hostile_bin:$SYSTEM_PATH" ] || fail "runner did not restore inherited PATH for Claude"
 pass "fixed-shell bootstrap rejects startup hooks and caller-PATH utilities"
+
+set +e
+loader_guard_output="$(
+  BASH_ENV= ENV= LD_LIBRARY_PATH="$TEST_ROOT/nonempty-loader-path" \
+    /bin/bash --noprofile --norc -p "$REPO_ROOT/scripts/run-review.sh" --help 2>&1
+)"
+loader_guard_status=$?
+set -e
+[ "$loader_guard_status" -eq 2 ] || fail "runner accepted a nonempty pre-bootstrap loader variable"
+printf '%s\n' "$loader_guard_output" | grep -Fq "requires LD_LIBRARY_PATH to be empty before Bash starts" || fail "loader guard guidance"
+pass "runner requires native loader variables to be empty before bootstrap"
 
 exported_function_home="$TEST_ROOT/exported-function-home"
 exported_function_log="$TEST_ROOT/exported-function.log"
@@ -612,7 +639,7 @@ from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
-marker = "# claude-review-helper-complete: locator_v4"
+marker = "# claude-review-helper-complete: locator_v5"
 replacement = "claude_locator_resolve_trusted_utility() { return 1; }\n\n" + marker
 path.write_text(path.read_text().replace(marker, replacement))
 PY
@@ -758,14 +785,14 @@ run_bootstrap_case() {
     missing_locator) rm -f "$skill/scripts/claude-locator.sh" ;;
     missing_runtime) rm -f "$skill/scripts/claude-runtime.sh" ;;
     invalid_config) printf 'if then\n# claude-review-helper-complete: config_v1\n' > "$skill/scripts/claude-config.sh" ;;
-    invalid_locator) printf 'if then\n# claude-review-helper-complete: locator_v4\n' > "$skill/scripts/claude-locator.sh" ;;
+    invalid_locator) printf 'if then\n# claude-review-helper-complete: locator_v5\n' > "$skill/scripts/claude-locator.sh" ;;
     empty_runtime) : > "$skill/scripts/claude-runtime.sh" ;;
     no_marker_config) printf 'readonly CLAUDE_CONFIG_CONTRACT="config_v1"\nclaude_config_load_file() { :; }\nclaude_config_main() { :; }\n' > "$skill/scripts/claude-config.sh" ;;
     no_marker_runtime) printf 'claude_runtime_build_command() { :; }\nclaude_runtime_check_launcher_dependency() { :; }\nclaude_runtime_scrub_environment() { :; }\n' > "$skill/scripts/claude-runtime.sh" ;;
     missing_symbol_config) sed 's/^claude_config_load_file()/claude_config_load_file_missing()/' "$REPO_ROOT/scripts/claude-config.sh" > "$skill/scripts/claude-config.sh" ;;
     missing_symbol_locator) sed 's/^claude_locator_validate_candidate()/claude_locator_validate_candidate_missing()/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
-    stale_locator) sed -e 's/bounded_path_native_homebrew_v4/bounded_path_native_homebrew_v3/' -e 's/locator_v4/locator_v3/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
-    stale_runtime) sed -e 's/direct_inherited_path_v5/direct_inherited_path_v4/' -e 's/runtime_v5/runtime_v4/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
+    stale_locator) sed -e 's/bounded_path_native_homebrew_v5/bounded_path_native_homebrew_v4/' -e 's/locator_v5/locator_v4/' "$REPO_ROOT/scripts/claude-locator.sh" > "$skill/scripts/claude-locator.sh" ;;
+    stale_runtime) sed -e 's/direct_inherited_path_v6/direct_inherited_path_v5/' -e 's/runtime_v6/runtime_v5/' "$REPO_ROOT/scripts/claude-runtime.sh" > "$skill/scripts/claude-runtime.sh" ;;
   esac
   output="$(run_runner "$skill" "$REPO_ROOT" "$REPO_ROOT" "$HOME" "$path_root/bin:$SYSTEM_PATH" "$candidate_log" 2>&1)"
   assert_json_status "$output" blocked "installation is incomplete"

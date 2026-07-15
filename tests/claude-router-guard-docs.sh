@@ -36,8 +36,8 @@ grep -Fq 'A later or' "$SKILL_FILE" || fail "SKILL.md stale affirmative guard mi
 grep -Fq 'diagnostic only: never modify PATH' "$SKILL_FILE" || fail "SKILL.md doctor mutation prohibition missing"
 grep -Fq 'Budget caps, review timeouts, artifacts, missing' "$SKILL_FILE" || fail "SKILL.md direct-remediation exclusions missing"
 grep -Fq 'state-write denial retain their direct remediation' "$SKILL_FILE" || fail "SKILL.md state-write exclusion missing"
-grep -Fq 'BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/run-review.sh' "$SKILL_FILE" || fail "SKILL.md trusted-shell runner invocation missing"
-grep -Fq 'BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/claude-doctor.sh' "$SKILL_FILE" || fail "SKILL.md trusted-shell doctor invocation missing"
+grep -Fq 'BASH_ENV= ENV= LD_PRELOAD= LD_AUDIT= LD_LIBRARY_PATH= GCONV_PATH= DYLD_INSERT_LIBRARIES= DYLD_LIBRARY_PATH= DYLD_FRAMEWORK_PATH= DYLD_FALLBACK_LIBRARY_PATH= DYLD_FALLBACK_FRAMEWORK_PATH= DYLD_FORCE_FLAT_NAMESPACE= DYLD_IMAGE_SUFFIX= DYLD_ROOT_PATH= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/run-review.sh' "$SKILL_FILE" || fail "SKILL.md loader-scrubbed trusted-shell runner invocation missing"
+grep -Fq 'BASH_ENV= ENV= LD_PRELOAD= LD_AUDIT= LD_LIBRARY_PATH= GCONV_PATH= DYLD_INSERT_LIBRARIES= DYLD_LIBRARY_PATH= DYLD_FRAMEWORK_PATH= DYLD_FALLBACK_LIBRARY_PATH= DYLD_FALLBACK_FRAMEWORK_PATH= DYLD_FORCE_FLAT_NAMESPACE= DYLD_IMAGE_SUFFIX= DYLD_ROOT_PATH= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/claude-doctor.sh' "$SKILL_FILE" || fail "SKILL.md loader-scrubbed trusted-shell doctor invocation missing"
 grep -Fq 'claude_build_trusted_bootstrap_path' "$RUNNER_FILE" || fail "runner trusted bootstrap PATH missing"
 grep -Fq 'requires Bash privileged mode before line 1' "$RUNNER_FILE" || fail "runner privileged-Bash guard missing"
 grep -Fq 'requires Bash privileged mode before line 1' "$REPO_ROOT/scripts/claude-doctor.sh" || fail "doctor privileged-Bash guard missing"
@@ -58,7 +58,7 @@ trusted_review_bridge_guidance
 BASH
 })"
 printf '%s\n' "$installed_guidance" | grep -Fq '["/bin/bash", "--noprofile", "--norc", "-p",' || fail "installed-runner guidance lacks exact trusted Bash prefix"
-printf '%s\n' "$installed_guidance" | grep -Fq 'start it with BASH_ENV= and ENV= empty' || fail "installed-runner guidance lacks startup-environment safeguard"
+printf '%s\n' "$installed_guidance" | grep -Fq 'start it with BASH_ENV, ENV, LD_PRELOAD, LD_AUDIT, LD_LIBRARY_PATH, GCONV_PATH, and the documented DYLD loader variables empty' || fail "installed-runner guidance lacks loader startup safeguard"
 if printf '%s\n' "$installed_guidance" | grep -Fq '["bash",'; then
   fail "installed-runner guidance retains bare Bash prefix"
 fi

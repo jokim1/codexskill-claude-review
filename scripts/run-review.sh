@@ -3,14 +3,24 @@
 case "$-" in
   *p*) ;;
   *)
-    builtin printf '%s\n' 'run-review.sh requires Bash privileged mode before line 1; invoke it with: BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <installed-runner>' >&2
+    builtin printf '%s\n' 'run-review.sh requires Bash privileged mode before line 1; use the documented loader-scrubbed trusted-Bash invocation.' >&2
     builtin exit 2
     ;;
 esac
 if [[ -n "${BASH_ENV-}" || -n "${ENV-}" ]]; then
-  builtin printf '%s\n' 'run-review.sh requires BASH_ENV and ENV to be empty before Bash starts; invoke it with: BASH_ENV= ENV= <trusted-bash> --noprofile --norc -p <installed-runner>' >&2
+  builtin printf '%s\n' 'run-review.sh requires BASH_ENV and ENV to be empty before Bash starts; use the documented loader-scrubbed trusted-Bash invocation.' >&2
   builtin exit 2
 fi
+
+CLAUDE_BOOTSTRAP_LOADER_ENV_NAMES="LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH GCONV_PATH DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH DYLD_FORCE_FLAT_NAMESPACE DYLD_IMAGE_SUFFIX DYLD_ROOT_PATH"
+for claude_bootstrap_env_name in $CLAUDE_BOOTSTRAP_LOADER_ENV_NAMES; do
+  if [[ -n "${!claude_bootstrap_env_name-}" ]]; then
+    builtin printf 'run-review.sh requires %s to be empty before Bash starts; use the documented loader-scrubbed trusted-Bash invocation.\n' "$claude_bootstrap_env_name" >&2
+    builtin exit 2
+  fi
+done
+unset $CLAUDE_BOOTSTRAP_LOADER_ENV_NAMES
+unset CLAUDE_BOOTSTRAP_LOADER_ENV_NAMES claude_bootstrap_env_name
 
 CLAUDE_RUNTIME_INHERITED_PATH="${PATH-}"
 export CLAUDE_RUNTIME_INHERITED_PATH
@@ -660,13 +670,14 @@ REVIEW_TIMEOUT_SECONDS="$CLAUDE_CONFIG_DEFAULT_REVIEW_TIMEOUT_SECONDS"
 
 if ! load_required_claude_helper \
   "$CLAUDE_LOCATOR_HELPER" \
-  "# claude-review-helper-complete: locator_v4" \
+  "# claude-review-helper-complete: locator_v5" \
   claude_locator_path_candidate \
   claude_locator_native_supported \
   claude_locator_native_path \
   claude_locator_homebrew_paths \
   claude_locator_first_present_fallback \
   claude_locator_is_dangling_symlink \
+  claude_locator_physical_directory \
   claude_locator_validate_candidate \
   claude_locator_validate_launcher_dependency; then
   emit_bridge_installation_incomplete "claude-locator.sh"
@@ -675,9 +686,10 @@ fi
 
 if ! load_required_claude_helper \
   "$CLAUDE_RUNTIME_HELPER" \
-  "# claude-review-helper-complete: runtime_v5" \
+  "# claude-review-helper-complete: runtime_v6" \
   claude_runtime_check_launcher_dependency \
   claude_runtime_build_command \
+  claude_runtime_interpreter_startup_args \
   claude_runtime_invoke_trusted_python \
   claude_runtime_is_native_executable \
   claude_runtime_probe_with_timeout \
@@ -694,12 +706,12 @@ if ! load_required_claude_helper \
   exit 0
 fi
 
-if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v4" ]; then
+if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v5" ]; then
   emit_bridge_installation_incomplete "claude-locator.sh"
   exit 0
 fi
 
-if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v5" ]; then
+if [ "${CLAUDE_RUNTIME_CONTRACT:-}" != "direct_inherited_path_v6" ]; then
   emit_bridge_installation_incomplete "claude-runtime.sh"
   exit 0
 fi
@@ -845,11 +857,11 @@ trusted_review_bridge_guidance() {
   esac
 
   if [ -n "$installed_run_review" ] && [ -e "$installed_run_review" ]; then
-    printf 'If this review bridge is running inside the Codex filesystem sandbox, start it with BASH_ENV= and ENV= empty, run it outside that sandbox, or approve this exact trusted installed-skill command prefix: ["%s", "--noprofile", "--norc", "-p", "%s"]. Do not approve repo-local worktree copies or broad shell prefixes. If it still fails outside the sandbox, check ownership and permissions for ~/.claude or CLAUDE_CONFIG_DIR.' "$trusted_bash" "$installed_run_review"
+    printf 'If this review bridge is running inside the Codex filesystem sandbox, start it with BASH_ENV, ENV, LD_PRELOAD, LD_AUDIT, LD_LIBRARY_PATH, GCONV_PATH, and the documented DYLD loader variables empty; run it outside that sandbox, or approve this exact trusted installed-skill command prefix: ["%s", "--noprofile", "--norc", "-p", "%s"]. Do not approve repo-local worktree copies or broad shell prefixes. If it still fails outside the sandbox, check ownership and permissions for ~/.claude or CLAUDE_CONFIG_DIR.' "$trusted_bash" "$installed_run_review"
     return 0
   fi
 
-  printf 'If this review bridge is running inside the Codex filesystem sandbox, run the fixed-shell command outside that sandbox or approve only ["%s", "--noprofile", "--norc", "-p", "<installed-skill>/scripts/run-review.sh"]. Start it with BASH_ENV and ENV empty. Do not approve repo-local worktree copies or broad shell prefixes. If it still fails outside the sandbox, check ownership and permissions for ~/.claude or CLAUDE_CONFIG_DIR.' "$trusted_bash"
+  printf 'If this review bridge is running inside the Codex filesystem sandbox, run the fixed-shell command outside that sandbox or approve only ["%s", "--noprofile", "--norc", "-p", "<installed-skill>/scripts/run-review.sh"]. Start it with BASH_ENV, ENV, LD_PRELOAD, LD_AUDIT, LD_LIBRARY_PATH, GCONV_PATH, and the documented DYLD loader variables empty. Do not approve repo-local worktree copies or broad shell prefixes. If it still fails outside the sandbox, check ownership and permissions for ~/.claude or CLAUDE_CONFIG_DIR.' "$trusted_bash"
 }
 
 validate_readable_inputs() {

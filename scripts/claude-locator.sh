@@ -3,7 +3,7 @@
 # Shared Claude launcher discovery and trust validation. This file must remain
 # source-pure: definitions and readonly contract constants only.
 
-readonly CLAUDE_LOCATOR_CONTRACT="bounded_path_native_homebrew_v4"
+readonly CLAUDE_LOCATOR_CONTRACT="bounded_path_native_homebrew_v5"
 readonly CLAUDE_LOCATOR_TRUSTED_STORE_ROOT="/nix/store"
 
 claude_locator_native_supported() {
@@ -215,6 +215,17 @@ claude_locator_first_present_fallback() {
   return 1
 }
 
+claude_locator_physical_directory() {
+  local directory="$1"
+  local physical_output=""
+
+  physical_output="$(CDPATH=; cd -P -- "$directory" 2>/dev/null && printf '%s\001' "$PWD")" || return 1
+  case "$physical_output" in
+    *$'\001') CLAUDE_LOCATOR_PHYSICAL_DIRECTORY="${physical_output%$'\001'}" ;;
+    *) return 1 ;;
+  esac
+}
+
 claude_locator_physical_launch_path() {
   local raw_path="$1"
   local invocation_cwd="$2"
@@ -235,7 +246,8 @@ claude_locator_physical_launch_path() {
   basename_part="${joined##*/}"
   parent="${joined%/*}"
   [ -n "$parent" ] || parent="/"
-  physical_parent="$(CDPATH=; cd -P -- "$parent" 2>/dev/null && pwd -P)" || return 1
+  claude_locator_physical_directory "$parent" || return 1
+  physical_parent="$CLAUDE_LOCATOR_PHYSICAL_DIRECTORY"
   if [ "$physical_parent" = "/" ]; then
     printf '/%s' "$basename_part"
   else
@@ -402,7 +414,8 @@ claude_locator_canonical_target() {
     basename_part="${current##*/}"
     parent="${current%/*}"
     [ -n "$parent" ] || parent="/"
-    physical_parent="$(CDPATH=; cd -P -- "$parent" 2>/dev/null && pwd -P)" || return 3
+    claude_locator_physical_directory "$parent" || return 3
+    physical_parent="$CLAUDE_LOCATOR_PHYSICAL_DIRECTORY"
     if [ "$physical_parent" = "/" ]; then
       current="/$basename_part"
     else
@@ -436,7 +449,8 @@ claude_locator_canonical_target() {
   basename_part="${current##*/}"
   parent="${current%/*}"
   [ -n "$parent" ] || parent="/"
-  physical_parent="$(CDPATH=; cd -P -- "$parent" 2>/dev/null && pwd -P)" || return 3
+  claude_locator_physical_directory "$parent" || return 3
+  physical_parent="$CLAUDE_LOCATOR_PHYSICAL_DIRECTORY"
   if [ ! -e "$current" ] && [ ! -L "$current" ]; then
     [ -r "$physical_parent" ] && [ -x "$physical_parent" ] || return 3
     return 4
@@ -727,4 +741,4 @@ claude_locator_validate_launcher_dependency() {
   [ "$dependency_valid" = true ]
 }
 
-# claude-review-helper-complete: locator_v4
+# claude-review-helper-complete: locator_v5

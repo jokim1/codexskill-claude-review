@@ -3,8 +3,8 @@
 # Shared direct Claude command transport. This file must remain source-pure:
 # definitions and readonly contract constants only.
 
-readonly CLAUDE_RUNTIME_CONTRACT="direct_inherited_path_v5"
-readonly CLAUDE_RUNTIME_SCRUBBED_ENV_NAMES="ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH GCONV_PATH NODE_OPTIONS NODE_PATH PYTHONHOME PYTHONPATH PYTHONSTARTUP PYTHONINSPECT PYTHONBREAKPOINT PYTHONWARNINGS PYTHONUSERBASE RUBYOPT RUBYLIB RUBYGEMS_GEMDEPS GEM_HOME GEM_PATH BUNDLE_GEMFILE PERL5OPT PERL5LIB PERLLIB PERL_LOCAL_LIB_ROOT ZDOTDIR FPATH LUA_INIT LUA_PATH LUA_CPATH JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS CLASSPATH DOTNET_STARTUP_HOOKS CORECLR_ENABLE_PROFILING CORECLR_PROFILER CORECLR_PROFILER_PATH COR_ENABLE_PROFILING COR_PROFILER PHPRC PHP_INI_SCAN_DIR AWKPATH AWKLIBPATH TCLLIBPATH"
+readonly CLAUDE_RUNTIME_CONTRACT="direct_inherited_path_v6"
+readonly CLAUDE_RUNTIME_SCRUBBED_ENV_NAMES="ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN ANTHROPIC_BEARER_TOKEN ANTHROPIC_CONSOLE_API_KEY ANTHROPIC_CONSOLE_AUTH_TOKEN BASH_ENV ENV LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT DYLD_INSERT_LIBRARIES DYLD_LIBRARY_PATH DYLD_FRAMEWORK_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH DYLD_FORCE_FLAT_NAMESPACE DYLD_IMAGE_SUFFIX DYLD_ROOT_PATH GCONV_PATH NODE_OPTIONS NODE_PATH PYTHONHOME PYTHONPATH PYTHONSTARTUP PYTHONINSPECT PYTHONBREAKPOINT PYTHONWARNINGS PYTHONUSERBASE RUBYOPT RUBYLIB RUBYGEMS_GEMDEPS GEM_HOME GEM_PATH BUNDLE_GEMFILE PERL5OPT PERL5LIB PERLLIB PERL_LOCAL_LIB_ROOT ZDOTDIR FPATH LUA_INIT LUA_PATH LUA_CPATH JAVA_TOOL_OPTIONS JDK_JAVA_OPTIONS _JAVA_OPTIONS CLASSPATH DOTNET_STARTUP_HOOKS CORECLR_ENABLE_PROFILING CORECLR_PROFILER CORECLR_PROFILER_PATH COR_ENABLE_PROFILING COR_PROFILER PHPRC PHP_INI_SCAN_DIR AWKPATH AWKLIBPATH TCLLIBPATH"
 
 claude_runtime_scrub_environment() {
   local scrubbed_name=""
@@ -20,24 +20,50 @@ claude_runtime_invoke_trusted_python() {
 
   (
     claude_runtime_scrub_environment
-    MSYS2_ARG_CONV_EXCL='*' "$python_bin" -I "$@"
+    MSYS2_ARG_CONV_EXCL='*' "$python_bin" -I -S "$@"
   )
 }
 
 claude_runtime_build_command() {
   local launch_path="${1:-}"
+  local launcher_index=0
+  local launcher_transport=()
   shift || true
 
-  CLAUDE_RUNTIME_COMMAND=("$launch_path" "$@")
+  launcher_transport=("${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[@]+"${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[@]}"}")
+  if [ "${#launcher_transport[@]}" -eq 0 ]; then
+    launcher_transport=("$launch_path")
+  else
+    launcher_index=$((${#launcher_transport[@]} - 1))
+    launcher_transport[$launcher_index]="$launch_path"
+  fi
+  CLAUDE_RUNTIME_COMMAND_TRANSPORT_COUNT="${#launcher_transport[@]}"
+  CLAUDE_RUNTIME_COMMAND=("${launcher_transport[@]}" "$@")
+}
+
+claude_runtime_interpreter_startup_args() {
+  local interpreter_name="${1##*/}"
+
+  CLAUDE_RUNTIME_INTERPRETER_STARTUP_ARGS=()
+  case "$interpreter_name" in
+    python|python[0-9]*|pypy|pypy[0-9]*)
+      # Isolated mode suppresses user-site and environment injection; -S also
+      # prevents global .pth/sitecustomize execution before a trusted launcher.
+      CLAUDE_RUNTIME_INTERPRETER_STARTUP_ARGS=(-I -S)
+      ;;
+    zsh)
+      # zsh otherwise reads $ZDOTDIR/.zshenv or $HOME/.zshenv for scripts.
+      CLAUDE_RUNTIME_INTERPRETER_STARTUP_ARGS=(-f)
+      ;;
+  esac
 }
 
 claude_runtime_prepare_python_argv() {
   local cygpath_bin="${CLAUDE_RUNTIME_CYGPATH_BIN:-}"
   local converted_path=""
   local original_argv=()
-  local transport_argv=()
   local transport_item=""
-  local transport_count=0
+  local transport_count="${CLAUDE_RUNTIME_COMMAND_TRANSPORT_COUNT:-1}"
   local arg_index=0
 
   CLAUDE_RUNTIME_PYTHON_ARGV=("$@")
@@ -47,17 +73,10 @@ claude_runtime_prepare_python_argv() {
     msys*|mingw*|cygwin*)
       [ -x "$cygpath_bin" ] || return 1
       original_argv=("${CLAUDE_RUNTIME_PYTHON_ARGV[@]}")
-      transport_argv=("${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[@]+"${CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND[@]}"}")
-      if [ "${#transport_argv[@]}" -eq 0 ]; then
-        transport_argv=("${original_argv[0]}")
-      fi
-      transport_count="${#transport_argv[@]}"
+      [ "$transport_count" -ge 1 ] && [ "$transport_count" -le "${#original_argv[@]}" ] || return 1
       CLAUDE_RUNTIME_PYTHON_ARGV=()
       for ((arg_index = 0; arg_index < transport_count; arg_index++)); do
-        transport_item="${transport_argv[$arg_index]}"
-        if [ "$arg_index" -eq $((transport_count - 1)) ]; then
-          transport_item="${original_argv[0]}"
-        fi
+        transport_item="${original_argv[$arg_index]}"
         case "$transport_item" in
           /*)
             converted_path="$(claude_runtime_windows_executable_path "$transport_item" "$cygpath_bin")" || return 1
@@ -596,7 +615,7 @@ claude_runtime_invoke_python_driver() {
     export PATH
     unset CLAUDE_RUNTIME_INHERITED_PATH
     cd -P -- "$runtime_cwd" || exit 1
-    MSYS2_ARG_CONV_EXCL='*' "$python_bin" -I "$driver_transport" \
+    MSYS2_ARG_CONV_EXCL='*' "$python_bin" -I -S "$driver_transport" \
       "$mode" \
       "$label" \
       "$timeout_seconds" \
@@ -757,6 +776,7 @@ claude_runtime_inspect_shebang_path() {
   local stack_index=0
   local native_status=0
   local interpreter_transport=()
+  local interpreter_startup_args=()
 
   if [ "$depth" -gt 8 ]; then
     CLAUDE_RUNTIME_LAUNCHER_DEPENDENCY_STATUS="unsupported"
@@ -867,7 +887,9 @@ claude_runtime_inspect_shebang_path() {
       fi
       claude_runtime_add_dependency_path "$dependency_path"
       claude_runtime_inspect_shebang_path "$dependency_path" "$((depth + 1))" "$execution_cwd" "path" || return 1
-      CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND=("${interpreter_transport[@]}" "$dependency" "$current_path")
+      claude_runtime_interpreter_startup_args "$dependency"
+      interpreter_startup_args=("${CLAUDE_RUNTIME_INTERPRETER_STARTUP_ARGS[@]+"${CLAUDE_RUNTIME_INTERPRETER_STARTUP_ARGS[@]}"}")
+      CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND=("${interpreter_transport[@]}" "$dependency" "${interpreter_startup_args[@]+"${interpreter_startup_args[@]}"}" "$current_path")
       return 0
       ;;
     /*)
@@ -891,7 +913,8 @@ claude_runtime_inspect_shebang_path() {
       fi
       claude_runtime_add_dependency_path "$interpreter"
       claude_runtime_inspect_shebang_path "$interpreter" "$((depth + 1))" "$execution_cwd" "absolute" || return 1
-      CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND+=("$current_path")
+      claude_runtime_interpreter_startup_args "$interpreter"
+      CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND+=("${CLAUDE_RUNTIME_INTERPRETER_STARTUP_ARGS[@]+"${CLAUDE_RUNTIME_INTERPRETER_STARTUP_ARGS[@]}"}" "$current_path")
       return 0
       ;;
   esac
@@ -925,4 +948,4 @@ claude_runtime_check_launcher_dependency() {
   return 0
 }
 
-# claude-review-helper-complete: runtime_v5
+# claude-review-helper-complete: runtime_v6

@@ -130,7 +130,8 @@ The bridge keeps a strict division of labor:
    build step and every review call; the runner never raises its cap from artifact
    headers.
 3. Codex starts `scripts/run-review.sh` with an exact trusted Bash and
-   `--noprofile --norc -p` while setting `BASH_ENV=` and `ENV=` before Bash starts.
+   `--noprofile --norc -p` while setting `BASH_ENV=`, `ENV=`, native loader
+   variables, and the documented `DYLD_*` loader variables to empty before Bash starts.
    Use `/bin/bash` on FHS systems or an absolute non-symlink `/nix/store` Bash on
    NixOS. The bridge captures the caller's PATH as data and builds its bootstrap
    PATH only from fixed FHS directories, fixed Git-for-Windows roots on Git Bash,
@@ -245,9 +246,9 @@ This bridge intentionally does not use Anthropic Console API billing. It scrubs
 The bridge resolves one exact `python3` from Codex's inherited PATH, applies the
 same launcher/symlink/temp/world-writable trust policy used for Claude, rejects
 script-shaped Python launchers, and invokes the validated native interpreter with
-isolated mode (`-I`). A shebangless Python candidate must have a binary ELF,
+isolated/no-site mode (`-I -S`). A shebangless Python candidate must have a binary ELF,
 Mach-O, or PE header; shebangless text and malformed PE-like wrappers fail closed.
-Python startup files, the current directory, `PYTHONPATH`, and other `PYTHON*`
+Python startup files, global/user `.pth` files, the current directory, `PYTHONPATH`, and other `PYTHON*`
 injection variables therefore cannot run bridge code before Claude's launcher is
 validated. Doctor reports `python_runtime_status` and the corresponding validation
 scope/reason without executing a rejected interpreter.
@@ -547,10 +548,13 @@ subscription-only review, and they strip inherited exported Bash-function entrie
 (`BASH_FUNC_*`) before Claude starts. Standard code-loading variables for Node,
 Python, Ruby, Perl, zsh, Lua, Java, .NET, PHP, Tcl, awk, and native dynamic loaders
 are also removed. Proxy, certificate, Claude config, locale, HOME, temp, and other
-non-code-loading inherited environment data remain available. Doctor reports only
-presence through `scrubbed_env_<NAME>` keys; it never prints those values.
+non-code-loading inherited environment data remain available. Doctor reports their
+presence through `inherited_env_<NAME>` keys and reports removed code-loading
+variables through `scrubbed_env_<NAME>` keys; it never prints those values.
 `scripts/claude-subscription-env.sh` remains as a compatible legacy entry point,
 but runner and doctor share `claude-runtime.sh`.
+Validated Python shebang launchers receive `-I -S`, and validated zsh shebang
+launchers receive `-f`, so retained HOME cannot activate user startup files.
 For Git Bash timeout/probe calls through native Python, that shared runtime converts
 the validated launcher and validated executable paths in its shebang execution
 chain with the bootstrap-validated, pinned `/usr/bin/cygpath[.exe]` utility. It
@@ -604,7 +608,9 @@ Profile-only `CLAUDE_CONFIG_DIR`, proxy, custom-CA, certificate-store, and mTLS
 exports are not imported either. Doctor reports only `present` or `absent` for the
 supported inherited variables and prints `login_profile_loaded=false`; it never
 prints their values or reads profile/settings contents. Put required values in the
-environment that launches Codex or in Claude `settings.json` as appropriate.
+environment that launches Codex. Hardened `--setting-sources local` calls run from
+a private runtime directory, so user/project Claude settings are intentionally not
+a recovery source for these probes or reviews.
 
 Doctor's main discovery states are `available`, `installed_not_on_path`,
 `not_executable`, `not_regular`, `dangling_symlink`, `unsafe_candidate`,
@@ -646,9 +652,11 @@ If that happens, approve only the exact installed helper path:
 ```
 
 Replace `<trusted-bash>` with exact `/bin/bash`, or on NixOS an absolute non-symlink
-Bash physically inside `/nix/store`. Start that command with `BASH_ENV=` and `ENV=`
-and retain `-p` in the shown position so Bash cannot load startup code or exported
-functions before the runner's trust bootstrap. Do not approve broad shell prefixes, and do not
+Bash physically inside `/nix/store`. Start that command with `BASH_ENV=`, `ENV=`,
+`LD_PRELOAD=`, `LD_AUDIT=`, `LD_LIBRARY_PATH=`, `GCONV_PATH=`, and the documented
+`DYLD_*` loader variables empty, and retain `-p` in the shown position so native
+loaders and Bash cannot load startup code or exported functions before the runner's
+trust bootstrap. Do not approve broad shell prefixes, and do not
 approve repo-local or unreviewed copies of the helper.
 
 Artifact builders, config helpers, and update checks do not need that approval.

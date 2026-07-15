@@ -241,6 +241,7 @@ printf '%s' "$timeout_output" | grep -Fq 'timeout-ok' || fail "Python discrete-a
 tree_script="$fixture_root/timeout-tree.py"
 tree_pid_file="$fixture_root/timeout-tree.pid"
 tree_job_file="$fixture_root/timeout-tree.job"
+tree_status_file="$fixture_root/timeout-tree.status"
 cat > "$tree_script" <<'PY'
 import ctypes
 from ctypes import wintypes
@@ -249,15 +250,57 @@ import subprocess
 import sys
 import time
 
-in_job = wintypes.BOOL()
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
+
+
+class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ("PerProcessUserTimeLimit", ctypes.c_longlong),
+        ("PerJobUserTimeLimit", ctypes.c_longlong),
+        ("LimitFlags", wintypes.DWORD),
+        ("MinimumWorkingSetSize", ctypes.c_size_t),
+        ("MaximumWorkingSetSize", ctypes.c_size_t),
+        ("ActiveProcessLimit", wintypes.DWORD),
+        ("Affinity", ctypes.c_size_t),
+        ("PriorityClass", wintypes.DWORD),
+        ("SchedulingClass", wintypes.DWORD),
+    ]
+
+
+class IO_COUNTERS(ctypes.Structure):
+    _fields_ = [(name, ctypes.c_ulonglong) for name in (
+        "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+        "ReadTransferCount", "WriteTransferCount", "OtherTransferCount",
+    )]
+
+
+class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
+        ("IoInfo", IO_COUNTERS),
+        ("ProcessMemoryLimit", ctypes.c_size_t),
+        ("JobMemoryLimit", ctypes.c_size_t),
+        ("PeakProcessMemoryUsed", ctypes.c_size_t),
+        ("PeakJobMemoryUsed", ctypes.c_size_t),
+    ]
+
+
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-kernel32.GetCurrentProcess.restype = wintypes.HANDLE
-kernel32.IsProcessInJob.argtypes = [wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]
-kernel32.IsProcessInJob.restype = wintypes.BOOL
-if not kernel32.IsProcessInJob(kernel32.GetCurrentProcess(), None, ctypes.byref(in_job)):
+kernel32.QueryInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+kernel32.QueryInformationJobObject.restype = wintypes.BOOL
+info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+if not kernel32.QueryInformationJobObject(
+    None,
+    JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
+    ctypes.byref(info),
+    ctypes.sizeof(info),
+    None,
+):
     raise ctypes.WinError(ctypes.get_last_error())
-Path(sys.argv[1]).write_text("1" if in_job.value else "0", encoding="ascii")
-if not in_job.value:
+kill_on_close = bool(info.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
+Path(sys.argv[1]).write_text("1" if kill_on_close else "0", encoding="ascii")
+if not kill_on_close:
     raise SystemExit(93)
 child = subprocess.Popen(
     [sys.executable, "-c", "import time; time.sleep(60)"],
@@ -270,29 +313,51 @@ PY
 tree_script_windows="$("$cygpath_bin" -aw "$tree_script")"
 tree_job_file_windows="$("$cygpath_bin" -aw "$tree_job_file")"
 tree_pid_file_windows="$("$cygpath_bin" -aw "$tree_pid_file")"
-set +e
-claude_runtime_run_with_timeout \
-  "$CLAUDE_RUNTIME_PYTHON_BIN" \
-  "$process_driver" \
-  "$runtime_cwd" \
-  1 \
-  - \
-  "$CLAUDE_RUNTIME_PYTHON_BIN" "$tree_script_windows" "$tree_job_file_windows" "$tree_pid_file_windows" >/dev/null 2>&1
-tree_status=$?
-set -e
-[ "$tree_status" -eq 124 ] || fail "Windows tree timeout status: $tree_status"
-[ "$(cat "$tree_job_file")" = "1" ] || fail "Windows child ran before Job Object assignment"
-[ -s "$tree_pid_file" ] || fail "Windows timeout grandchild never started"
-tree_pid="$(cat "$tree_pid_file")"
-for _ in $(seq 1 30); do
-  if ! kill -0 "$tree_pid" 2>/dev/null; then
-    break
-  fi
+(
+  set +e
+  claude_runtime_run_with_timeout \
+    "$CLAUDE_RUNTIME_PYTHON_BIN" \
+    "$process_driver" \
+    "$runtime_cwd" \
+    3 \
+    - \
+    "$CLAUDE_RUNTIME_PYTHON_BIN" "$tree_script_windows" "$tree_job_file_windows" "$tree_pid_file_windows" >/dev/null 2>&1
+  printf '%s' "$?" > "$tree_status_file"
+) &
+tree_runtime_pid=$!
+for _ in $(seq 1 50); do
+  [ -s "$tree_pid_file" ] && break
   sleep 0.1
 done
-if kill -0 "$tree_pid" 2>/dev/null; then
-  fail "Windows Job Object left the timeout grandchild alive"
-fi
+[ -s "$tree_pid_file" ] || fail "Windows timeout grandchild never started"
+tree_pid="$(cat "$tree_pid_file")"
+MSYS2_ARG_CONV_EXCL='*' "$CLAUDE_RUNTIME_PYTHON_BIN" -I -S - "$tree_pid" <<'PY'
+import ctypes
+from ctypes import wintypes
+import sys
+
+SYNCHRONIZE = 0x00100000
+WAIT_OBJECT_0 = 0
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+kernel32.OpenProcess.restype = wintypes.HANDLE
+kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+kernel32.WaitForSingleObject.restype = wintypes.DWORD
+kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+kernel32.CloseHandle.restype = wintypes.BOOL
+handle = kernel32.OpenProcess(SYNCHRONIZE, False, int(sys.argv[1]))
+if not handle:
+    raise ctypes.WinError(ctypes.get_last_error())
+try:
+    if kernel32.WaitForSingleObject(handle, 10000) != WAIT_OBJECT_0:
+        raise SystemExit("Windows Job Object left the timeout grandchild alive")
+finally:
+    kernel32.CloseHandle(handle)
+PY
+wait "$tree_runtime_pid" || true
+tree_status="$(cat "$tree_status_file")"
+[ "$tree_status" -eq 124 ] || fail "Windows tree timeout status: $tree_status"
+[ "$(cat "$tree_job_file")" = "1" ] || fail "Windows child did not observe the runtime's kill-on-close Job Object"
 
 # Exercise the actual runner with an extensionless Git Bash/npm-style shim. This
 # covers canonical input boundaries, validated shebang transport, internal MSYS
