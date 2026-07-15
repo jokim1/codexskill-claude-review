@@ -670,13 +670,14 @@ REVIEW_TIMEOUT_SECONDS="$CLAUDE_CONFIG_DEFAULT_REVIEW_TIMEOUT_SECONDS"
 
 if ! load_required_claude_helper \
   "$CLAUDE_LOCATOR_HELPER" \
-  "# claude-review-helper-complete: locator_v5" \
+  "# claude-review-helper-complete: locator_v6" \
   claude_locator_path_candidate \
   claude_locator_native_supported \
   claude_locator_native_path \
   claude_locator_homebrew_paths \
   claude_locator_first_present_fallback \
   claude_locator_is_dangling_symlink \
+  claude_locator_directory_symlink_hops_safe \
   claude_locator_physical_directory \
   claude_locator_validate_candidate \
   claude_locator_validate_launcher_dependency; then
@@ -706,7 +707,7 @@ if ! load_required_claude_helper \
   exit 0
 fi
 
-if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v5" ]; then
+if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v6" ]; then
   emit_bridge_installation_incomplete "claude-locator.sh"
   exit 0
 fi

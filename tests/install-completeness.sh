@@ -41,7 +41,7 @@ for helper in scripts/claude-config.sh scripts/claude-locator.sh scripts/claude-
   [ -x "$ROOT/$helper" ] || fail "$helper is not executable"
   case "$helper" in
     *config*) tail -n 1 "$ROOT/$helper" | grep -Fqx '# claude-review-helper-complete: config_v1' || fail "$helper marker" ;;
-    *locator*) tail -n 1 "$ROOT/$helper" | grep -Fqx '# claude-review-helper-complete: locator_v5' || fail "$helper marker" ;;
+    *locator*) tail -n 1 "$ROOT/$helper" | grep -Fqx '# claude-review-helper-complete: locator_v6' || fail "$helper marker" ;;
     *runtime*) tail -n 1 "$ROOT/$helper" | grep -Fqx '# claude-review-helper-complete: runtime_v6' || fail "$helper marker" ;;
   esac
   if git -C "$ROOT" ls-files --error-unmatch "$helper" >/dev/null 2>&1; then
@@ -53,7 +53,9 @@ for helper in scripts/claude-config.sh scripts/claude-locator.sh scripts/claude-
     git -C "$ROOT" check-ignore -q "$helper" && fail "$helper is ignored before commit"
   fi
 done
-grep -Fq 'claude_locator_physical_directory()' "$ROOT/scripts/claude-locator.sh" || fail "locator helper missing claude_locator_physical_directory"
+for locator_symbol in claude_locator_physical_directory claude_locator_directory_symlink_hops_safe; do
+  grep -Fq "${locator_symbol}()" "$ROOT/scripts/claude-locator.sh" || fail "locator helper missing $locator_symbol"
+done
 for runtime_symbol in \
   claude_runtime_resolve_trusted_python \
   claude_runtime_is_native_executable \

@@ -88,7 +88,7 @@ claude_runtime_prepare_python_argv() {
             ;;
         esac
       done
-      for ((arg_index = 1; arg_index < ${#original_argv[@]}; arg_index++)); do
+      for ((arg_index = transport_count; arg_index < ${#original_argv[@]}; arg_index++)); do
         CLAUDE_RUNTIME_PYTHON_ARGV+=("${original_argv[$arg_index]}")
       done
       ;;

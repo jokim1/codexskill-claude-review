@@ -3,7 +3,7 @@
 # Shared Claude launcher discovery and trust validation. This file must remain
 # source-pure: definitions and readonly contract constants only.
 
-readonly CLAUDE_LOCATOR_CONTRACT="bounded_path_native_homebrew_v5"
+readonly CLAUDE_LOCATOR_CONTRACT="bounded_path_native_homebrew_v6"
 readonly CLAUDE_LOCATOR_TRUSTED_STORE_ROOT="/nix/store"
 
 claude_locator_native_supported() {
@@ -255,6 +255,48 @@ claude_locator_physical_launch_path() {
   fi
 }
 
+claude_locator_directory_symlink_hops_safe() {
+  local raw_parent="$1"
+  local repo_root="$2"
+  local invocation_cwd="$3"
+  local remaining=""
+  local component=""
+  local prefix="/"
+
+  case "$raw_parent" in
+    /*) remaining="${raw_parent#/}" ;;
+    *) CLAUDE_LOCATOR_BOUNDARY_STATUS="validation_unavailable"; return 1 ;;
+  esac
+  while [ -n "$remaining" ]; do
+    component="${remaining%%/*}"
+    if [ "$remaining" = "$component" ]; then
+      remaining=""
+    else
+      remaining="${remaining#*/}"
+    fi
+    case "$component" in
+      ''|.) continue ;;
+      ..)
+        claude_locator_physical_directory "$prefix/.." || {
+          CLAUDE_LOCATOR_BOUNDARY_STATUS="validation_unavailable"
+          return 1
+        }
+        prefix="$CLAUDE_LOCATOR_PHYSICAL_DIRECTORY"
+        continue
+        ;;
+    esac
+    if [ "$prefix" = "/" ]; then
+      prefix="/$component"
+    else
+      prefix="$prefix/$component"
+    fi
+    if [ -L "$prefix" ] && ! claude_locator_boundary_status "$prefix" "$repo_root" "$invocation_cwd"; then
+      return 1
+    fi
+  done
+  return 0
+}
+
 claude_locator_trusted_store_utility_target() {
   local utility="$1"
   local candidate_path="$2"
@@ -414,6 +456,15 @@ claude_locator_canonical_target() {
     basename_part="${current##*/}"
     parent="${current%/*}"
     [ -n "$parent" ] || parent="/"
+    if ! claude_locator_directory_symlink_hops_safe "$parent" "$repo_root" "$invocation_cwd"; then
+      case "$CLAUDE_LOCATOR_BOUNDARY_STATUS" in
+        temporary_path) return 20 ;;
+        repository_path) return 21 ;;
+        invocation_cwd_path) return 22 ;;
+        world_writable_parent) return 23 ;;
+        *) return 24 ;;
+      esac
+    fi
     claude_locator_physical_directory "$parent" || return 3
     physical_parent="$CLAUDE_LOCATOR_PHYSICAL_DIRECTORY"
     if [ "$physical_parent" = "/" ]; then
@@ -479,11 +530,21 @@ claude_locator_path_within() {
   local path="$1"
   local boundary="$2"
   local boundary_physical=""
+  local path_physical=""
 
   [ -n "$boundary" ] || return 1
-  boundary_physical="$(claude_locator_physical_launch_path "$boundary/.claude-review-boundary" "/" 2>/dev/null)" || return 1
+  boundary_physical="$(claude_locator_physical_launch_path "$boundary/.claude-review-boundary" "/" 2>/dev/null && printf '\001')" || return 1
+  case "$boundary_physical" in
+    *$'\001') boundary_physical="${boundary_physical%$'\001'}" ;;
+    *) return 1 ;;
+  esac
   boundary_physical="${boundary_physical%/.claude-review-boundary}"
-  case "$path" in
+  path_physical="$(claude_locator_physical_launch_path "$path" "/" 2>/dev/null && printf '\001')" || return 1
+  case "$path_physical" in
+    *$'\001') path_physical="${path_physical%$'\001'}" ;;
+    *) return 1 ;;
+  esac
+  case "$path_physical" in
     "$boundary_physical"|"$boundary_physical"/*)
       return 0
       ;;
@@ -741,4 +802,4 @@ claude_locator_validate_launcher_dependency() {
   [ "$dependency_valid" = true ]
 }
 
-# claude-review-helper-complete: locator_v5
+# claude-review-helper-complete: locator_v6

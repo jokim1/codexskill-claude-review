@@ -545,13 +545,14 @@ fi
 
 if ! load_required_claude_helper \
   "$LOCATOR_HELPER" \
-  "# claude-review-helper-complete: locator_v5" \
+  "# claude-review-helper-complete: locator_v6" \
   claude_locator_path_candidate \
   claude_locator_native_supported \
   claude_locator_native_path \
   claude_locator_homebrew_paths \
   claude_locator_first_present_fallback \
   claude_locator_is_dangling_symlink \
+  claude_locator_directory_symlink_hops_safe \
   claude_locator_physical_directory \
   claude_locator_validate_candidate \
   claude_locator_validate_launcher_dependency; then
@@ -585,7 +586,7 @@ if ! load_required_claude_helper \
   exit 0
 fi
 
-if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v5" ]; then
+if [ "${CLAUDE_LOCATOR_CONTRACT:-}" != "bounded_path_native_homebrew_v6" ]; then
   print_kv "doctor_status" "bridge_installation_incomplete"
   print_kv "bridge_component" "claude-locator.sh"
   print_kv "bridge_guidance" "Reinstall or update the complete claude-review skill, then retry."

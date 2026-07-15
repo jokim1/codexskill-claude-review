@@ -359,6 +359,25 @@ assert_eq "target" "$CLAUDE_LOCATOR_VALIDATION_SCOPE" "intermediate symlink scop
 assert_eq "world_writable_parent" "$CLAUDE_LOCATOR_VALIDATION_STATUS" "intermediate symlink reason"
 pass "every intermediate symlink hop receives boundary validation"
 
+directory_hop_root="$(mktemp -d /tmp/claude-review-directory-hop.XXXXXX)"
+ln -s "$TEST_ROOT/trusted/bin" "$directory_hop_root/bin-hop"
+ln -s "$directory_hop_root/bin-hop/claude" "$TEST_ROOT/trusted/bin/claude-directory-hop"
+if claude_locator_validate_candidate "$TEST_ROOT/trusted/bin/claude-directory-hop" "$ROOT" "$TEST_ROOT/work"; then
+  rm -rf "$directory_hop_root"
+  fail "temporary directory symlink hop was collapsed before validation"
+fi
+assert_eq "temporary_path" "$CLAUDE_LOCATOR_VALIDATION_STATUS" "temporary directory symlink hop trust reason"
+rm -rf "$directory_hop_root"
+
+safe_directory_hop_root="$TEST_ROOT/trusted/directory-hop"
+mkdir -p "$safe_directory_hop_root"
+ln -s "$TEST_ROOT/trusted/bin" "$safe_directory_hop_root/bin-hop"
+ln -s "$safe_directory_hop_root/bin-hop/claude" "$TEST_ROOT/trusted/bin/claude-safe-directory-hop"
+claude_locator_validate_candidate "$TEST_ROOT/trusted/bin/claude-safe-directory-hop" "$ROOT" "$TEST_ROOT/work" || \
+  fail "safe directory symlink hop was rejected"
+assert_eq "$TEST_ROOT/trusted/bin/claude" "$CLAUDE_LOCATOR_CANONICAL_TARGET" "safe directory hop canonical target"
+pass "directory symlink hops are validated before physical collapse"
+
 mkdir -p "$TEST_ROOT/invocation/bin"
 cp "$TEST_ROOT/trusted/bin/claude" "$TEST_ROOT/invocation/bin/claude"
 if claude_locator_validate_candidate "$TEST_ROOT/invocation/bin/claude" "$ROOT" "$TEST_ROOT/invocation"; then
@@ -446,6 +465,29 @@ claude_runtime_prepare_python_argv "${CLAUDE_RUNTIME_COMMAND[@]}" || fail "Pytho
 assert_eq "$TEST_ROOT/trusted/bin/claude" "${CLAUDE_RUNTIME_PYTHON_ARGV[0]}" "non-Windows Python executable unchanged"
 assert_eq "auth" "${CLAUDE_RUNTIME_PYTHON_ARGV[1]}" "Python argv one preserved"
 pass "runtime builder is transport-only"
+
+fake_cygpath="$TEST_ROOT/trusted/bin/fake-cygpath"
+cat > "$fake_cygpath" <<'SH'
+#!/bin/bash
+printf 'WIN:%s' "$2"
+SH
+chmod 755 "$fake_cygpath"
+saved_ostype="$OSTYPE"
+OSTYPE=msys-test
+CLAUDE_RUNTIME_CYGPATH_BIN="$fake_cygpath"
+CLAUDE_RUNTIME_LAUNCHER_TRANSPORT_COMMAND=(/usr/bin/env python3 -I -S /trusted/claude)
+claude_runtime_build_command /trusted/claude -v
+claude_runtime_prepare_python_argv "${CLAUDE_RUNTIME_COMMAND[@]}" || fail "simulated Windows shebang argv transport"
+OSTYPE="$saved_ostype"
+assert_eq "6" "${#CLAUDE_RUNTIME_PYTHON_ARGV[@]}" "Windows transport argv count"
+assert_eq "WIN:/usr/bin/env" "${CLAUDE_RUNTIME_PYTHON_ARGV[0]}" "Windows transport env path"
+assert_eq "python3" "${CLAUDE_RUNTIME_PYTHON_ARGV[1]}" "Windows transport interpreter token"
+assert_eq "-I" "${CLAUDE_RUNTIME_PYTHON_ARGV[2]}" "Windows transport isolated flag"
+assert_eq "-S" "${CLAUDE_RUNTIME_PYTHON_ARGV[3]}" "Windows transport no-site flag"
+assert_eq "WIN:/trusted/claude" "${CLAUDE_RUNTIME_PYTHON_ARGV[4]}" "Windows transport launcher path"
+assert_eq "-v" "${CLAUDE_RUNTIME_PYTHON_ARGV[5]}" "Windows transport trailing argv"
+unset CLAUDE_RUNTIME_CYGPATH_BIN
+pass "Windows shebang transport appends user argv exactly once"
 
 python_injection_root="$TEST_ROOT/python-injection"
 python_driver="$TEST_ROOT/work/process-driver.py"
