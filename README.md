@@ -108,9 +108,9 @@ Supported commands:
 | `/claude-review update --check` | Check whether an update is available without changing the installed skill checkout. |
 | `/claude-review update --backup-conflicts` | Preserve colliding untracked or ignored paths outside the checkout, then complete the update. |
 
-Every `/claude-review ...` command except `/claude-review update` runs a low-noise
-update check first. If a new version is available, Codex asks whether to update
-before continuing.
+Every `/claude-review ...` command except `/claude-review update` and
+`/claude-review doctor` runs a low-noise update check first. If a new version is
+available, Codex asks whether to update before continuing.
 
 Update output identifies both the skill checkout and the repo from which the
 command was invoked. It explicitly says whether those are the same Git checkout.
@@ -143,13 +143,33 @@ The bridge keeps a strict division of labor:
    If `CLAUDE_REVIEW_MAX_ARTIFACT_BYTES` is overridden, use the same value for the
    build step and every review call; the runner never raises its cap from artifact
    headers.
-3. Codex calls `scripts/run-review.sh`.
-4. The runner scrubs Anthropic API credential env vars.
-5. The runner performs a tiny subscription-auth preflight through the local
+3. Codex starts `scripts/run-review.sh` with an exact trusted Bash and
+   `--noprofile --norc -p` while setting `BASH_ENV=`, `ENV=`, native loader
+   variables, and the documented `DYLD_*` loader variables to empty before Bash starts.
+   Use `/bin/bash` on FHS systems or an absolute non-symlink `/nix/store` Bash on
+   NixOS. The bridge captures the caller's PATH as data and builds its bootstrap
+   PATH only from fixed FHS directories, fixed Git-for-Windows roots on Git Bash,
+   and physically resolved immutable-store directories. Nix profile links are
+   accepted only when their final inode matches a regular executable target in
+   the immutable store. The first `readlink` trust anchor must be a non-symlink
+   fixed-FHS executable or an inode-verified immutable-store target; it is never
+   executed to validate itself. Other FHS utility links may traverse only a
+   bounded fixed-FHS or `/etc/alternatives` chain whose final executable remains
+   in `/usr/bin` or `/bin`. On Git Bash, the exact fixed
+   `/usr/bin/cygpath[.exe]` entry must pass that validation before any path
+   conversion occurs.
+4. The runner selects Claude from inherited PATH, the official native-user
+   launcher, or the documented platform-default Homebrew launcher and validates
+   both its launch path and canonical target.
+5. The shared direct runtime preserves inherited PATH and configuration/network
+   environment while scrubbing Anthropic API credentials, shell startup hooks,
+   exported Bash functions, and standard interpreter/dynamic-loader startup-code
+   variables.
+6. The runner performs a tiny subscription-auth preflight through the local
    `claude` CLI.
-6. Claude receives only the artifact and bundled prompt, with no tools.
-7. Claude returns structured JSON matching `schemas/review-output.json`.
-8. Codex renders findings first, then decides what to fix.
+7. Claude receives only the artifact and bundled prompt, with no tools.
+8. Claude returns structured JSON matching `schemas/review-output.json`.
+9. Codex renders findings first, then decides what to fix.
 
 The important consequence: Claude is an independent reviewer, not the implementer.
 
@@ -199,7 +219,11 @@ git clone https://github.com/jokim1/codexskill-claude-review.git ~/.codex/skills
 chmod +x ~/.codex/skills/claude-review/scripts/*.sh
 ```
 
-Then restart Codex.
+Then restart Codex and verify the installed bridge:
+
+```text
+/claude-review doctor
+```
 
 For local development, keep a source checkout and symlink the installed skill:
 
@@ -210,7 +234,7 @@ ln -s /Users/josephkim/dev/codexskill-claude-review ~/.codex/skills/claude-revie
 chmod +x /Users/josephkim/dev/codexskill-claude-review/scripts/*.sh
 ```
 
-Then restart Codex.
+Then restart Codex and run `/claude-review doctor`.
 
 ## Requirements
 
@@ -233,15 +257,26 @@ This bridge intentionally does not use Anthropic Console API billing. It scrubs
 `ANTHROPIC_API_KEY` and related Anthropic API credential env vars before invoking
 `claude`.
 
+The bridge resolves one exact `python3` from Codex's inherited PATH, applies the
+same launcher/symlink/temp/world-writable trust policy used for Claude, rejects
+script-shaped Python launchers, and invokes the validated native interpreter with
+isolated/no-site mode (`-I -S`). A shebangless Python candidate must have a binary ELF,
+Mach-O, or PE header; shebangless text and malformed PE-like wrappers fail closed.
+Python startup files, global/user `.pth` files, the current directory, `PYTHONPATH`, and other `PYTHON*`
+injection variables therefore cannot run bridge code before Claude's launcher is
+validated. Doctor reports `python_runtime_status` and the corresponding validation
+scope/reason without executing a rejected interpreter.
+
 ## First-Time Check
 
-Start with:
+Start with the bridge's own post-install check so discovery, trust, direct runtime,
+and subscription-only auth are tested under the same environment a review uses:
 
-```bash
-claude auth status
+```text
+/claude-review doctor
 ```
 
-If needed:
+If doctor reports that subscription auth is unavailable, run:
 
 ```bash
 claude auth login --claudeai
@@ -249,11 +284,6 @@ claude auth login --claudeai
 
 The bridge treats `claude auth status` as advisory. The real source of truth is
 whether a scrubbed `claude -p` call works from the same environment Codex uses.
-Use the bridge doctor for the exact diagnostics Codex will see:
-
-```text
-/claude-review doctor
-```
 
 ## End-To-End Journey: Claude Review
 
@@ -464,6 +494,167 @@ Defaults:
 The budget values are Claude CLI guardrails for `--print` requests. They do not
 mean this bridge is using Anthropic API-key auth.
 
+## Claude Discovery And Direct Runtime
+
+The bridge uses one bounded discovery order:
+
+1. Bash executable-only PATH lookup (`type -P claude`). Aliases, functions, and
+   keywords are ignored. If no executable resolves, the bridge scans PATH entries
+   only to diagnose the first present stale `claude` file or symlink instead of
+   silently masking it with a fallback.
+2. On macOS, Linux, and WSL, absolute inherited
+   `$HOME/.local/bin/claude`, the official native-user launcher location. A missing
+   or relative HOME disables this slot; the bridge never guesses another user's
+   home.
+3. Documented default Homebrew locations: `/opt/homebrew/bin/claude` then
+   `/usr/local/bin/claude` on macOS regardless of process architecture, or
+   `/home/linuxbrew/.linuxbrew/bin/claude` on Linux x86_64.
+
+Custom Homebrew/npm prefixes, WinGet, system package-manager installs, and other
+trusted installations remain supported through inherited PATH. Native Windows Git
+Bash stays PATH-only. Linux ARM does not guess a Linuxbrew default.
+
+PATH is authoritative. A non-executable, non-regular, unsafe, or runtime-broken
+selected entry blocks rather than silently switching Claude versions. Within the
+fixed native/Homebrew fallback slots, only a dangling symlink is deferred; a later
+healthy default may run, while doctor reports `stale_fallback_source`,
+`stale_fallback_path`, and `stale_fallback_status=dangling_symlink` with cleanup
+guidance. Deferral requires bounded resolution to prove that the final target is
+absent through an accessible parent. Symlink loops and inaccessible targets are
+not treated as dangling and remain authoritative fail-closed diagnoses.
+
+Every selected launcher is normalized to an absolute path by physically resolving
+its parent, while its final symlink name is preserved for execution. The canonical
+target is recorded separately. Launch entries and every symlink hop must stay
+outside repo/invocation/temp boundaries and world-writable parents; temp boundaries
+include `/tmp`, `/private/tmp`, inherited absolute `TMPDIR`/`TEMP`/`TMP` roots, and
+the macOS per-user `/var/folders` namespace. The canonical target must also be a
+regular, executable, non-world-writable file before Claude runs.
+
+Trust validation prefers the fixed `/usr/bin` or `/bin` `stat`, `readlink`, and `od`
+utilities. On NixOS it searches the captured inherited PATH and accepts a Nix
+profile symlink only after matching its final inode to a regular executable target
+inside the immutable `/nix/store` boundary. The bootstrap applies the same proof to
+all required utilities. The initial `readlink` is accepted without executing it:
+it must be a non-symlink fixed-FHS executable or match a regular executable inode
+in the immutable store. Standard FHS alternatives are then resolved with that
+trusted `readlink`; every hop must stay under `/usr/bin`, `/bin`, or
+`/etc/alternatives`, and the final regular executable must be in `/usr/bin` or
+`/bin`. Git Bash additionally admits Git for Windows utilities only from its fixed
+`/mingw64/bin` or `/mingw32/bin` installation roots. Every intermediate launcher
+symlink hop receives the same boundary validation as the launch and final target.
+If no trusted validation utility is available, the bridge fails closed with
+`claude_path_status=unsafe_candidate` and
+`claude_trust_reason=validation_unavailable`; it never substitutes an arbitrary
+PATH utility or misreports the candidate as world-writable/dangling.
+
+Runner and doctor also require matching locator/runtime contract generations and
+EOF completeness markers before sourcing either helper. A stale helper from a
+mixed or interrupted update is reported as `bridge_installation_incomplete`; the
+bridge does not combine old trust code with a newer caller.
+
+Runner and doctor then execute the validated launch path directly from a private
+`/tmp/claude-review-runtime-*` directory. They preserve inherited PATH byte-for-byte
+for Claude and its descendants; they do not prepend the launcher directory, start
+a login shell, source profiles, or retry through an interactive shell. They unset
+`BASH_ENV`, `ENV`, and the five Anthropic API credential variables used to enforce
+subscription-only review, and they strip inherited exported Bash-function entries
+(`BASH_FUNC_*`) before Claude starts. Standard code-loading variables for Node,
+Python, Ruby, Perl, zsh, Lua, Java, .NET, PHP, Tcl, awk, and native dynamic loaders
+are also removed. Proxy, certificate, Claude config, locale, HOME, temp, and other
+non-code-loading inherited environment data remain available. Doctor reports their
+presence through `inherited_env_<NAME>` keys and reports removed code-loading
+variables through `scrubbed_env_<NAME>` keys; it never prints those values.
+`scripts/claude-subscription-env.sh` remains as a compatible legacy entry point,
+but runner and doctor share `claude-runtime.sh`.
+Validated Python shebang launchers receive `-I -S`, and validated zsh shebang
+launchers receive `-f`, including through accepted recursive shebang chains, so
+retained HOME cannot activate user startup files.
+For Git Bash timeout/probe calls through native Python, that shared runtime converts
+the validated launcher and validated executable paths in its shebang execution
+chain with the bootstrap-validated, pinned `/usr/bin/cygpath[.exe]` utility. It
+passes the interpreter chain,
+optional `env NAME` token, launcher, and unchanged remaining arguments as discrete
+argv. The bridge disables automatic MSYS conversion only while entering native
+Python, then restores the inherited setting for Claude; it does not build a shell
+command string or depend on ambient MSYS argument-conversion settings.
+
+Review and preflight prompt bodies are written with mode `0600` inside the private
+runtime directory and streamed to Claude on stdin. The bounded artifact therefore
+never occupies one OS argv element, including near the 200000-byte review cap;
+control flags, schema, model, and other non-artifact values remain discrete argv.
+On Windows, the shared Python driver creates Claude suspended, assigns it to a
+kill-on-close Job Object, and resumes it only after assignment. Timeout cleanup
+terminates that whole tree and uses only
+bounded output-drain waits, so a grandchild retaining inherited pipes cannot keep
+runner or doctor alive indefinitely. POSIX continues to use a private process
+group with the same bounded drain behavior.
+
+This direct-runtime hardening intentionally removes the former implicit login-
+profile fallback. A launcher whose shebang names an interpreter available only
+after profile loading reports `launcher_dependency_missing`. A recognized
+interpreter that resolves through inherited PATH, or an argument-free absolute
+shebang interpreter, must pass the same path, symlink-chain, file-mode, and parent trust
+validation as the Claude launcher. The bridge recursively inspects script
+interpreters with an eight-hop depth bound and cycle detection, and trust-validates
+every executable in the resulting chain. Native shebang interpreters are limited to
+audited Bash/dash/sh, Node, Python/PyPy, and zsh forms; unknown native interpreters
+fail closed before retained HOME or XDG configuration can run. An unsafe interpreter reports
+`launcher_dependency_unsafe`; an unreadable launcher or interpreter reports
+`launcher_dependency_unreadable`. Shebangs other than an argument-free absolute
+audited interpreter or exact `#!/usr/bin/env NAME` form resolving recursively to one fail closed as
+`launcher_dependency_unsupported` rather than being executed without deterministic
+dependency validation. Shebangless launchers likewise fail closed unless their
+binary header identifies ELF, Mach-O, or PE; PE validation includes its declared
+`PE\0\0` signature rather than accepting an `MZ` filename prefix alone. For
+`env NAME`, PATH lookup is evaluated from the same
+private runtime directory used for execution, so a relative PATH entry cannot be
+validated against the invocation directory and then select a different executable
+after the runtime changes directory. Expose a trusted interpreter to the environment
+that launches Codex, or migrate to native Claude:
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
+Then run `/claude-review doctor`. Claude-started child executables also receive only
+Codex's inherited PATH. Unknown descendant failures stay generically classified
+rather than being inferred from arbitrary stderr.
+
+Profile-only `CLAUDE_CONFIG_DIR`, proxy, custom-CA, certificate-store, and mTLS
+exports are not imported either. Doctor reports only `present` or `absent` for the
+supported inherited variables and prints `login_profile_loaded=false`; it never
+prints their values or reads profile/settings contents. Put required values in the
+environment that launches Codex. Hardened `--setting-sources local` calls run from
+a private runtime directory, so user/project Claude settings are intentionally not
+a recovery source for these probes or reviews.
+
+Doctor's main discovery states are `available`, `installed_not_on_path`,
+`not_executable`, `not_regular`, `dangling_symlink`, `unsafe_candidate`,
+`launcher_dependency_missing`, `launcher_dependency_unsafe`,
+`launcher_dependency_validation_unavailable`, `launcher_dependency_unsupported`,
+`launcher_dependency_unreadable`, and
+`not_found`. `not_found` means only that PATH and the bounded official/default
+locations did not contain a candidate; it does not prove Claude is uninstalled.
+Doctor is report-only and will not edit PATH or shell files, install Claude, or
+create symlinks. Its `--skill-root` argument may only assert the physical root
+containing the invoked doctor; it cannot redirect sourced helpers to another
+checkout or directory. Its checkout diagnostics disable fsmonitor and optional Git
+locks, ignore inherited Git repository/config routing and trace-output variables,
+and do not refresh the index or write trace files. Its auth diagnostics explicitly use the same
+`subscription_only_credentials_scrubbed` context as review, so an API-key-only
+ordinary Claude setup may work even when bridge subscription auth is unavailable.
+Runner and doctor bound their version, auth-status, and live-probe calls with the
+configured preflight timeout. Doctor reports `claude_runtime_status=timeout` or
+`claude_auth_status=timeout` instead of waiting indefinitely.
+The legacy `plain_print_probe_status` key remains present as
+`skipped_redundant_hardened_probe`; doctor makes one bounded hardened live call
+under `safe_mode_print_probe` rather than issuing duplicate Claude requests.
+Doctor's line-oriented `key=value` records escape `\`, newline, carriage return,
+tab, and other control bytes as `\\`, `\n`, `\r`, `\t`, and `\xNN`,
+respectively, so inherited paths and parsed command output cannot create forged
+diagnostic records.
+
 ## Sandbox And Claude State
 
 Review flows may need Claude Code to write lock or refresh files under `~/.claude`
@@ -478,11 +669,16 @@ with paths like:
 If that happens, approve only the exact installed helper path:
 
 ```text
-["bash", "/Users/<you>/.codex/skills/claude-review/scripts/run-review.sh"]
+["<trusted-bash>", "--noprofile", "--norc", "-p", "/Users/<you>/.codex/skills/claude-review/scripts/run-review.sh"]
 ```
 
-Do not approve broad prefixes such as `["bash"]`, and do not approve repo-local or
-unreviewed copies of the helper.
+Replace `<trusted-bash>` with exact `/bin/bash`, or on NixOS an absolute non-symlink
+Bash physically inside `/nix/store`. Start that command with `BASH_ENV=`, `ENV=`,
+`LD_PRELOAD=`, `LD_AUDIT=`, `LD_LIBRARY_PATH=`, `GCONV_PATH=`, and the documented
+`DYLD_*` loader variables empty, and retain `-p` in the shown position so native
+loaders and Bash cannot load startup code or exported functions before the runner's
+trust bootstrap. Do not approve broad shell prefixes, and do not
+approve repo-local or unreviewed copies of the helper.
 
 Artifact builders, config helpers, and update checks do not need that approval.
 
@@ -509,6 +705,81 @@ Do not rely on `/claude ...` for this skill.
 The bridge treats `claude auth status` as advisory. If the real scrubbed `claude -p`
 probe works, review continues.
 
+Doctor labels auth as `subscription_only_credentials_scrubbed`. An unavailable
+bridge subscription session does not mean an ordinary API-key-authenticated Claude
+CLI is broken; this bridge intentionally excludes API-key billing.
+
+### Doctor reports `installed_not_on_path`
+
+The launcher was found in the official native-user or documented default Homebrew
+location even though Codex's inherited PATH omitted it. Runner and doctor invoke
+that validated absolute launcher without editing PATH. No shell-file change or
+symlink is required for this bridge.
+
+If `stale_fallback_status=dangling_symlink` also appears, remove or reinstall the
+named stale launcher. Only dangling fixed-slot links are deferred; other invalid
+selected installations block so the bridge does not silently switch versions.
+
+### Doctor reports `not_found`
+
+This result is intentionally inconclusive: no launcher was found on inherited PATH
+or in an applicable official/default fallback. Custom Homebrew/npm prefixes and
+Windows package installs remain PATH-only. Verify the intended install is exposed
+to the environment that launches Codex, or install native Claude and restart/retry
+from Codex.
+
+### Doctor reports `launcher_dependency_missing`
+
+The selected launcher is a script whose deterministic shebang interpreter is not
+available. Doctor reports `claude_launcher_dependency_resolution=path` for an
+`env NAME` lookup; add that name to the environment that launches Codex or migrate
+to native Claude. It reports `absolute` plus the exact path for a missing absolute
+shebang; repair or reinstall that launcher because changing PATH cannot satisfy an
+absolute shebang. The bridge will not source login profiles as a compatibility
+fallback.
+
+### Doctor reports `launcher_dependency_unsafe`
+
+The selected launcher's recognized shebang interpreter resolved to an untrusted
+file or path. Doctor reports the interpreter path and its independent trust scope
+and reason without executing it. Remove the untrusted PATH entry or expose a
+trusted interpreter outside repository, invocation-CWD, temp, world-writable file,
+and world-writable parent boundaries. The bridge will not weaken launcher trust or
+rewrite PATH to select a different interpreter.
+
+### Doctor reports `launcher_dependency_unsupported`
+
+The selected launcher uses shebang syntax the bridge cannot parse without
+reimplementing platform-specific shebang argument or `env -S` tokenization, resolves
+to a native interpreter outside the audited Bash/dash/sh, Node, Python/PyPy, and zsh set, or it
+is a shebangless file without a supported binary ELF, Mach-O, or PE header. Use a
+launcher with an argument-free audited absolute interpreter, an exact
+`#!/usr/bin/env NAME` shebang that resolves recursively to an audited interpreter, or
+a native executable; otherwise migrate to native Claude.
+The bridge fails closed instead of executing an unvalidated interpreter.
+
+### Doctor reports `launcher_dependency_validation_unavailable`
+
+The bridge could not resolve or run a trusted `od` utility to inspect a shebangless
+native executable header. Restore `od` under `/usr/bin` or `/bin`, or expose its
+immutable Nix-store executable through the environment that launches Codex. The
+bridge will not substitute an arbitrary mutable PATH utility or misreport this as
+unsupported launcher syntax.
+
+### Doctor reports `launcher_dependency_unreadable`
+
+The selected launcher or one of its recursive shebang interpreters could not be
+opened for bounded inspection. Make the reported path readable to the Codex
+process or reinstall native Claude. The bridge does not assume an unreadable file
+is a native binary.
+
+### Doctor reports `unsafe_candidate` with `validation_unavailable`
+
+The bridge could not find trusted `stat` or `readlink` support for the selected
+launcher. Restore the platform coreutils under `/usr/bin` or `/bin`, or on NixOS
+expose the immutable `/nix/store` coreutils through Codex's inherited PATH. The
+bridge will not run a validator from a mutable custom PATH location.
+
 ### A review still uses raw `claude -p`
 
 Run:
@@ -518,8 +789,8 @@ Run:
 ```
 
 The doctor reports the installed skill SHA, router and runner paths, whether the
-runner contains the hardened `--safe-mode` flags, and bounded plain vs safe-mode
-Claude probes. If the runner is current but another thread still runs raw
+runner contains the hardened `--safe-mode` flags, a skipped legacy plain-probe key,
+and the bounded hardened safe-mode Claude probe. If the runner is current but another thread still runs raw
 `claude -p`, restart Codex or open a new thread so the skill instructions reload.
 
 ### Preflight says the budget is too low
@@ -558,6 +829,8 @@ Important files:
 - `agents/openai.yaml`
 - `scripts/run-review.sh`
 - `scripts/claude-doctor.sh`
+- `scripts/claude-locator.sh`
+- `scripts/claude-runtime.sh`
 - `scripts/claude-command-router.sh`
 - `scripts/claude-subscription-env.sh`
 - `scripts/build-review-artifact.sh`
@@ -588,5 +861,9 @@ bash -n scripts/*.sh tests/*.sh
 bash tests/claude-command-router.sh
 bash tests/claude-update.sh
 bash tests/claude-doctor.sh
+bash tests/claude-locator-runtime.sh
 bash tests/run-review-sandbox-classification.sh
+bash tests/run-review-discovery-runtime.sh
+bash tests/claude-router-guard-docs.sh
+bash tests/install-completeness.sh
 ```

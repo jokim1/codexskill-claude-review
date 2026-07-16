@@ -64,6 +64,8 @@ Resolve these relative to the current repo and this skill's directory:
 - Command router: `scripts/claude-command-router.sh`
 - Doctor helper: `scripts/claude-doctor.sh`
 - Native Claude helper: `scripts/run-review.sh`
+- Claude locator helper: `scripts/claude-locator.sh`
+- Claude runtime helper: `scripts/claude-runtime.sh`
 - Artifact builder: `scripts/build-review-artifact.sh`
 - Update helper: `scripts/claude-update.sh`
 - Update check helper: `scripts/claude-update-check.sh`
@@ -79,6 +81,12 @@ builder must never silently truncate source, test, template, or diff content to 
 that guardrail. Code and PR review splitting is capped at 12 parts by default
 (`CLAUDE_REVIEW_MAX_SPLIT_PARTS`) to avoid unbounded Claude-call fan-out on huge or
 generated diffs.
+
+`scripts/run-review.sh` assembles each bounded prompt in its private runtime
+directory with mode `0600` and streams it to `claude -p` on stdin. Never move the
+artifact body back into one argv element: the 200000-byte contract exceeds
+per-argument limits on supported Linux and Windows hosts. Keep control flags and
+other bounded values as discrete argv.
 
 If `CLAUDE_REVIEW_MAX_ARTIFACT_BYTES` is overridden for artifact building, export
 the same value for every corresponding `scripts/run-review.sh` call. The runner
@@ -208,6 +216,28 @@ Do not run raw `claude -p` health checks directly from the Codex rendering layer
 Use `scripts/claude-doctor.sh` for diagnostics and `scripts/run-review.sh` for all
 review probes and review invocations. Both helpers own the hardened Claude flags.
 
+Runner and doctor must use only the exact `python3` accepted by
+`claude_runtime_resolve_trusted_python`, and every bridge Python invocation must
+retain isolated/no-site mode (`-I -S`). The resolver applies the Claude trust policy to the
+Python launch path and rejects script-shaped Python launchers so these options cannot be
+reinterpreted as a script argument. A shebangless candidate is accepted only when
+its binary header identifies ELF, Mach-O, or PE; shebangless text and malformed
+PE-like wrappers fail closed. Do not fall back to a second PATH lookup.
+Temporary trust boundaries include inherited absolute `TMPDIR`, `TEMP`, and `TMP`
+roots plus the macOS `/var/folders` namespace.
+The explicit launcher transport applies `-I -S` to validated Python shebangs and
+`-f` to validated zsh shebangs, including through accepted recursive shebang chains,
+preventing retained HOME from loading user startup code before the launcher.
+Native shebang interpreters are restricted to audited Bash/dash/sh, Node,
+Python/PyPy, and zsh forms; recursively inspected script wrappers are accepted only
+when their chain terminates in one of those native interpreters.
+
+The shared runtime driver owns bounded child-process lifetime. On Windows it creates
+the child suspended, assigns it to a kill-on-close Job Object, and only then resumes
+it so the complete descendant tree is owned from its first instruction; on POSIX it
+uses a private process group. Do not replace either path with direct-process-only
+`terminate()`/`kill()` or an unbounded final output drain.
+
 ### Claude State Writes And Codex Sandbox Boundary
 
 Review flows may need to run `scripts/run-review.sh` outside the Codex filesystem
@@ -223,12 +253,32 @@ whether the review bridge itself was sandboxed. Only the review bridge may need 
 boundary:
 
 ```text
-approved prefix: ["bash", "<skill-dir>/scripts/run-review.sh"]
+approved prefix: ["<trusted-bash>", "--noprofile", "--norc", "-p", "<skill-dir>/scripts/run-review.sh"]
 ```
 
-Approving that prefix grants unsandboxed execution to the installed skill script, so
-only approve the exact installed skill path you trust. Do not approve broad prefixes
-such as `["bash"]`, and do not approve repo-local or unreviewed copies of the helper.
+Every runner and doctor invocation must set `BASH_ENV=`, `ENV=`, `LD_PRELOAD=`,
+`LD_AUDIT=`, `LD_LIBRARY_PATH=`, `GCONV_PATH=`, and the documented `DYLD_*`
+loader variables to empty before starting an exact trusted Bash with
+`--noprofile --norc -p`. This prevents native loader injection before line 1;
+privileged mode prevents Bash from importing exported functions before the bridge bootstrap. Use `/bin/bash` when present; on
+NixOS use an absolute, non-symlink Bash whose physical path is inside `/nix/store`.
+Never use a bare `bash` or a mutable custom PATH result. The bridge captures the
+caller's PATH as data, then builds its utility PATH only from fixed `/usr/bin` and
+`/bin`, fixed Git-for-Windows roots on Git Bash, plus physically resolved inherited
+directories inside `/nix/store`. A Nix profile symlink is accepted only when its
+final inode matches a regular executable target inside the immutable store. An FHS
+`readlink` trust anchor must be a non-symlink executable or an inode-verified
+immutable-store target and is never executed to validate itself. Other FHS utility
+symlinks are accepted only through a bounded `/usr/bin`, `/bin`, or
+`/etc/alternatives` chain ending at a regular executable in `/usr/bin` or `/bin`.
+Runner and doctor must require the exact current locator/runtime contract values,
+EOF completeness markers, and required symbol sets before sourcing the helpers.
+Treat a stale or mixed-generation helper as `bridge_installation_incomplete`; do
+not combine helper generations after a partial update.
+The validated Claude child still receives the original inherited PATH. Approving the prefix above grants
+unsandboxed execution to the installed skill script, so only approve the exact
+installed skill path you trust. Do not approve broad shell prefixes, and do not
+approve repo-local or unreviewed copies of the helper.
 
 If the command tool cannot request unsandboxed execution and this prefix is not
 already approved, surface the blocked result from `run-review.sh` and tell the user
@@ -346,7 +396,7 @@ RECOMMENDATION: Create or paste a plan, or run /claude-review plan <path-to-plan
 6. Invoke:
 
 ```bash
-bash <skill-dir>/scripts/run-review.sh \
+BASH_ENV= ENV= LD_PRELOAD= LD_AUDIT= LD_LIBRARY_PATH= GCONV_PATH= DYLD_INSERT_LIBRARIES= DYLD_LIBRARY_PATH= DYLD_FRAMEWORK_PATH= DYLD_FALLBACK_LIBRARY_PATH= DYLD_FALLBACK_FRAMEWORK_PATH= DYLD_FORCE_FLAT_NAMESPACE= DYLD_IMAGE_SUFFIX= DYLD_ROOT_PATH= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/run-review.sh \
   --mode plan \
   --artifact-file <temp-plan-file> \
   --base-prompt <skill-dir>/prompts/plan-review.base.md \
@@ -395,7 +445,7 @@ RECOMMENDATION: Ensure the repo has a reachable base branch or use /claude-revie
    base branch, and inline instructions for every listed part. Otherwise invoke:
 
 ```bash
-bash <skill-dir>/scripts/run-review.sh \
+BASH_ENV= ENV= LD_PRELOAD= LD_AUDIT= LD_LIBRARY_PATH= GCONV_PATH= DYLD_INSERT_LIBRARIES= DYLD_LIBRARY_PATH= DYLD_FRAMEWORK_PATH= DYLD_FALLBACK_LIBRARY_PATH= DYLD_FALLBACK_FRAMEWORK_PATH= DYLD_FORCE_FLAT_NAMESPACE= DYLD_IMAGE_SUFFIX= DYLD_ROOT_PATH= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/run-review.sh \
   --mode code \
   --artifact-file <temp-artifact-file> \
   --base-prompt <skill-dir>/prompts/code-review.base.md \
@@ -429,7 +479,7 @@ Equivalent to `/claude-review challenge code [inline challenge focus]`.
    part. Otherwise invoke:
 
 ```bash
-bash <skill-dir>/scripts/run-review.sh \
+BASH_ENV= ENV= LD_PRELOAD= LD_AUDIT= LD_LIBRARY_PATH= GCONV_PATH= DYLD_INSERT_LIBRARIES= DYLD_LIBRARY_PATH= DYLD_FRAMEWORK_PATH= DYLD_FALLBACK_LIBRARY_PATH= DYLD_FALLBACK_FRAMEWORK_PATH= DYLD_FORCE_FLAT_NAMESPACE= DYLD_IMAGE_SUFFIX= DYLD_ROOT_PATH= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/run-review.sh \
   --mode challenge_code \
   --artifact-file <temp-artifact-file> \
   --base-prompt <skill-dir>/prompts/challenge-code.base.md \
@@ -455,7 +505,7 @@ bash <skill-dir>/scripts/run-review.sh \
 3. Invoke:
 
 ```bash
-bash <skill-dir>/scripts/run-review.sh \
+BASH_ENV= ENV= LD_PRELOAD= LD_AUDIT= LD_LIBRARY_PATH= GCONV_PATH= DYLD_INSERT_LIBRARIES= DYLD_LIBRARY_PATH= DYLD_FRAMEWORK_PATH= DYLD_FALLBACK_LIBRARY_PATH= DYLD_FALLBACK_FRAMEWORK_PATH= DYLD_FORCE_FLAT_NAMESPACE= DYLD_IMAGE_SUFFIX= DYLD_ROOT_PATH= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/run-review.sh \
   --mode challenge_plan \
   --artifact-file <temp-plan-file> \
   --base-prompt <skill-dir>/prompts/challenge-plan.base.md \
@@ -677,16 +727,61 @@ Print the returned effective values.
 Run:
 
 ```bash
-bash <skill-dir>/scripts/claude-doctor.sh \
+BASH_ENV= ENV= LD_PRELOAD= LD_AUDIT= LD_LIBRARY_PATH= GCONV_PATH= DYLD_INSERT_LIBRARIES= DYLD_LIBRARY_PATH= DYLD_FRAMEWORK_PATH= DYLD_FALLBACK_LIBRARY_PATH= DYLD_FALLBACK_FRAMEWORK_PATH= DYLD_FORCE_FLAT_NAMESPACE= DYLD_IMAGE_SUFFIX= DYLD_ROOT_PATH= <trusted-bash> --noprofile --norc -p <skill-dir>/scripts/claude-doctor.sh \
   --repo-root <repo-root> \
   --skill-root <skill-dir> \
   --config-file <repo>/.codex/claude/config.env
 ```
 
+`--skill-root` must physically match the root containing the invoked doctor. It is
+an assertion only and must never redirect config, locator, or runtime helper loading.
+
 Render the command output directly. Use this command to diagnose stale skill
 checkouts, stale Codex thread routing, missing safe-mode runner flags, Claude CLI
-auth/config problems, and update state. Do not replace it with a hand-written
-`claude -p` probe.
+discovery/trust/runtime/auth/config problems and inherited environment. Doctor
+always skips the mutating update helper. It is diagnostic and report-only: it must
+not install Claude, edit PATH
+or shell configuration, create a symlink, refresh a Git index, execute a Git
+fsmonitor hook, or otherwise mutate the user's system. Checkout diagnostics must
+disable optional locks and ignore inherited Git repository/config routing and
+trace-output variables.
+Treat `scrubbed_env_<NAME>=present` as a presence-only diagnostic: the value was
+inherited by doctor but is deliberately removed before the validated Claude
+interpreter chain starts. Never ask the user to reveal the value or recommend
+restoring a scrubbed code-loading variable as a runtime fix.
+Treat `claude_trust_reason=validation_unavailable` as a fail-closed unsafe-candidate
+diagnosis; do not recommend bypassing trust validation or using a mutable PATH
+utility in order to continue.
+Treat `claude_path_status=launcher_dependency_unsafe` the same way: the recognized
+shebang interpreter failed the launcher's trust boundary and must not be executed.
+Use the emitted `claude_launcher_dependency_path`, trust scope, and trust reason to
+explain which inherited-PATH or absolute interpreter needs repair.
+Treat `claude_path_status=launcher_dependency_validation_unavailable` as a missing
+trusted native-header validator. Restore fixed-FHS `od` or an immutable-store `od`;
+do not substitute a mutable PATH utility or describe the launcher syntax as invalid.
+For `claude_path_status=launcher_dependency_missing`, use
+`claude_launcher_dependency_resolution`: recommend an inherited-PATH change only
+for `path`; for `absolute`, tell the user to repair or reinstall the exact reported
+shebang path because PATH cannot fix it.
+Treat `claude_path_status=launcher_dependency_unsupported` as fail-closed too; use
+an argument-free audited absolute interpreter or exact `#!/usr/bin/env NAME`
+launcher resolving to audited Bash/dash/sh, Node, Python/PyPy, or zsh rather than
+trying to interpret unsupported `env -S` syntax or bypass an unknown native
+interpreter in the rendering layer.
+Treat `claude_path_status=launcher_dependency_unreadable` as fail-closed; repair
+read access to the reported launcher/interpreter chain or reinstall native Claude.
+Treat symlink loops and inaccessible targets as fail-closed
+`validation_unavailable` results, not dangling fallbacks. Only a bounded resolution
+that proves an absent final target may be reported as `dangling_symlink` and defer
+to a later fixed fallback.
+Keep the legacy `plain_print_probe_status` key in doctor output as
+`skipped_redundant_hardened_probe`; only `safe_mode_print_probe` performs the
+bounded hardened live call.
+Do not replace it with a hand-written `claude -p` probe.
+Treat doctor output as line-oriented `key=value` records. Escape `\`, newline,
+carriage return, tab, and other control bytes in every dynamic value as `\\`,
+`\n`, `\r`, `\t`, and `\xNN`, respectively; never allow inherited paths or
+parsed command output to emit additional records.
 
 ### `/claude-review update`
 
@@ -805,6 +900,37 @@ Do not include budget or timeout on every successful review result. Show them on
 - the user asks for config with `/claude-review show`
 - the bridge blocks on budget or timeout
 - the user explicitly asks for diagnostics
+
+## Blocked Review Recovery
+
+When a rendered blocked result ends with this exact offer, preserve it verbatim:
+
+```text
+Run /claude-review doctor now?
+Reply Y to run diagnostics, or N to stop.
+```
+
+The recognized immediate-response vocabulary is `Y`, `yes`, and `run doctor`.
+If the immediately following user response is exactly one of those affirmatives,
+run the canonical `/claude-review doctor` flow with the same repo root and config
+file, render doctor output directly, and stop. Do not run the update preflight for
+this doctor continuation. Do not retry the failed review automatically.
+
+If the immediate response is `N` or otherwise declines, stop cleanly. A later or
+unrelated `Y`, `yes`, or `run doctor` is not authorization: this convenience applies
+only to the response immediately following the bridge's explicit doctor offer.
+The full `/claude-review doctor` command remains the deterministic fallback if the
+host does not interpret a short reply.
+
+Doctor-eligible blockers are bounded to candidate-not-found, unusable or unsafe
+Claude, launcher-dependency, subscription-auth, preflight timeout/failure, and
+ambiguous invocation failures. Budget caps, review timeouts, artifacts, missing
+context, command/config boundaries, helper-integrity failures, and Claude
+state-write denial retain their direct remediation without this offer. Doctor is
+diagnostic only: never modify PATH, install Claude, create symlinks, edit profiles,
+or make other system changes in response to the offer.
+Version, auth-status, and live-probe calls are bounded by the preflight timeout;
+doctor renders timeout diagnostics rather than waiting indefinitely.
 
 Each finding should include:
 
