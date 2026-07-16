@@ -13,6 +13,7 @@ CHECK_ONLY_SKILL="$TMP_ROOT/check-only-skill"
 CALLER_REPO="$TMP_ROOT/caller"
 STATE_DIR="$TMP_ROOT/state"
 CHECK_STATE_DIR="$TMP_ROOT/check-state"
+UPDATE_SUMMARY_TEXT="safer updates that preserve conflicting local files and clearly identify which repo changes"
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
 fail() {
@@ -31,6 +32,14 @@ assert_contains() {
   esac
 }
 
+assert_line() {
+  local case_name="$1"
+  local output="$2"
+  local expected="$3"
+
+  printf '%s\n' "$output" | grep -Fqx "$expected" || fail "$case_name: expected exact line: $expected\n$output"
+}
+
 assert_file_contents() {
   local case_name="$1"
   local file="$2"
@@ -41,6 +50,14 @@ assert_file_contents() {
   actual="$(cat "$file")"
   [ "$actual" = "$expected" ] || fail "$case_name: expected $file to contain '$expected', got '$actual'"
 }
+
+[ -s "$REPO_ROOT/UPDATE_SUMMARY" ] || fail "repository UPDATE_SUMMARY is missing or empty"
+[ "$(wc -l < "$REPO_ROOT/UPDATE_SUMMARY" | tr -d ' ')" = "1" ] || fail "repository UPDATE_SUMMARY must contain exactly one line"
+REPOSITORY_UPDATE_SUMMARY="$(cat "$REPO_ROOT/UPDATE_SUMMARY")"
+[ "${#REPOSITORY_UPDATE_SUMMARY}" -le 240 ] || fail "repository UPDATE_SUMMARY exceeds 240 characters"
+case "$REPOSITORY_UPDATE_SUMMARY" in
+  *[.!?]) fail "repository UPDATE_SUMMARY must omit terminal punctuation" ;;
+esac
 
 git init -q --bare "$REMOTE"
 git init -q "$SOURCE"
@@ -64,7 +81,8 @@ git -C "$CHECK_ONLY_SKILL" config user.email test@example.com
 git -C "$CHECK_ONLY_SKILL" config user.name "Claude Update Test"
 
 printf '/docs/local-plans/\n' > "$SOURCE/.gitignore"
-git -C "$SOURCE" add .gitignore
+printf '%s.\n' "$UPDATE_SUMMARY_TEXT" > "$SOURCE/UPDATE_SUMMARY"
+git -C "$SOURCE" add .gitignore UPDATE_SUMMARY
 git -C "$SOURCE" commit -qm "add incoming ignore rule"
 git -C "$SOURCE" push -qu origin main
 REMOTE_SHA="$(git -C "$SOURCE" rev-parse HEAD)"
@@ -101,6 +119,12 @@ CHECK_OUTPUT="$(bash "$UPDATE_CHECK" \
   --skill-dir "$CHECK_ONLY_SKILL" \
   --state-dir "$CHECK_STATE_DIR" 2>&1)"
 assert_contains "automatic update check remains actionable" "$CHECK_OUTPUT" "UPDATE_AVAILABLE"
+assert_line "automatic update summary" "$CHECK_OUTPUT" "UPDATE_SUMMARY $UPDATE_SUMMARY_TEXT"
+
+CACHED_CHECK_OUTPUT="$(bash "$UPDATE_CHECK" \
+  --skill-dir "$CHECK_ONLY_SKILL" \
+  --state-dir "$CHECK_STATE_DIR" 2>&1)"
+assert_line "cached update summary" "$CACHED_CHECK_OUTPUT" "UPDATE_SUMMARY $UPDATE_SUMMARY_TEXT"
 
 BACKUP_OUTPUT="$(bash "$UPDATER" \
   --backup-conflicts \
@@ -110,6 +134,7 @@ BACKUP_OUTPUT="$(bash "$UPDATER" \
 
 [ "$(git -C "$SKILL_CHECKOUT" rev-parse HEAD)" = "$REMOTE_SHA" ] || fail "backup continuation did not complete the update"
 assert_file_contents "incoming tracked file" "$SKILL_CHECKOUT/.gitignore" "/docs/local-plans/"
+assert_file_contents "incoming update summary" "$SKILL_CHECKOUT/UPDATE_SUMMARY" "$UPDATE_SUMMARY_TEXT."
 assert_file_contents "ignored content survives" "$SKILL_CHECKOUT/docs/local-plans/private-plan.md" "keep me"
 BACKED_UP_IGNORE="$(find "$STATE_DIR/update-backups" -type f -name .gitignore -print -quit)"
 [ -n "$BACKED_UP_IGNORE" ] || fail "backup continuation did not preserve the local .gitignore"

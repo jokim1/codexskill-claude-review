@@ -110,7 +110,16 @@ Supported commands:
 
 Every `/claude-review ...` command except `/claude-review update` and
 `/claude-review doctor` runs a low-noise update check first. If a new version is
-available, Codex asks whether to update before continuing.
+available, Codex shows the bounded one-line summary from `UPDATE_SUMMARY` and asks:
+
+```text
+/claude-review update available: <summary>. Reply Y to install now, or N to continue and update later with /claude-review update.
+```
+
+Replying `N` continues the requested command and preserves the existing snooze
+behavior. The user can install later from any code repo with
+`/claude-review update`; the skill is updated once per installed checkout, not once
+per code repo.
 
 Update output identifies both the skill checkout and the repo from which the
 command was invoked. It explicitly says whether those are the same Git checkout.
@@ -825,6 +834,7 @@ Claude subscription login.
 
 Important files:
 
+- `UPDATE_SUMMARY`
 - `SKILL.md`
 - `agents/openai.yaml`
 - `scripts/run-review.sh`
@@ -846,6 +856,10 @@ Important files:
 
 The installed copy is the deployed artifact. The source repo is where durable
 changes should live.
+
+Keep `UPDATE_SUMMARY` to one concise user-facing line (240 ASCII characters or
+fewer) describing the latest update. Do not include terminal punctuation; the
+update prompt supplies it.
 
 For the symlinked development layout:
 

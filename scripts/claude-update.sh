@@ -492,7 +492,7 @@ fi
 if ! atomic_write "$STATE_DIR/just-updated-from" "$LOCAL_SHA"; then
   echo "Warning: /claude-review updated, but could not write the just-updated marker at $STATE_DIR." >&2
 fi
-if ! rm -f "$STATE_DIR/last-update-check" "$STATE_DIR/update-snoozed"; then
+if ! rm -f "$STATE_DIR/last-update-check" "$STATE_DIR/last-update-summary" "$STATE_DIR/update-snoozed"; then
   echo "Warning: /claude-review updated, but could not clear cached update state at $STATE_DIR." >&2
 fi
 

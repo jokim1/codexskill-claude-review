@@ -27,6 +27,8 @@ grep -Fq 'ACTION_REQUIRED: BACKUP_CONFLICTS' "$SKILL_FILE" || fail "SKILL.md mus
 grep -Fq -- '--backup-conflicts' "$SKILL_FILE" || fail "SKILL.md must document the safe update continuation"
 grep -Fq 'same `--caller-repo <repo-root>`' "$SKILL_FILE" || fail "SKILL.md must preserve update scope across continuation"
 grep -Fq 'no checkout files were changed' "$SKILL_FILE" || fail "SKILL.md must clearly describe the non-destructive update pause"
+grep -Fq 'UPDATE_SUMMARY <summary>' "$SKILL_FILE" || fail "SKILL.md must consume the bounded update summary"
+grep -Fq '/claude-review update available: <summary>. Reply Y to install now, or N to continue and update later with /claude-review update.' "$SKILL_FILE" || fail "SKILL.md concise update prompt missing"
 
 grep -Fq 'Run /claude-review doctor now?' "$RUNNER_FILE" || fail "runner doctor offer prompt missing"
 grep -Fq 'Reply Y to run diagnostics, or N to stop.' "$RUNNER_FILE" || fail "runner doctor reply prompt missing"

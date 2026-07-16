@@ -21,6 +21,7 @@ Usage:
 Output:
   JUST_UPDATED <old> <new>
   UPDATE_AVAILABLE <old> <new> <new-full-sha>
+  UPDATE_SUMMARY <one-line user-facing summary>
   UP_TO_DATE <current>        Only with --show-up-to-date
   SNOOZED <version> <duration>
 EOF
@@ -33,6 +34,60 @@ short_sha() {
   else
     printf '%s' "$value"
   fi
+}
+
+sanitize_update_summary() {
+  LC_ALL=C awk '
+    {
+      gsub(/[^[:print:]]/, "")
+      gsub(/[[:space:]]+/, " ")
+      sub(/^ /, "")
+      sub(/ $/, "")
+      if (length($0) > 0) {
+        summary = substr($0, 1, 240)
+        sub(/[.!?]+$/, "", summary)
+        print summary
+        exit
+      }
+    }
+  '
+}
+
+read_remote_update_summary() {
+  local local_sha="$1"
+  local remote_sha="$2"
+  local summary=""
+
+  summary="$(git -C "$SKILL_DIR" show "${remote_sha}:UPDATE_SUMMARY" 2>/dev/null | sanitize_update_summary || true)"
+  if [ -z "$summary" ]; then
+    summary="$(git -C "$SKILL_DIR" log --format=%s --no-merges "$local_sha..$remote_sha" 2>/dev/null | sanitize_update_summary || true)"
+  fi
+  if [ -z "$summary" ]; then
+    summary="improvements and fixes are ready"
+  fi
+  printf '%s' "$summary"
+}
+
+read_cached_update_summary() {
+  local remote_sha="$1"
+  local cached="" cached_remote="" summary=""
+
+  [ -f "$SUMMARY_CACHE_FILE" ] || return 0
+  cached="$(cat "$SUMMARY_CACHE_FILE" 2>/dev/null || true)"
+  cached_remote="${cached%% *}"
+  [ "$cached_remote" = "$remote_sha" ] || return 0
+  summary="${cached#"$cached_remote"}"
+  summary="${summary# }"
+  printf '%s' "$summary" | sanitize_update_summary
+}
+
+print_update_available() {
+  local local_sha="$1"
+  local remote_sha="$2"
+  local summary="$3"
+
+  printf 'UPDATE_AVAILABLE %s %s %s\n' "$(short_sha "$local_sha")" "$(short_sha "$remote_sha")" "$remote_sha"
+  printf 'UPDATE_SUMMARY %s\n' "$summary"
 }
 
 is_git_repo() {
@@ -274,6 +329,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 CACHE_FILE="$STATE_DIR/last-update-check"
+SUMMARY_CACHE_FILE="$STATE_DIR/last-update-summary"
 MARKER_FILE="$STATE_DIR/just-updated-from"
 SNOOZE_FILE="$STATE_DIR/update-snoozed"
 
@@ -287,7 +343,7 @@ if [ -n "$SNOOZE_SHA" ]; then
 fi
 
 if [ "$FORCE" = "true" ]; then
-  rm -f "$CACHE_FILE" "$SNOOZE_FILE" 2>/dev/null || true
+  rm -f "$CACHE_FILE" "$SUMMARY_CACHE_FILE" "$SNOOZE_FILE" 2>/dev/null || true
 fi
 
 is_git_repo || exit 0
@@ -333,7 +389,11 @@ if [ -f "$CACHE_FILE" ]; then
       if check_snooze "$CACHED_REMOTE"; then
         :
       elif update_is_actionable "$LOCAL_SHA" "$CACHED_REMOTE"; then
-        printf 'UPDATE_AVAILABLE %s %s %s\n' "$(short_sha "$LOCAL_SHA")" "$(short_sha "$CACHED_REMOTE")" "$CACHED_REMOTE"
+        CACHED_SUMMARY="$(read_cached_update_summary "$CACHED_REMOTE")"
+        if [ -z "$CACHED_SUMMARY" ]; then
+          CACHED_SUMMARY="$(read_remote_update_summary "$LOCAL_SHA" "$CACHED_REMOTE")"
+        fi
+        print_update_available "$LOCAL_SHA" "$CACHED_REMOTE" "$CACHED_SUMMARY"
         exit 0
       fi
     fi
@@ -351,6 +411,7 @@ esac
 
 if [ "$LOCAL_SHA" = "$REMOTE_SHA" ]; then
   atomic_write "$CACHE_FILE" "UP_TO_DATE $LOCAL_SHA $REMOTE_SHA" || true
+  rm -f "$SUMMARY_CACHE_FILE" 2>/dev/null || true
   if [ "$SHOW_UP_TO_DATE" = "true" ]; then
     printf 'UP_TO_DATE %s\n' "$(short_sha "$LOCAL_SHA")"
   fi
@@ -361,9 +422,11 @@ if ! update_is_actionable "$LOCAL_SHA" "$REMOTE_SHA"; then
   exit 0
 fi
 
+UPDATE_SUMMARY="$(read_remote_update_summary "$LOCAL_SHA" "$REMOTE_SHA")"
 atomic_write "$CACHE_FILE" "UPDATE_AVAILABLE $LOCAL_SHA $REMOTE_SHA" || true
+atomic_write "$SUMMARY_CACHE_FILE" "$REMOTE_SHA $UPDATE_SUMMARY" || true
 if check_snooze "$REMOTE_SHA"; then
   exit 0
 fi
 
-printf 'UPDATE_AVAILABLE %s %s %s\n' "$(short_sha "$LOCAL_SHA")" "$(short_sha "$REMOTE_SHA")" "$REMOTE_SHA"
+print_update_available "$LOCAL_SHA" "$REMOTE_SHA" "$UPDATE_SUMMARY"

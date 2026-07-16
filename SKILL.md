@@ -305,11 +305,12 @@ Running /claude-review at <new> (just updated from <old>).
 
 Then continue the requested command.
 
-If the output includes `UPDATE_AVAILABLE <old> <new> <new-full-sha>`, ask the user
-exactly:
+If the output includes `UPDATE_AVAILABLE <old> <new> <new-full-sha>`, read the
+one-line text from `UPDATE_SUMMARY <summary>`. If that line is missing or empty,
+use `improvements and fixes are ready`. Ask the user exactly:
 
 ```text
-There is a new /claude-review update available (<old> -> <new>). Reply Y to update now, or N to skip for now.
+/claude-review update available: <summary>. Reply Y to install now, or N to continue and update later with /claude-review update.
 ```
 
 Do not continue the requested command until the user answers. If the user answers
