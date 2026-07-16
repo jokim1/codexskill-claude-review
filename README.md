@@ -106,10 +106,24 @@ Supported commands:
 | `/claude-review set timeout [timeout in seconds]` | Set the review timeout floor. |
 | `/claude-review update` | Update the installed skill checkout with a fast-forward-only merge from `origin/main`. |
 | `/claude-review update --check` | Check whether an update is available without changing the installed skill checkout. |
+| `/claude-review update --backup-conflicts` | Preserve colliding untracked or ignored paths outside the checkout, then complete the update. |
 
 Every `/claude-review ...` command except `/claude-review update` runs a low-noise
 update check first. If a new version is available, Codex asks whether to update
 before continuing.
+
+Update output identifies both the skill checkout and the repo from which the
+command was invoked. It explicitly says whether those are the same Git checkout.
+This matters for a symlinked development install: updating the skill then updates
+that source repo, while a normal clone under `~/.codex/skills/claude-review` is
+separate from the current code repo.
+
+If an incoming tracked path collides with an untracked or ignored local path, the
+default update stops before changing checkout files and lists both absolute local
+paths and absolute incoming write locations. `/claude-review update --backup-conflicts`
+moves only those colliding local paths to a timestamped directory under
+`~/.codex/claude/update-backups/`, writes a manifest, completes the fast-forward,
+and reports the exact backup location.
 
 Out of scope:
 
@@ -572,6 +586,7 @@ Useful checks:
 ```bash
 bash -n scripts/*.sh tests/*.sh
 bash tests/claude-command-router.sh
+bash tests/claude-update.sh
 bash tests/claude-doctor.sh
 bash tests/run-review-sandbox-classification.sh
 ```

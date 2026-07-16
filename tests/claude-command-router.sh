@@ -290,6 +290,14 @@ assert_case "canonical update check routes to admin update check" false \
   "/claude-review update --check" \
   '{"status":"ok","flow":"admin_update_check","admin_action":"update_check","admin_args":["--check"]}'
 
+assert_case "canonical update backup conflicts routes to admin update" false \
+  "/claude-review update --backup-conflicts" \
+  '{"status":"ok","flow":"admin_update","admin_action":"update","admin_args":["--backup-conflicts"]}'
+
+assert_case "canonical update rejects combined update flags" false \
+  "/claude-review update --check --backup-conflicts" \
+  '{"status":"unsupported"}'
+
 assert_case "canonical show routes to admin show" false \
   "/claude-review show" \
   '{"status":"ok","flow":"admin_show","admin_action":"show","admin_args":[]}'

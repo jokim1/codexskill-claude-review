@@ -337,9 +337,11 @@ def route_admin(tokens, *, legacy_alias):
     if head == "update":
         if tail == ["--check"]:
             return admin_result("admin_update_check", "update_check", ["--check"], legacy_alias=legacy_alias)
+        if tail == ["--backup-conflicts"]:
+            return admin_result("admin_update", "update", ["--backup-conflicts"], legacy_alias=legacy_alias)
         if not tail:
             return admin_result("admin_update", "update", [], legacy_alias=legacy_alias)
-        return unsupported("/claude-review update only accepts --check.")
+        return unsupported("/claude-review update only accepts --check or --backup-conflicts.")
 
     if head == "show":
         if tail:

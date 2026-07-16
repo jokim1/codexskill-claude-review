@@ -22,7 +22,7 @@ description: |
   `/claude-review set model <alias-or-full-model>`,
   `/claude-review set budget <usd>`,
   `/claude-review set timeout <seconds>`, `/claude-review update`,
-  `/claude-review update --check`, plus legacy aliases under
+  `/claude-review update --check`, `/claude-review update --backup-conflicts`, plus legacy aliases under
   `/claude-review review ...`.
 ---
 
@@ -178,6 +178,7 @@ Use these config forms:
 - `/claude-review set timeout <seconds>`
 - `/claude-review update`
 - `/claude-review update --check`
+- `/claude-review update --backup-conflicts`
 
 When these instructions refer to "inline review instructions," use the literal text
 after `/claude-review code` or `/claude-review review code`. Treat those as one-off
@@ -265,10 +266,28 @@ Do not continue the requested command until the user answers. If the user answer
 `Y` or `yes`, run:
 
 ```bash
-bash <skill-dir>/scripts/claude-update.sh
+bash <skill-dir>/scripts/claude-update.sh --caller-repo <repo-root>
 ```
 
-Then tell the user the update result. If the update succeeded, stop and ask the user
+Then tell the user the update result. If the output includes
+`ACTION_REQUIRED: BACKUP_CONFLICTS`, preserve the location and collision details,
+then ask exactly:
+
+```text
+The update is paused and no checkout files were changed. Reply Y to back up the listed local paths outside the repo and complete the update, or N to stop.
+```
+
+If the immediately following response is `Y` or `yes`, run:
+
+```bash
+bash <skill-dir>/scripts/claude-update.sh \
+  --backup-conflicts \
+  --caller-repo <repo-root>
+```
+
+Render the result directly, including the exact backup location. Do not treat a
+later or unrelated affirmative as consent to move local paths. If the update
+succeeded, stop and ask the user
 to rerun the originally requested `/claude-review ...` command so Codex reloads the updated
 skill instructions. Do not continue the original command in the same invocation.
 If the user declines, run:
@@ -674,18 +693,43 @@ auth/config problems, and update state. Do not replace it with a hand-written
 If the user passes `--check`, run:
 
 ```bash
-bash <skill-dir>/scripts/claude-update.sh --check
+bash <skill-dir>/scripts/claude-update.sh \
+  --check \
+  --caller-repo <repo-root>
+```
+
+If the user passes `--backup-conflicts`, run:
+
+```bash
+bash <skill-dir>/scripts/claude-update.sh \
+  --backup-conflicts \
+  --caller-repo <repo-root>
 ```
 
 Otherwise run:
 
 ```bash
-bash <skill-dir>/scripts/claude-update.sh
+bash <skill-dir>/scripts/claude-update.sh \
+  --caller-repo <repo-root>
 ```
 
-Render the command output directly. If the update is blocked by a dirty checkout,
-detached checkout, missing git install, or non-fast-forward history, surface the
-blocker and do not try to repair it automatically.
+Render the command output directly. Preserve the `Skill checkout`, `Command repo`,
+and `Scope` lines so the user can tell whether the update changes the current code
+repo or a separate installed-skill checkout.
+
+If the output includes `ACTION_REQUIRED: BACKUP_CONFLICTS`, preserve the listed
+absolute local paths, absolute incoming write locations, and backup parent, then ask exactly:
+
+```text
+The update is paused and no checkout files were changed. Reply Y to back up the listed local paths outside the repo and complete the update, or N to stop.
+```
+
+If the immediately following response is `Y` or `yes`, rerun the update with
+`--backup-conflicts` and the same `--caller-repo <repo-root>`, then render the exact
+backup location and update result. This consent applies only to that immediate
+response. If the update is blocked by a dirty tracked checkout, detached checkout,
+missing git install, or non-fast-forward history, surface the blocker and do not
+try to repair it automatically.
 
 ### `/claude-review set effort <low|medium|high|xhigh|max>`
 

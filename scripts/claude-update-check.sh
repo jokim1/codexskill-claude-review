@@ -219,86 +219,6 @@ state_dir_ready() {
   rm -f "$test_file" 2>/dev/null || true
 }
 
-is_exact_tracked_path() {
-  local candidate="$1"
-  local tracked=""
-
-  while IFS= read -r -d '' tracked; do
-    [ "$tracked" = "$candidate" ] && return 0
-  done < <(git -C "$SKILL_DIR" ls-files -z -- "$candidate" 2>/dev/null || true)
-
-  return 1
-}
-
-path_has_untracked_descendants() {
-  local candidate="$1"
-  local item="" rel=""
-
-  while IFS= read -r -d '' item; do
-    rel="${item#"$SKILL_DIR/"}"
-    if ! is_exact_tracked_path "$rel"; then
-      return 0
-    fi
-  done < <(find "$SKILL_DIR/$candidate" -mindepth 1 \( -type f -o -type l \) -print0 2>/dev/null || true)
-
-  return 1
-}
-
-path_blocks_as_ancestor() {
-  local candidate="$1"
-  local full_path="$SKILL_DIR/$candidate"
-
-  [ -e "$full_path" ] || [ -L "$full_path" ] || return 1
-  is_exact_tracked_path "$candidate" && return 1
-  [ -L "$full_path" ] && return 0
-  [ -d "$full_path" ] && return 1
-  return 0
-}
-
-path_blocks_as_exact_target() {
-  local candidate="$1"
-  local full_path="$SKILL_DIR/$candidate"
-
-  [ -e "$full_path" ] || [ -L "$full_path" ] || return 1
-  is_exact_tracked_path "$candidate" && return 1
-  [ -L "$full_path" ] && return 0
-  if [ -d "$full_path" ]; then
-    path_has_untracked_descendants "$candidate"
-    return $?
-  fi
-  return 0
-}
-
-path_has_collision() {
-  local path="$1"
-  local ancestor=""
-
-  ancestor="${path%/*}"
-  while [ "$ancestor" != "$path" ] && [ -n "$ancestor" ] && [ "$ancestor" != "." ]; do
-    if path_blocks_as_ancestor "$ancestor"; then
-      return 0
-    fi
-    [ "$ancestor" = "${ancestor%/*}" ] && break
-    ancestor="${ancestor%/*}"
-  done
-
-  path_blocks_as_exact_target "$path"
-}
-
-has_untracked_collisions() {
-  local local_sha="$1"
-  local remote_ref="$2"
-  local path=""
-
-  while IFS= read -r -d '' path; do
-    if path_has_collision "$path"; then
-      return 0
-    fi
-  done < <(git -C "$SKILL_DIR" diff --name-only -z --diff-filter=ACMRT "$local_sha" "$remote_ref" 2>/dev/null || true)
-
-  return 1
-}
-
 update_is_actionable() {
   local local_sha="$1"
   local remote_sha="$2"
@@ -315,9 +235,8 @@ update_is_actionable() {
   fetched_sha="$(git -C "$SKILL_DIR" rev-parse "$remote_ref" 2>/dev/null || true)"
   [ "$fetched_sha" = "$remote_sha" ] || return 1
   git -C "$SKILL_DIR" merge-base --is-ancestor "$local_sha" "$remote_ref" || return 1
-  if has_untracked_collisions "$local_sha" "$remote_ref"; then
-    return 1
-  fi
+  # Untracked or ignored collisions are still actionable: the explicit update
+  # flow can preserve them with /claude-review update --backup-conflicts.
 }
 
 while [ "$#" -gt 0 ]; do

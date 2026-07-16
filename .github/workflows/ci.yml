@@ -20,6 +20,9 @@ jobs:
       - name: Command router tests
         run: bash tests/claude-command-router.sh
 
+      - name: Update safety tests
+        run: bash tests/claude-update.sh
+
       - name: Doctor tests
         run: bash tests/claude-doctor.sh
 

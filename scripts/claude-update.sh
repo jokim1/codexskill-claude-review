@@ -9,13 +9,31 @@ REMOTE_NAME="${CLAUDE_UPDATE_REMOTE_NAME:-origin}"
 REMOTE_BRANCH="${CLAUDE_UPDATE_REMOTE_BRANCH:-main}"
 NETWORK_TIMEOUT_SECONDS="${CLAUDE_UPDATE_FETCH_TIMEOUT_SECONDS:-30}"
 CHECK_ONLY="false"
+BACKUP_CONFLICTS="false"
+CALLER_REPO="${CLAUDE_UPDATE_CALLER_REPO:-}"
+ORIGINAL_WORKING_DIR="$(pwd -P)"
+SKILL_REPO_ROOT=""
+CALLER_REPO_ROOT=""
+BACKUP_DIR=""
+BACKUP_FILES_DIR=""
+COLLISION_PATHS=()
+COLLISION_TARGETS=()
+MOVED_COLLISIONS=()
+COLLISION_COUNT=0
+MOVED_COUNT=0
 
 usage() {
   cat <<'EOF'
 Usage:
-  claude-update.sh [--check] [--skill-dir <path>] [--state-dir <path>]
+  claude-update.sh [--check] [--backup-conflicts] [--skill-dir <path>] [--state-dir <path>] [--caller-repo <path>]
 
 Updates the Claude Review skill from origin/main using a fast-forward-only merge.
+
+Options:
+  --backup-conflicts  Preserve colliding untracked or ignored paths outside the
+                      checkout, then complete the update.
+  --caller-repo PATH  Repo from which /claude-review update was invoked. Used only
+                      to explain whether the update changes that same checkout.
 EOF
 }
 
@@ -97,6 +115,39 @@ prepare_state_dir() {
   rm -f "$test_file"
 }
 
+canonical_git_root() {
+  local path="$1"
+  local root=""
+
+  root="$(git -C "$path" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  (cd "$root" && pwd -P)
+}
+
+resolve_update_scope() {
+  SKILL_REPO_ROOT="$(canonical_git_root "$SKILL_DIR")" || return 1
+
+  if [ -n "$CALLER_REPO" ]; then
+    CALLER_REPO_ROOT="$(canonical_git_root "$CALLER_REPO" 2>/dev/null || true)"
+  else
+    CALLER_REPO_ROOT="$(canonical_git_root "$ORIGINAL_WORKING_DIR" 2>/dev/null || true)"
+  fi
+}
+
+print_update_scope() {
+  printf 'Update location:\n'
+  printf '  Skill checkout: %s\n' "$SKILL_REPO_ROOT"
+  if [ -n "$CALLER_REPO_ROOT" ]; then
+    printf '  Command repo:    %s\n' "$CALLER_REPO_ROOT"
+    if [ "$CALLER_REPO_ROOT" = "$SKILL_REPO_ROOT" ]; then
+      printf '  Scope: same checkout; this update changes the command repo.\n'
+    else
+      printf '  Scope: separate checkout; the command repo will not be changed.\n'
+    fi
+  else
+    printf '  Scope: only the skill checkout above will be changed.\n'
+  fi
+}
+
 is_exact_tracked_path() {
   local candidate="$1"
   local tracked=""
@@ -108,23 +159,36 @@ is_exact_tracked_path() {
   return 1
 }
 
-path_has_untracked_descendants() {
+add_collision() {
   local candidate="$1"
+  local incoming_target="$2"
+  local index=0
+
+  for ((index = 0; index < COLLISION_COUNT; index++)); do
+    [ "${COLLISION_PATHS[$index]}" = "$candidate" ] && return 0
+  done
+
+  COLLISION_PATHS[$COLLISION_COUNT]="$candidate"
+  COLLISION_TARGETS[$COLLISION_COUNT]="$incoming_target"
+  COLLISION_COUNT=$((COLLISION_COUNT + 1))
+}
+
+add_untracked_descendant_collisions() {
+  local candidate="$1"
+  local incoming_target="$2"
   local item="" rel=""
 
   while IFS= read -r -d '' item; do
-    rel="${item#"$SKILL_DIR/"}"
+    rel="${item#"$SKILL_REPO_ROOT/"}"
     if ! is_exact_tracked_path "$rel"; then
-      return 0
+      add_collision "$rel" "$incoming_target"
     fi
-  done < <(find "$SKILL_DIR/$candidate" -mindepth 1 \( -type f -o -type l \) -print0 2>/dev/null)
-
-  return 1
+  done < <(find "$SKILL_REPO_ROOT/$candidate" -mindepth 1 \( -type f -o -type l \) -print0 2>/dev/null)
 }
 
 path_blocks_as_ancestor() {
   local candidate="$1"
-  local full_path="$SKILL_DIR/$candidate"
+  local full_path="$SKILL_REPO_ROOT/$candidate"
 
   [ -e "$full_path" ] || [ -L "$full_path" ] || return 1
   is_exact_tracked_path "$candidate" && return 1
@@ -133,61 +197,145 @@ path_blocks_as_ancestor() {
   return 0
 }
 
-path_blocks_as_exact_target() {
-  local candidate="$1"
-  local full_path="$SKILL_DIR/$candidate"
-
-  [ -e "$full_path" ] || [ -L "$full_path" ] || return 1
-  is_exact_tracked_path "$candidate" && return 1
-  [ -L "$full_path" ] && return 0
-  if [ -d "$full_path" ]; then
-    path_has_untracked_descendants "$candidate"
-    return $?
-  fi
-  return 0
-}
-
-add_collision() {
-  local candidate="$1"
-
-  collisions+=("$candidate")
-}
-
 check_path_for_collision() {
   local path="$1"
   local ancestor=""
+  local full_path="$SKILL_REPO_ROOT/$path"
 
   ancestor="${path%/*}"
   while [ "$ancestor" != "$path" ] && [ -n "$ancestor" ] && [ "$ancestor" != "." ]; do
     if path_blocks_as_ancestor "$ancestor"; then
-      add_collision "$ancestor"
+      add_collision "$ancestor" "$path"
     fi
     [ "$ancestor" = "${ancestor%/*}" ] && break
     ancestor="${ancestor%/*}"
   done
 
-  if path_blocks_as_exact_target "$path"; then
-    add_collision "$path"
+  if [ -e "$full_path" ] || [ -L "$full_path" ]; then
+    if ! is_exact_tracked_path "$path"; then
+      if [ -d "$full_path" ] && [ ! -L "$full_path" ]; then
+        add_untracked_descendant_collisions "$path" "$path"
+      else
+        add_collision "$path" "$path"
+      fi
+    fi
   fi
 }
 
-check_untracked_collisions() {
+collect_untracked_collisions() {
   local local_sha="$1"
   local remote_ref="$2"
-  local path="" collisions=()
+  local path=""
+
+  COLLISION_PATHS=()
+  COLLISION_TARGETS=()
+  COLLISION_COUNT=0
 
   while IFS= read -r -d '' path; do
     check_path_for_collision "$path"
   done < <(git -C "$SKILL_DIR" diff --name-only -z --diff-filter=ACMRT "$local_sha" "$remote_ref")
+}
 
-  if [ "${#collisions[@]}" -eq 0 ]; then
-    return 0
+report_untracked_collisions() {
+  local index=0
+  local local_path="" incoming_target=""
+
+  echo "Update paused before changing files." >&2
+  echo "The incoming ${REMOTE_NAME}/${REMOTE_BRANCH} update would overwrite these untracked or ignored local paths:" >&2
+  for ((index = 0; index < COLLISION_COUNT; index++)); do
+    local_path="$SKILL_REPO_ROOT/${COLLISION_PATHS[$index]}"
+    incoming_target="${COLLISION_TARGETS[$index]}"
+    printf '  Local path:      %q\n' "$local_path" >&2
+    printf '  Incoming write:  %q\n' "$SKILL_REPO_ROOT/$incoming_target" >&2
+  done
+
+  echo "No checkout files were changed." >&2
+  echo "To preserve the listed local paths outside the repo and complete the update, run:" >&2
+  echo "  /claude-review update --backup-conflicts" >&2
+  printf 'Backup parent: %s/update-backups\n' "$STATE_DIR" >&2
+  echo "ACTION_REQUIRED: BACKUP_CONFLICTS" >&2
+}
+
+restore_moved_collisions() {
+  local index=0
+  local relative_path="" source_path="" backup_path=""
+
+  for ((index = MOVED_COUNT - 1; index >= 0; index--)); do
+    relative_path="${MOVED_COLLISIONS[$index]}"
+    source_path="$SKILL_REPO_ROOT/$relative_path"
+    backup_path="$BACKUP_FILES_DIR/$relative_path"
+    if { [ -e "$backup_path" ] || [ -L "$backup_path" ]; } && [ ! -e "$source_path" ] && [ ! -L "$source_path" ]; then
+      mkdir -p "$(dirname "$source_path")" || continue
+      mv "$backup_path" "$source_path" || true
+    fi
+  done
+}
+
+backup_untracked_collisions() {
+  local timestamp="" backup_parent="" base_dir="" suffix=0 index=0
+  local relative_path="" source_path="" backup_path="" incoming_target=""
+
+  [ "$COLLISION_COUNT" -gt 0 ] || return 0
+
+  backup_parent="$STATE_DIR/update-backups"
+  if ! mkdir -p "$backup_parent"; then
+    echo "/claude-review update could not create the conflict backup parent: $backup_parent" >&2
+    return 1
+  fi
+  backup_parent="$(cd "$backup_parent" && pwd -P)"
+  case "$backup_parent/" in
+    "$SKILL_REPO_ROOT/"*)
+      echo "/claude-review update requires conflict backups outside the skill checkout." >&2
+      echo "Configured backup parent is inside the checkout: $backup_parent" >&2
+      return 1
+      ;;
+  esac
+
+  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  base_dir="$backup_parent/${timestamp}-$(short_sha "$REMOTE_SHA")"
+  BACKUP_DIR="$base_dir"
+  while [ -e "$BACKUP_DIR" ]; do
+    suffix=$((suffix + 1))
+    BACKUP_DIR="${base_dir}-${suffix}"
+  done
+
+  if ! mkdir -p "$BACKUP_DIR"; then
+    echo "/claude-review update could not create the conflict backup directory: $BACKUP_DIR" >&2
+    return 1
   fi
 
-  echo "/claude-review update is blocked because these untracked or ignored local files would be overwritten:" >&2
-  printf '  %s\n' "${collisions[@]}" >&2
-  echo "Move, remove, or commit those files, then rerun /claude-review update." >&2
-  return 1
+  BACKUP_FILES_DIR="$BACKUP_DIR/files"
+  mkdir -p "$BACKUP_FILES_DIR" || return 1
+  : > "$BACKUP_DIR/manifest.txt" || return 1
+  MOVED_COLLISIONS=()
+  MOVED_COUNT=0
+  for ((index = 0; index < COLLISION_COUNT; index++)); do
+    relative_path="${COLLISION_PATHS[$index]}"
+    incoming_target="${COLLISION_TARGETS[$index]}"
+    source_path="$SKILL_REPO_ROOT/$relative_path"
+    backup_path="$BACKUP_FILES_DIR/$relative_path"
+
+    if [ ! -e "$source_path" ] && [ ! -L "$source_path" ]; then
+      echo "/claude-review update stopped because a conflicting local path changed during backup: $source_path" >&2
+      restore_moved_collisions
+      return 1
+    fi
+    if ! mkdir -p "$(dirname "$backup_path")" || ! mv "$source_path" "$backup_path"; then
+      echo "/claude-review update could not preserve the conflicting local path: $source_path" >&2
+      restore_moved_collisions
+      return 1
+    fi
+    MOVED_COLLISIONS[$MOVED_COUNT]="$relative_path"
+    MOVED_COUNT=$((MOVED_COUNT + 1))
+    if ! printf 'Local path: %q\nBackup path: %q\nIncoming path: %q\n\n' \
+      "$source_path" "$backup_path" "$incoming_target" >> "$BACKUP_DIR/manifest.txt"; then
+      echo "/claude-review update could not write the conflict backup manifest." >&2
+      restore_moved_collisions
+      return 1
+    fi
+  done
+
+  printf 'Preserved %s conflicting local path(s) at: %s\n' "$MOVED_COUNT" "$BACKUP_DIR"
 }
 
 validate_update_ready() {
@@ -216,7 +364,9 @@ validate_update_ready() {
     return 1
   fi
 
-  if ! check_untracked_collisions "$LOCAL_SHA" "$REMOTE_REF"; then
+  collect_untracked_collisions "$LOCAL_SHA" "$REMOTE_REF"
+  if [ "$COLLISION_COUNT" -gt 0 ] && [ "$BACKUP_CONFLICTS" != "true" ]; then
+    report_untracked_collisions
     return 1
   fi
 
@@ -233,12 +383,20 @@ while [ "$#" -gt 0 ]; do
       CHECK_ONLY="true"
       shift
       ;;
+    --backup-conflicts)
+      BACKUP_CONFLICTS="true"
+      shift
+      ;;
     --skill-dir)
       SKILL_DIR="${2:-}"
       shift 2
       ;;
     --state-dir)
       STATE_DIR="${2:-}"
+      shift 2
+      ;;
+    --caller-repo)
+      CALLER_REPO="${2:-}"
       shift 2
       ;;
     --yes|-y)
@@ -257,11 +415,22 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
+if [ "$CHECK_ONLY" = "true" ] && [ "$BACKUP_CONFLICTS" = "true" ]; then
+  echo "--check and --backup-conflicts cannot be used together." >&2
+  exit 2
+fi
+
 if ! git -C "$SKILL_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "/claude-review update is only available for git-based installs." >&2
   echo "Reinstall with: git clone https://github.com/jokim1/codexskill-claude-review.git ~/.codex/skills/claude-review" >&2
   exit 1
 fi
+
+if ! resolve_update_scope; then
+  echo "/claude-review update could not resolve the skill checkout root: $SKILL_DIR" >&2
+  exit 1
+fi
+print_update_scope
 
 LOCAL_SHA="$(git -C "$SKILL_DIR" rev-parse HEAD)"
 CURRENT_BRANCH_REF="$(git -C "$SKILL_DIR" symbolic-ref -q HEAD 2>/dev/null || true)"
@@ -307,8 +476,16 @@ if ! validate_update_ready; then
   exit 1
 fi
 
+if [ "$BACKUP_CONFLICTS" = "true" ] && ! backup_untracked_collisions; then
+  echo "/claude-review update stopped before merging; any paths already moved were restored when possible." >&2
+  exit 1
+fi
+
 if ! git_network git -c core.hooksPath=/dev/null -C "$SKILL_DIR" merge --ff-only "$REMOTE_REF"; then
   echo "/claude-review update could not fast-forward merge ${REMOTE_NAME}/${REMOTE_BRANCH}." >&2
+  if [ -n "$BACKUP_DIR" ]; then
+    echo "The preserved local paths remain safe at: $BACKUP_DIR" >&2
+  fi
   exit 1
 fi
 
@@ -320,4 +497,7 @@ if ! rm -f "$STATE_DIR/last-update-check" "$STATE_DIR/update-snoozed"; then
 fi
 
 printf '/claude-review updated from %s to %s.\n' "$(short_sha "$LOCAL_SHA")" "$(short_sha "$REMOTE_SHA")"
+if [ -n "$BACKUP_DIR" ]; then
+  printf 'Conflicting local paths were preserved at: %s\n' "$BACKUP_DIR"
+fi
 printf 'Restart Codex if skill discovery is already loaded.\n'
